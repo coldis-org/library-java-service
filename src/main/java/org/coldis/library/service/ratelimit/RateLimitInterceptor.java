@@ -16,6 +16,7 @@ import org.aspectj.lang.annotation.Aspect;
 import org.aspectj.lang.annotation.Pointcut;
 import org.aspectj.lang.reflect.MethodSignature;
 import org.coldis.library.exception.BusinessException;
+import org.coldis.library.exception.IntegrationException;
 import org.coldis.library.helper.DateTimeHelper;
 import org.coldis.library.model.SimpleMessage;
 
@@ -60,7 +61,7 @@ public class RateLimitInterceptor {
 	 */
 	private void checkLocalLimit(
 			final RateLimit limit,
-			final String limitName) throws BusinessException {
+			final String limitName) throws Exception {
 		// Gets the execution for the method,
 		RateLimitStats executions = null;
 		synchronized (RateLimitInterceptor.EXECUTIONS) {
@@ -74,9 +75,10 @@ public class RateLimitInterceptor {
 		synchronized (executions) {
 			final Integer executionsCount = executions.getExecutions().size();
 			if ((executionsCount + 1) > limit.limit()) {
-				throw new BusinessException(new SimpleMessage("service.ratelimit.exceeded",
+				final SimpleMessage errorMessage = new SimpleMessage("service.ratelimit.exceeded",
 						"Limit (" + limit.limit() + ") has been reached for method '" + limitName + "': " + executionsCount,
-						new Object[] { limit.limit(), executions.getExecutions().size() }));
+						new Object[] { limit.limit(), executions.getExecutions().size() });
+				throw (limit.businessError() ? new BusinessException(errorMessage) : new IntegrationException(errorMessage));
 			}
 			executions.getExecutions().add(DateTimeHelper.getCurrentLocalDateTime());
 		}
@@ -120,7 +122,13 @@ public class RateLimitInterceptor {
 							? (targetObject.getClass().getSimpleName().toLowerCase() + "-" + method.getName().toLowerCase() + "-" + limit.period())
 							: limit.name());
 					// Checks the local limit.
-					this.checkLocalLimit(limit, limitName);
+					if (limit.local()) {
+						this.checkLocalLimit(limit, limitName);
+					}
+					// Checks the central limit. FIXME
+					else {
+						this.checkLocalLimit(limit, limitName);
+					}
 				}
 			}
 

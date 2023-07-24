@@ -30,4 +30,14 @@ public @interface RateLimit {
 	 */
 	long limit();
 
+	/**
+	 * If the limit is local to the JVM or centralized.
+	 */
+	boolean local() default true;
+
+	/**
+	 * If rate limit should be treated as a business error.
+	 */
+	boolean businessError() default false;
+
 }
