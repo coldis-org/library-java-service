@@ -17,7 +17,6 @@ import org.aspectj.lang.annotation.Pointcut;
 import org.aspectj.lang.reflect.MethodSignature;
 import org.coldis.library.exception.BusinessException;
 import org.coldis.library.exception.IntegrationException;
-import org.coldis.library.helper.DateTimeHelper;
 import org.coldis.library.model.SimpleMessage;
 
 /**
@@ -80,7 +79,7 @@ public class RateLimitInterceptor {
 						new Object[] { limit.limit(), executions.getExecutions().size() });
 				throw (limit.businessError() ? new BusinessException(errorMessage) : new IntegrationException(errorMessage));
 			}
-			executions.getExecutions().add(DateTimeHelper.getCurrentLocalDateTime());
+			executions.getExecutions().add(System.nanoTime());
 		}
 	}
 

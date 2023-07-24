@@ -36,6 +36,11 @@ public @interface RateLimit {
 	boolean local() default true;
 
 	/**
+	 * Relative error margin. Only applies to central limit.
+	 */
+	long errorMargin() default 10;
+
+	/**
 	 * If rate limit should be treated as a business error.
 	 */
 	boolean businessError() default false;

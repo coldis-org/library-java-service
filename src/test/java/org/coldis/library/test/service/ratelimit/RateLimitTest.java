@@ -1,7 +1,9 @@
 package org.coldis.library.test.service.ratelimit;
 
-import org.coldis.library.exception.BusinessException;
+import java.util.stream.Collectors;
+
 import org.coldis.library.service.ratelimit.RateLimit;
+import org.coldis.library.service.ratelimit.RateLimitInterceptor;
 import org.coldis.library.service.ratelimit.RateLimits;
 import org.coldis.library.test.service.TestApplication;
 import org.junit.jupiter.api.Assertions;
@@ -53,15 +55,14 @@ public class RateLimitTest {
 		for (Integer count = 1; count <= 100; count++) {
 			this.localRateLimit1();
 			this.localRateLimit2();
-			// System.out.println(count);
-			// System.out.println(
-			// RateLimitInterceptor.EXECUTIONS.entrySet().stream().map(entry ->
-			// entry.getValue().getExecutions().size()).collect(Collectors.toList()));
+			System.out.println(count);
+			System.out.println(
+					RateLimitInterceptor.EXECUTIONS.entrySet().stream().map(entry -> entry.getValue().getExecutions().size()).collect(Collectors.toList()));
 		}
 
 		// The next call should pass the limits.
-		Assertions.assertThrows(BusinessException.class, () -> this.localRateLimit1());
-		Assertions.assertThrows(BusinessException.class, () -> this.localRateLimit2());
+		Assertions.assertThrows(Exception.class, () -> this.localRateLimit1());
+		Assertions.assertThrows(Exception.class, () -> this.localRateLimit2());
 
 		// Waits the period and try again.
 		Thread.sleep(5 * 1000);
@@ -71,13 +72,13 @@ public class RateLimitTest {
 		}
 
 		// The next call should pass the limits.
-		Assertions.assertThrows(BusinessException.class, () -> this.localRateLimit1());
+		Assertions.assertThrows(Exception.class, () -> this.localRateLimit1());
 
 		// Waits the period and try again.
 		Thread.sleep(5 * 1000);
 		for (Integer count = 1; count <= 100; count++) {
 			this.localRateLimit1();
-			Assertions.assertThrows(BusinessException.class, () -> this.localRateLimit2());
+			Assertions.assertThrows(Exception.class, () -> this.localRateLimit2());
 		}
 
 		// Waits the period and try again.

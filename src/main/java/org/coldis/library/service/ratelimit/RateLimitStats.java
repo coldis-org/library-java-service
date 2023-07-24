@@ -1,11 +1,9 @@
 package org.coldis.library.service.ratelimit;
 
 import java.time.Duration;
-import java.time.LocalDateTime;
 import java.util.Objects;
 import java.util.TreeSet;
 
-import org.coldis.library.helper.DateTimeHelper;
 import org.coldis.library.model.Typable;
 import org.coldis.library.model.view.ModelView;
 
@@ -36,7 +34,7 @@ public class RateLimitStats implements Typable {
 	/**
 	 * Executions.
 	 */
-	private TreeSet<LocalDateTime> executions;
+	private TreeSet<Long> executions;
 
 	/**
 	 * No arguments constructor.
@@ -84,11 +82,11 @@ public class RateLimitStats implements Typable {
 	 * @return The executions.
 	 */
 	@JsonView({ ModelView.Persistent.class, ModelView.Public.class })
-	public TreeSet<LocalDateTime> getExecutions() {
+	public TreeSet<Long> getExecutions() {
 		// Makes sure the set is initialized.
 		this.executions = (this.executions == null ? new TreeSet<>() : this.executions);
 		// Drops expired executions.
-		this.executions.removeIf(execution -> execution.isBefore(DateTimeHelper.getCurrentLocalDateTime().minus(this.period)));
+		this.executions.removeIf(execution -> execution < (System.nanoTime() - (this.period.toNanos())));
 		// Returns the set.
 		return this.executions;
 	}
@@ -99,7 +97,7 @@ public class RateLimitStats implements Typable {
 	 * @param executions New executions.
 	 */
 	public void setExecutions(
-			final TreeSet<LocalDateTime> executions) {
+			final TreeSet<Long> executions) {
 		this.executions = executions;
 	}
 
