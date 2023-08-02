@@ -304,7 +304,7 @@ public class BatchExecutor<Type> implements Typable {
 	 */
 	@JsonView({ ModelView.Persistent.class, ModelView.Public.class })
 	public Duration getDelayBetweenRuns() {
-		this.delayBetweenRuns = (this.delayBetweenRuns == null ? Duration.ofSeconds(3) : this.delayBetweenRuns);
+		this.delayBetweenRuns = (this.delayBetweenRuns == null ? Duration.ofSeconds(2) : this.delayBetweenRuns);
 		return this.delayBetweenRuns;
 	}
 
