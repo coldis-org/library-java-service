@@ -1,0 +1,478 @@
+package org.coldis.library.service.batch;
+
+import java.time.temporal.ChronoUnit;
+import java.util.List;
+import java.util.Objects;
+import java.util.Properties;
+
+import org.apache.commons.lang3.StringUtils;
+import org.coldis.library.exception.BusinessException;
+import org.coldis.library.helper.DateTimeHelper;
+import org.coldis.library.model.SimpleMessage;
+import org.coldis.library.model.Typable;
+import org.coldis.library.persistence.keyvalue.KeyValue;
+import org.coldis.library.persistence.keyvalue.KeyValueService;
+import org.coldis.library.service.jms.JmsMessage;
+import org.coldis.library.service.jms.JmsTemplateHelper;
+import org.coldis.library.service.slack.SlackIntegration;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnBean;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
+import org.springframework.jms.annotation.JmsListener;
+import org.springframework.jms.config.JmsListenerContainerFactory;
+import org.springframework.jms.core.JmsTemplate;
+import org.springframework.scheduling.annotation.Scheduled;
+import org.springframework.transaction.annotation.Propagation;
+import org.springframework.transaction.annotation.Transactional;
+import org.springframework.util.PropertyPlaceholderHelper;
+import org.springframework.web.bind.annotation.PathVariable;
+import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestMethod;
+import org.springframework.web.bind.annotation.RequestParam;
+import org.springframework.web.bind.annotation.RestController;
+
+/**
+ * Batch helper.
+ */
+@RestController
+@RequestMapping(path = "service-batch")
+@ConditionalOnProperty(
+		name = "org.coldis.configuration.service.batch-enabled",
+		havingValue = "true",
+		matchIfMissing = true
+)
+public class BatchService {
+
+	/**
+	 * Logger.
+	 */
+	private static final Logger LOGGER = LoggerFactory.getLogger(BatchService.class);
+
+	/**
+	 * Batch key prefix.
+	 */
+	public static final String BATCH_KEY_PREFIX = "batch-record-";
+
+	/**
+	 * Batch lock key prefix.
+	 */
+	public static final String BATCH_LOCK_KEY_PREFIX = BatchService.BATCH_KEY_PREFIX + "lock-";
+
+	/**
+	 * Delete queue.
+	 */
+	private static final String DELETE_QUEUE = "batch/delete";
+
+	/**
+	 * Batch record execute queue.
+	 */
+	private static final String RESUME_QUEUE = "batch/resume";
+
+	/**
+	 * Placeholder resolver.
+	 */
+	private static final PropertyPlaceholderHelper PLACEHOLDER_HELPER = new PropertyPlaceholderHelper("${", "}");
+
+	/**
+	 * Batch expired message.
+	 */
+	private static final String BATCH_EXPIRED_MESSAGE_CODE = "batch.expired";
+
+	/**
+	 * JMS template.
+	 */
+	@Autowired(required = false)
+	private JmsTemplate jmsTemplate;
+
+	/**
+	 * JMS template helper.
+	 */
+	@Autowired(required = false)
+	private JmsTemplateHelper jmsTemplateHelper;
+
+	/**
+	 * Key batchRecordValue service.
+	 */
+	@Autowired(required = false)
+	private KeyValueService keyValueService;
+
+	/**
+	 * Slack integration.
+	 */
+	@Autowired
+	private SlackIntegration slackIntegration;
+
+	/**
+	 * Gets the batch key.
+	 *
+	 * @param  keySuffix Batch key suffix.
+	 * @return           Batch key.
+	 */
+	public String getKey(
+			final String keySuffix) {
+		return BatchService.BATCH_KEY_PREFIX + keySuffix;
+	}
+
+	/**
+	 * Gets the batch key.
+	 *
+	 * @param  keySuffix Batch key suffix.
+	 * @return           Batch key.
+	 */
+	public String getLockKey(
+			final String keySuffix) {
+		return BatchService.BATCH_LOCK_KEY_PREFIX + keySuffix;
+	}
+
+	/**
+	 * @param executor Executor.
+	 * @param action   Action.*@throws BusinessException Exception.
+	 **/
+	@Transactional(
+			propagation = Propagation.NOT_SUPPORTED,
+			readOnly = true,
+			timeout = 23
+	)
+	private <Type> void log(
+			final BatchExecutor<Type> executor,
+			final BatchAction action) throws BusinessException {
+		try {
+			// Gets the template and Slack channel.
+			final String template = executor.getMessagesTemplates().get(action);
+			final String slackChannel = executor.getSlackChannels().get(action);
+			// If the template is given.
+			if (StringUtils.isNotBlank(template)) {
+				// Gets the message properties.
+				final String key = this.getKey(executor.getKeySuffix());
+				final Type lastProcessed = executor.getLastProcessed();
+				final KeyValue<Typable> batchRecord = this.keyValueService.findById(key, false);
+				@SuppressWarnings("unchecked")
+				final BatchExecutor<Type> batchRecordValue = (BatchExecutor<Type>) batchRecord.getValue();
+				final Long duration = (batchRecordValue.getLastStartedAt().until(DateTimeHelper.getCurrentLocalDateTime(), ChronoUnit.MINUTES));
+				final Properties messageProperties = new Properties();
+				messageProperties.put("key", key);
+				messageProperties.put("lastProcessed", Objects.toString(lastProcessed));
+				messageProperties.put("duration", duration.toString());
+				// Gets the message from the template.
+				final String message = BatchService.PLACEHOLDER_HELPER.replacePlaceholders(template, messageProperties);
+				// If there is a message.
+				if (StringUtils.isNotBlank(message)) {
+					BatchService.LOGGER.info(message);
+					// If there is a channel to use, sends the message.
+					if (StringUtils.isNotBlank(slackChannel)) {
+						this.slackIntegration.send(slackChannel, message);
+					}
+				}
+			}
+		}
+		// Ignores errors.
+		catch (final Throwable exception) {
+			BatchService.LOGGER.error("Batch action could not be logged: " + exception.getLocalizedMessage());
+			BatchService.LOGGER.debug("Batch action could not be logged.", exception);
+		}
+
+	}
+
+	/**
+	 * Processes a partial batch.
+	 *
+	 * @param  executor          Executor.
+	 * @return                   The last processed id.
+	 * @throws BusinessException If the batch could not be processed.
+	 */
+	@Transactional(
+			propagation = Propagation.REQUIRED,
+			timeout = 360
+	)
+	protected <Type> Type executeStep(
+			final BatchExecutor<Type> batchExecutorValue) throws BusinessException {
+
+		// Last processed.
+		Type actualLastProcessed = batchExecutorValue.getLastProcessed();
+
+		// Throws an exception if the batch has expired.
+		if (batchExecutorValue.isExpired()) {
+			throw new BusinessException(new SimpleMessage(BatchService.BATCH_EXPIRED_MESSAGE_CODE));
+		}
+
+		// For each item in the next batch.
+		this.log(batchExecutorValue, BatchAction.GET);
+		final List<Type> nextBatchToProcess = batchExecutorValue.get();
+		for (final Type next : nextBatchToProcess) {
+			batchExecutorValue.execute(next);
+			this.log(batchExecutorValue, BatchAction.EXECUTE);
+			actualLastProcessed = next;
+			batchExecutorValue.setLastProcessedCount(batchExecutorValue.getLastProcessedCount() + 1);
+		}
+
+		// Returns the last processed. id.
+		return actualLastProcessed;
+	}
+
+	/**
+	 * Deletes a key entry.
+	 *
+	 * @param key The key.
+	 */
+	@Transactional(propagation = Propagation.REQUIRED)
+	@JmsListener(
+			destination = BatchService.DELETE_QUEUE,
+			concurrency = "1-3"
+	)
+	@ConditionalOnBean(value = JmsListenerContainerFactory.class)
+	private void deleteAsync(
+			final String key) {
+		this.keyValueService.lock(key);
+		this.keyValueService.delete(key);
+	}
+
+	/**
+	 * Deletes a batch record.
+	 *
+	 * @param key Key.
+	 */
+	public void queueDeleteAsync(
+			final String key) {
+		this.jmsTemplateHelper.send(this.jmsTemplate, new JmsMessage<>().withDestination(BatchService.DELETE_QUEUE).withLastValueKey(key).withMessage(key));
+	}
+
+	/**
+	 * Resumes a batch.
+	 *
+	 * @param  executor          Executor.
+	 * @throws BusinessException If the batch fails.
+	 */
+	@Transactional(
+			propagation = Propagation.REQUIRED,
+			noRollbackFor = Throwable.class,
+			timeout = 3600
+	)
+	@RequestMapping(
+			method = RequestMethod.PUT,
+			path = "{keySuffix}"
+	)
+	public <Type> void resume(
+			@PathVariable
+			final String keySuffix) throws BusinessException {
+		// Synchronizes the batch (preventing to happen in parallel).
+		final String lockKey = this.getLockKey(keySuffix);
+		this.keyValueService.lock(lockKey);
+		final String key = this.getKey(keySuffix);
+		final KeyValue<Typable> batchExecutor = this.keyValueService.findById(key, true);
+		@SuppressWarnings("unchecked")
+		final BatchExecutor<Type> batchExecutorValue = (BatchExecutor<Type>) batchExecutor.getValue();
+
+		// Deletes the batch if empty.
+		if (batchExecutorValue == null) {
+			this.keyValueService.delete(key);
+			this.keyValueService.delete(lockKey);
+		}
+		// Resumes the batch if not empty.
+		else {
+			try {
+				// Gets the next id to be processed.
+				Type previousLastProcessed = null;
+				Type currentLastProcessed = batchExecutorValue.getLastProcessed();
+
+				// Starts or resumes the batch.
+				if (currentLastProcessed == null) {
+					batchExecutorValue.start();
+					this.log(batchExecutorValue, BatchAction.START);
+				}
+				else {
+					batchExecutorValue.resume();
+					this.log(batchExecutorValue, BatchAction.RESUME);
+				}
+
+				// Runs the batch until the next id does not change.
+				final Type nextLastProcessed = this.executeStep(batchExecutorValue);
+				batchExecutorValue.setLastProcessed(nextLastProcessed);
+				previousLastProcessed = currentLastProcessed;
+				currentLastProcessed = nextLastProcessed;
+
+				// If there is no new data, finishes the batch.
+				if (Objects.equals(previousLastProcessed, currentLastProcessed)) {
+					batchExecutorValue.finish();
+					this.log(batchExecutorValue, BatchAction.FINISH);
+					batchExecutorValue.setLastFinishedAt(DateTimeHelper.getCurrentLocalDateTime());
+				}
+				else {
+					this.queueResumeAsync(keySuffix);
+				}
+
+				// Saves the executor.
+				this.keyValueService.getRepository().save(batchExecutor);
+
+			}
+			// If there is an error in the batch, retry.
+			catch (final Throwable throwable) {
+				BatchService.LOGGER.error("Error processing batch '" + key + "': " + throwable.getLocalizedMessage());
+				BatchService.LOGGER.debug("Error processing batch '" + key + "'.", throwable);
+				if (!(throwable instanceof BusinessException) || (!((BusinessException) throwable).getCode().equals(BatchService.BATCH_EXPIRED_MESSAGE_CODE))) {
+					this.queueResumeAsync(keySuffix);
+				}
+				throw throwable;
+			}
+			// Releases the lock.
+			finally {
+				this.queueDeleteAsync(lockKey);
+			}
+		}
+
+	}
+
+	/**
+	 * Processes a complete batch.
+	 *
+	 * @param  executor          Executor.
+	 * @throws BusinessException If the batch fails.
+	 */
+	@JmsListener(
+			destination = BatchService.RESUME_QUEUE,
+			concurrency = "1-7"
+	)
+	public <Type> void resumeAsync(
+			final String keySuffix) throws BusinessException {
+		this.resume(keySuffix);
+	}
+
+	/**
+	 * Processes a complete batch.
+	 *
+	 * @param  executor          Executor.
+	 * @throws BusinessException If the batch fails.
+	 */
+	public <Type> void queueResumeAsync(
+			final String keySuffix) throws BusinessException {
+		this.jmsTemplateHelper.send(this.jmsTemplate,
+				new JmsMessage<>().withDestination(BatchService.RESUME_QUEUE).withLastValueKey(keySuffix).withMessage(keySuffix));
+	}
+
+	/**
+	 * Cancels a batch.
+	 *
+	 * @param  executor          Executor.
+	 * @throws BusinessException If the batch fails.
+	 */
+	@Transactional(
+			propagation = Propagation.REQUIRED,
+			noRollbackFor = Throwable.class,
+			timeout = 3600
+	)
+	@RequestMapping(method = RequestMethod.POST)
+	public <Type> void start(
+			@RequestBody
+			final BatchExecutor<Type> executor,
+			@RequestParam(defaultValue = "false")
+			final Boolean restart) throws BusinessException {
+
+		// Gets (and locks) the executor.
+		this.keyValueService.lock(this.getLockKey(executor.getKeySuffix()));
+		final String key = this.getKey(executor.getKeySuffix());
+		final KeyValue<Typable> batchExecutor = this.keyValueService.lock(key).get();
+
+		// If there is no previous record for the batch, saves the given one.
+		if (batchExecutor.getValue() == null) {
+			batchExecutor.setValue(executor);
+		}
+
+		// If the executor should be restarted, resets it.
+		@SuppressWarnings("unchecked")
+		final BatchExecutor<Type> batchExecutorValue = (BatchExecutor<Type>) batchExecutor.getValue();
+		if (restart || batchExecutorValue.isExpired()) {
+			batchExecutorValue.reset();
+		}
+
+		// Saves and resumes the batch.
+		this.keyValueService.getRepository().save(batchExecutor);
+		this.queueResumeAsync(executor.getKeySuffix());
+	}
+
+	/**
+	 * Cancels a batch.
+	 *
+	 * @param  executor          Executor.
+	 * @throws BusinessException If the batch fails.
+	 */
+	@Transactional(
+			propagation = Propagation.REQUIRED,
+			noRollbackFor = Throwable.class,
+			timeout = 3600
+	)
+	@RequestMapping(
+			method = RequestMethod.DELETE,
+			path = "{keySuffix}"
+	)
+	public <Type> void cancel(
+			@PathVariable
+			final String keySuffix) throws BusinessException {
+		final String key = this.getKey(keySuffix);
+		final KeyValue<Typable> batchExecutor = this.keyValueService.findById(key, true);
+		@SuppressWarnings("unchecked")
+		final BatchExecutor<Type> batchExecutorValue = (BatchExecutor<Type>) batchExecutor.getValue();
+		batchExecutorValue.setCancelledAt(DateTimeHelper.getCurrentLocalDateTime());
+		this.keyValueService.getRepository().save(batchExecutor);
+	}
+
+	/**
+	 * Cleans old batches.
+	 *
+	 * @throws BusinessException If the batches cannot be cleaned.
+	 */
+	@Transactional(
+			propagation = Propagation.NOT_SUPPORTED,
+			readOnly = true,
+			timeout = 67
+	)
+	@RequestMapping(
+			method = RequestMethod.DELETE,
+			path = "*/clean"
+	)
+	public void cleanAll() throws BusinessException {
+		final List<KeyValue<Typable>> batchRecords = this.keyValueService.findByKeyStart(BatchService.BATCH_KEY_PREFIX);
+		for (final KeyValue<Typable> batchRecord : batchRecords) {
+			final BatchExecutor<?> batchRecordValue = (BatchExecutor<?>) batchRecord.getValue();
+			this.queueDeleteAsync(batchRecord.getKey());
+			if (batchRecordValue != null) {
+				this.queueDeleteAsync(this.getLockKey(batchRecordValue.getKeySuffix()));
+			}
+		}
+	}
+
+	/**
+	 * Cleans old batches.
+	 *
+	 * @throws BusinessException If the batches cannot be cleaned.
+	 */
+	@Scheduled(cron = "0 */5 * * * *")
+	@Transactional(
+			propagation = Propagation.NOT_SUPPORTED,
+			readOnly = true,
+			timeout = 67
+	)
+	@RequestMapping(
+			method = RequestMethod.POST,
+			path = "*/check"
+	)
+	public void checkAll() throws BusinessException {
+		final List<KeyValue<Typable>> batchRecords = this.keyValueService.findByKeyStart(BatchService.BATCH_KEY_PREFIX);
+		for (final KeyValue<Typable> batchRecord : batchRecords) {
+			final BatchExecutor<?> batchRecordValue = (BatchExecutor<?>) batchRecord.getValue();
+			if ((batchRecordValue != null)) {
+				// Deletes old batches.
+				if (batchRecordValue.shouldBeCleaned()) {
+					this.queueDeleteAsync(this.getLockKey(batchRecordValue.getKeySuffix()));
+					this.queueDeleteAsync(this.getKey(batchRecordValue.getKeySuffix()));
+				}
+				// Makes sure non-expired are still running.
+				else if (!batchRecordValue.isFinished() && !batchRecordValue.isExpired()) {
+					this.queueResumeAsync(batchRecord.getKey());
+				}
+			}
+		}
+	}
+
+}
