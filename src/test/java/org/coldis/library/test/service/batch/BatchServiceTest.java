@@ -100,7 +100,6 @@ public class BatchServiceTest {
 		final String batchKey = this.batchService.getKey(testBatchExecutor.getKeySuffix());
 
 		// Starts the batch and makes sure it has started.
-		BatchTestService.processDelay = 1L;
 		this.batchService.checkAll();
 		this.batchService.start(testBatchExecutor, false);
 		this.batchService.checkAll();
@@ -153,8 +152,8 @@ public class BatchServiceTest {
 	public void testBatchInTime() throws Exception {
 
 		// Makes sure the batch is not started.
-		final BatchExecutor<BatchObject> testBatchExecutor = new BatchExecutor<>(BatchObject.class, "test", 10L, null, Duration.ofSeconds(30),
-				"batchTestService", null, null, null);
+		final BatchExecutor<BatchObject> testBatchExecutor = new BatchExecutor<>(BatchObject.class, "test", 10L, null, Duration.ofSeconds(0),
+				Duration.ofSeconds(30), null, "batchTestService", null, null, null);
 		final String batchKey = this.batchService.getKey(testBatchExecutor.getKeySuffix());
 
 		// Record should not exist.
@@ -200,8 +199,8 @@ public class BatchServiceTest {
 	public void testBatchNotInTime() throws Exception {
 
 		// Makes sure the batch is not started.
-		final BatchExecutor<BatchObject> testBatchExecutor = new BatchExecutor<>(BatchObject.class, "test", 10L, null, Duration.ofSeconds(30),
-				"batchTestService", null, null, null);
+		final BatchExecutor<BatchObject> testBatchExecutor = new BatchExecutor<>(BatchObject.class, "test", 10L, null, Duration.ofSeconds(10),
+				Duration.ofSeconds(30), null, "batchTestService", null, null, null);
 		final String batchKey = this.batchService.getKey(testBatchExecutor.getKeySuffix());
 
 		// Record should not exist.
@@ -214,7 +213,6 @@ public class BatchServiceTest {
 
 		// Runs the clock forward and executes the batch again (now with a bigger delay
 		// so it should not finish in time).
-		BatchTestService.processDelay = 1000L;
 		this.batchService.checkAll();
 		this.batchService.start(testBatchExecutor, false);
 		this.batchService.checkAll();
@@ -228,6 +226,67 @@ public class BatchServiceTest {
 				return null;
 			}
 		}, record -> record.getLastFinishedAt() != null, TestHelper.VERY_LONG_WAIT * 2, TestHelper.SHORT_WAIT);
+		final BatchExecutor<BatchObject> batchRecord = (BatchExecutor<BatchObject>) this.keyValueService.findById(batchKey, false).getValue();
+		Assertions.assertTrue(BatchTestService.processedAlways > 0);
+		Assertions.assertTrue(BatchTestService.processedAlways < 100);
+		Assertions.assertTrue(batchRecord.getLastProcessedCount() > 0);
+		Assertions.assertTrue(batchRecord.getLastProcessedCount() < 100);
+		Assertions.assertNull(batchRecord.getLastFinishedAt());
+		Assertions.assertFalse(batchRecord.isFinished());
+
+		// Advances the clock and make sure the record is deleted.
+		DateTimeHelper.setClock(Clock.offset(DateTimeHelper.getClock(), Duration.ofHours(6)));
+		this.batchService.checkAll();
+		TestHelper.waitUntilValid(() -> {
+			try {
+				return this.keyValueService.findByKeyStart("batch-record");
+			}
+			catch (final BusinessException e) {
+				return List.of();
+			}
+		}, List::isEmpty, TestHelper.VERY_LONG_WAIT * 3, TestHelper.SHORT_WAIT);
+		try {
+			this.keyValueService.findById(batchKey, false);
+			Assertions.fail("Batch should no longer exist.");
+		}
+		catch (final Exception exception) {
+		}
+
+	}
+
+	/**
+	 * Tests a batch.
+	 *
+	 * @throws Exception If the test fails.
+	 */
+	@Test
+	@SuppressWarnings("unchecked")
+	public void testBatchCancel() throws Exception {
+
+		// Makes sure the batch is not started.
+		final BatchExecutor<BatchObject> testBatchExecutor = new BatchExecutor<>(BatchObject.class, "test", 10L, null, Duration.ofSeconds(1),
+				Duration.ofSeconds(30), null, "batchTestService", null, null, null);
+		final String batchKey = this.batchService.getKey(testBatchExecutor.getKeySuffix());
+
+		// Record should not exist.
+		try {
+			this.keyValueService.findById(batchKey, false).getValue();
+			Assertions.fail("Record should not exist.");
+		}
+		catch (final Exception exception) {
+		}
+
+		// Runs the clock forward and executes the batch again (now with a bigger delay
+		// so it should not finish in time).
+		this.batchService.checkAll();
+		this.batchService.start(testBatchExecutor, false);
+		this.batchService.checkAll();
+
+		// Waits a bit and cancels.
+		Thread.sleep(5 * 1000);
+		this.batchService.cancel(testBatchExecutor.getKeySuffix());
+
+		// This batch should not reach the end.
 		final BatchExecutor<BatchObject> batchRecord = (BatchExecutor<BatchObject>) this.keyValueService.findById(batchKey, false).getValue();
 		Assertions.assertTrue(BatchTestService.processedAlways > 0);
 		Assertions.assertTrue(BatchTestService.processedAlways < 100);

@@ -15,7 +15,6 @@ import org.springframework.stereotype.Component;
 public class BatchTestService {
 
 	private static Random RANDOM = new Random();
-	public static Long processDelay = 1L;
 	public static Long processedAlways = 0L;
 	public static Long processedLatestCompleteBatch = 0L;
 	public static Long processedLatestPartialBatch = 0L;
@@ -69,7 +68,6 @@ public class BatchTestService {
 			throw new IntegrationException();
 		}
 		try {
-			Thread.sleep(BatchTestService.processDelay);
 			BatchTestService.processedAlways++;
 			BatchTestService.processedLatestCompleteBatch++;
 			BatchTestService.processedLatestPartialBatch++;

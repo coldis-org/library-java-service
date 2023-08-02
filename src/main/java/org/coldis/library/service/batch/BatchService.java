@@ -94,7 +94,7 @@ public class BatchService {
 	private JmsTemplateHelper jmsTemplateHelper;
 
 	/**
-	 * Key batchRecordValue service.
+	 * Key batchExecutorValue service.
 	 */
 	@Autowired(required = false)
 	private KeyValueService keyValueService;
@@ -148,10 +148,10 @@ public class BatchService {
 				// Gets the message properties.
 				final String key = this.getKey(executor.getKeySuffix());
 				final Type lastProcessed = executor.getLastProcessed();
-				final KeyValue<Typable> batchRecord = this.keyValueService.findById(key, false);
+				final KeyValue<Typable> batchExecutor = this.keyValueService.findById(key, false);
 				@SuppressWarnings("unchecked")
-				final BatchExecutor<Type> batchRecordValue = (BatchExecutor<Type>) batchRecord.getValue();
-				final Long duration = (batchRecordValue.getLastStartedAt().until(DateTimeHelper.getCurrentLocalDateTime(), ChronoUnit.MINUTES));
+				final BatchExecutor<Type> batchExecutorValue = (BatchExecutor<Type>) batchExecutor.getValue();
+				final Long duration = (batchExecutorValue.getLastStartedAt().until(DateTimeHelper.getCurrentLocalDateTime(), ChronoUnit.MINUTES));
 				final Properties messageProperties = new Properties();
 				messageProperties.put("key", key);
 				messageProperties.put("lastProcessed", Objects.toString(lastProcessed));
@@ -300,7 +300,7 @@ public class BatchService {
 					batchExecutorValue.setLastFinishedAt(DateTimeHelper.getCurrentLocalDateTime());
 				}
 				else {
-					this.queueResumeAsync(keySuffix);
+					this.queueResumeAsync(keySuffix, batchExecutorValue.getDelayBetweenRuns().toSeconds());
 				}
 
 				// Saves the executor.
@@ -312,7 +312,7 @@ public class BatchService {
 				BatchService.LOGGER.error("Error processing batch '" + key + "': " + throwable.getLocalizedMessage());
 				BatchService.LOGGER.debug("Error processing batch '" + key + "'.", throwable);
 				if (!(throwable instanceof BusinessException) || (!((BusinessException) throwable).getCode().equals(BatchService.BATCH_EXPIRED_MESSAGE_CODE))) {
-					this.queueResumeAsync(keySuffix);
+					this.queueResumeAsync(keySuffix, batchExecutorValue.getDelayBetweenRuns().toSeconds());
 				}
 				throw throwable;
 			}
@@ -346,9 +346,10 @@ public class BatchService {
 	 * @throws BusinessException If the batch fails.
 	 */
 	public <Type> void queueResumeAsync(
-			final String keySuffix) throws BusinessException {
-		this.jmsTemplateHelper.send(this.jmsTemplate,
-				new JmsMessage<>().withDestination(BatchService.RESUME_QUEUE).withLastValueKey(keySuffix).withMessage(keySuffix));
+			final String keySuffix,
+			final Long fixedDelay) throws BusinessException {
+		this.jmsTemplateHelper.send(this.jmsTemplate, new JmsMessage<>().withDestination(BatchService.RESUME_QUEUE)
+				.withFixedDelay((fixedDelay == null ? null : fixedDelay.intValue())).withLastValueKey(keySuffix).withMessage(keySuffix));
 	}
 
 	/**
@@ -388,7 +389,7 @@ public class BatchService {
 
 		// Saves and resumes the batch.
 		this.keyValueService.getRepository().save(batchExecutor);
-		this.queueResumeAsync(executor.getKeySuffix());
+		this.queueResumeAsync(batchExecutorValue.getKeySuffix(), 0L);
 	}
 
 	/**
@@ -432,12 +433,12 @@ public class BatchService {
 			path = "*/clean"
 	)
 	public void cleanAll() throws BusinessException {
-		final List<KeyValue<Typable>> batchRecords = this.keyValueService.findByKeyStart(BatchService.BATCH_KEY_PREFIX);
-		for (final KeyValue<Typable> batchRecord : batchRecords) {
-			final BatchExecutor<?> batchRecordValue = (BatchExecutor<?>) batchRecord.getValue();
-			this.queueDeleteAsync(batchRecord.getKey());
-			if (batchRecordValue != null) {
-				this.queueDeleteAsync(this.getLockKey(batchRecordValue.getKeySuffix()));
+		final List<KeyValue<Typable>> batchExecutors = this.keyValueService.findByKeyStart(BatchService.BATCH_KEY_PREFIX);
+		for (final KeyValue<Typable> batchExecutor : batchExecutors) {
+			final BatchExecutor<?> batchExecutorValue = (BatchExecutor<?>) batchExecutor.getValue();
+			this.queueDeleteAsync(batchExecutor.getKey());
+			if (batchExecutorValue != null) {
+				this.queueDeleteAsync(this.getLockKey(batchExecutorValue.getKeySuffix()));
 			}
 		}
 	}
@@ -458,18 +459,18 @@ public class BatchService {
 			path = "*/check"
 	)
 	public void checkAll() throws BusinessException {
-		final List<KeyValue<Typable>> batchRecords = this.keyValueService.findByKeyStart(BatchService.BATCH_KEY_PREFIX);
-		for (final KeyValue<Typable> batchRecord : batchRecords) {
-			final BatchExecutor<?> batchRecordValue = (BatchExecutor<?>) batchRecord.getValue();
-			if ((batchRecordValue != null)) {
+		final List<KeyValue<Typable>> batchExecutors = this.keyValueService.findByKeyStart(BatchService.BATCH_KEY_PREFIX);
+		for (final KeyValue<Typable> batchExecutor : batchExecutors) {
+			final BatchExecutor<?> batchExecutorValue = (BatchExecutor<?>) batchExecutor.getValue();
+			if ((batchExecutorValue != null)) {
 				// Deletes old batches.
-				if (batchRecordValue.shouldBeCleaned()) {
-					this.queueDeleteAsync(this.getLockKey(batchRecordValue.getKeySuffix()));
-					this.queueDeleteAsync(this.getKey(batchRecordValue.getKeySuffix()));
+				if (batchExecutorValue.shouldBeCleaned()) {
+					this.queueDeleteAsync(this.getLockKey(batchExecutorValue.getKeySuffix()));
+					this.queueDeleteAsync(this.getKey(batchExecutorValue.getKeySuffix()));
 				}
 				// Makes sure non-expired are still running.
-				else if (!batchRecordValue.isFinished() && !batchRecordValue.isExpired()) {
-					this.queueResumeAsync(batchRecord.getKey());
+				else if (!batchExecutorValue.isFinished() && !batchExecutorValue.isExpired()) {
+					this.queueResumeAsync(batchExecutor.getKey(), batchExecutorValue.getDelayBetweenRuns().toSeconds());
 				}
 			}
 		}
