@@ -258,70 +258,76 @@ public class BatchService {
 			@PathVariable
 			final String keySuffix) throws BusinessException {
 		// Synchronizes the batch (preventing to happen in parallel).
-		final String lockKey = this.getLockKey(keySuffix);
-		this.keyValueService.lock(lockKey);
 		final String key = this.getKey(keySuffix);
-		final KeyValue<Typable> batchExecutor = this.keyValueService.findById(key, true);
-		@SuppressWarnings("unchecked")
-		final BatchExecutor<Type> batchExecutorValue = (BatchExecutor<Type>) batchExecutor.getValue();
+		if (this.keyValueService.getRepository().existsById(key)) {
+			final String lockKey = this.getLockKey(keySuffix);
+			this.keyValueService.lock(lockKey);
+			final KeyValue<Typable> batchExecutor = this.keyValueService.findById(key, true);
+			@SuppressWarnings("unchecked")
+			final BatchExecutor<Type> batchExecutorValue = (BatchExecutor<Type>) batchExecutor.getValue();
 
-		// Deletes the batch if empty.
-		if (batchExecutorValue == null) {
-			this.keyValueService.delete(key);
-			this.keyValueService.delete(lockKey);
+			// Deletes the batch if empty.
+			if (batchExecutorValue == null) {
+				this.keyValueService.delete(key);
+				this.keyValueService.delete(lockKey);
+			}
+			// Resumes the batch if not empty.
+			else {
+				try {
+					// Gets the next id to be processed.
+					Type previousLastProcessed = null;
+					Type currentLastProcessed = batchExecutorValue.getLastProcessed();
+
+					// Starts or resumes the batch.
+					if (currentLastProcessed == null) {
+						batchExecutorValue.start();
+						this.log(batchExecutorValue, BatchAction.START);
+					}
+					else {
+						batchExecutorValue.resume();
+						this.log(batchExecutorValue, BatchAction.RESUME);
+					}
+
+					// Runs the batch until the next id does not change.
+					final Type nextLastProcessed = this.executeStep(batchExecutorValue);
+					batchExecutorValue.setLastProcessed(nextLastProcessed);
+					previousLastProcessed = currentLastProcessed;
+					currentLastProcessed = nextLastProcessed;
+
+					// If there is no new data, finishes the batch.
+					if (Objects.equals(previousLastProcessed, currentLastProcessed)) {
+						batchExecutorValue.finish();
+						this.log(batchExecutorValue, BatchAction.FINISH);
+						batchExecutorValue.setLastFinishedAt(DateTimeHelper.getCurrentLocalDateTime());
+					}
+					else {
+						this.queueResumeAsync(keySuffix, batchExecutorValue.getDelayBetweenRuns().toSeconds());
+					}
+
+					// Saves the executor.
+					this.keyValueService.getRepository().save(batchExecutor);
+
+				}
+				// If there is an error in the batch, retry.
+				catch (final Throwable throwable) {
+					BatchService.LOGGER.error("Error processing batch '" + key + "': " + throwable.getLocalizedMessage());
+					BatchService.LOGGER.debug("Error processing batch '" + key + "'.", throwable);
+					if (!(throwable instanceof BusinessException)
+							|| (!((BusinessException) throwable).getCode().equals(BatchService.BATCH_EXPIRED_MESSAGE_CODE))) {
+						this.queueResumeAsync(keySuffix, batchExecutorValue.getDelayBetweenRuns().toSeconds());
+					}
+					throw throwable;
+				}
+				// Releases the lock.
+				finally {
+					this.queueDeleteAsync(lockKey);
+				}
+			}
 		}
-		// Resumes the batch if not empty.
+		// Logs if key does not exits.
 		else {
-			try {
-				// Gets the next id to be processed.
-				Type previousLastProcessed = null;
-				Type currentLastProcessed = batchExecutorValue.getLastProcessed();
-
-				// Starts or resumes the batch.
-				if (currentLastProcessed == null) {
-					batchExecutorValue.start();
-					this.log(batchExecutorValue, BatchAction.START);
-				}
-				else {
-					batchExecutorValue.resume();
-					this.log(batchExecutorValue, BatchAction.RESUME);
-				}
-
-				// Runs the batch until the next id does not change.
-				final Type nextLastProcessed = this.executeStep(batchExecutorValue);
-				batchExecutorValue.setLastProcessed(nextLastProcessed);
-				previousLastProcessed = currentLastProcessed;
-				currentLastProcessed = nextLastProcessed;
-
-				// If there is no new data, finishes the batch.
-				if (Objects.equals(previousLastProcessed, currentLastProcessed)) {
-					batchExecutorValue.finish();
-					this.log(batchExecutorValue, BatchAction.FINISH);
-					batchExecutorValue.setLastFinishedAt(DateTimeHelper.getCurrentLocalDateTime());
-				}
-				else {
-					this.queueResumeAsync(keySuffix, batchExecutorValue.getDelayBetweenRuns().toSeconds());
-				}
-
-				// Saves the executor.
-				this.keyValueService.getRepository().save(batchExecutor);
-
-			}
-			// If there is an error in the batch, retry.
-			catch (final Throwable throwable) {
-				BatchService.LOGGER.error("Error processing batch '" + key + "': " + throwable.getLocalizedMessage());
-				BatchService.LOGGER.debug("Error processing batch '" + key + "'.", throwable);
-				if (!(throwable instanceof BusinessException) || (!((BusinessException) throwable).getCode().equals(BatchService.BATCH_EXPIRED_MESSAGE_CODE))) {
-					this.queueResumeAsync(keySuffix, batchExecutorValue.getDelayBetweenRuns().toSeconds());
-				}
-				throw throwable;
-			}
-			// Releases the lock.
-			finally {
-				this.queueDeleteAsync(lockKey);
-			}
+			BatchService.LOGGER.error("Could not find batch for key '" + key + "'.");
 		}
-
 	}
 
 	/**
@@ -465,12 +471,12 @@ public class BatchService {
 			if ((batchExecutorValue != null)) {
 				// Deletes old batches.
 				if (batchExecutorValue.shouldBeCleaned()) {
+					this.queueDeleteAsync(batchExecutor.getKey());
 					this.queueDeleteAsync(this.getLockKey(batchExecutorValue.getKeySuffix()));
-					this.queueDeleteAsync(this.getKey(batchExecutorValue.getKeySuffix()));
 				}
 				// Makes sure non-expired are still running.
 				else if (!batchExecutorValue.isFinished() && !batchExecutorValue.isExpired()) {
-					this.queueResumeAsync(batchExecutor.getKey(), batchExecutorValue.getDelayBetweenRuns().toSeconds());
+					this.queueResumeAsync(batchExecutorValue.getKeySuffix(), batchExecutorValue.getDelayBetweenRuns().toSeconds());
 				}
 			}
 		}
