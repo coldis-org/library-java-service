@@ -2,6 +2,7 @@ package org.coldis.library.service.batch;
 
 import java.time.temporal.ChronoUnit;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
 import java.util.Properties;
 
@@ -57,11 +58,6 @@ public class BatchService {
 	public static final String BATCH_KEY_PREFIX = "batch-record-";
 
 	/**
-	 * Batch lock key prefix.
-	 */
-	public static final String BATCH_LOCK_KEY_PREFIX = BatchService.BATCH_KEY_PREFIX + "lock-";
-
-	/**
 	 * Delete queue.
 	 */
 	private static final String DELETE_QUEUE = "batch/delete";
@@ -114,17 +110,6 @@ public class BatchService {
 	public String getKey(
 			final String keySuffix) {
 		return BatchService.BATCH_KEY_PREFIX + keySuffix;
-	}
-
-	/**
-	 * Gets the batch key.
-	 *
-	 * @param  keySuffix Batch key suffix.
-	 * @return           Batch key.
-	 */
-	public String getLockKey(
-			final String keySuffix) {
-		return BatchService.BATCH_LOCK_KEY_PREFIX + keySuffix;
 	}
 
 	/**
@@ -215,7 +200,8 @@ public class BatchService {
 	/**
 	 * Deletes a key entry.
 	 *
-	 * @param key The key.
+	 * @param  key               The key.
+	 * @throws BusinessException If the batch cannot be found.
 	 */
 	@Transactional(propagation = Propagation.REQUIRED)
 	@JmsListener(
@@ -224,9 +210,16 @@ public class BatchService {
 	)
 	@ConditionalOnBean(value = JmsListenerContainerFactory.class)
 	private void deleteAsync(
-			final String key) {
-		this.keyValueService.lock(key);
-		this.keyValueService.delete(key);
+			final Map<String, Object> message) throws BusinessException {
+		final String key = (String) message.get("key");
+		final Boolean onlyIfShouldBeCleaned = (Boolean) message.get("onlyIfShouldBeCleaned");
+		if (this.keyValueService.getRepository().existsById(key)) {
+			final KeyValue<Typable> batchExecutor = this.keyValueService.findById(key, true);
+			final BatchExecutor<?> batchExecutorValue = (BatchExecutor<?>) batchExecutor.getValue();
+			if (!onlyIfShouldBeCleaned || batchExecutorValue.shouldBeCleaned()) {
+				this.keyValueService.delete(key);
+			}
+		}
 	}
 
 	/**
@@ -235,8 +228,10 @@ public class BatchService {
 	 * @param key Key.
 	 */
 	public void queueDeleteAsync(
-			final String key) {
-		this.jmsTemplateHelper.send(this.jmsTemplate, new JmsMessage<>().withDestination(BatchService.DELETE_QUEUE).withLastValueKey(key).withMessage(key));
+			final String key,
+			final Boolean onlyIfShouldBeCleaned) {
+		this.jmsTemplateHelper.send(this.jmsTemplate, new JmsMessage<>().withDestination(BatchService.DELETE_QUEUE).withLastValueKey(key)
+				.withMessage(Map.of("key", key, "onlyIfShouldBeCleaned", onlyIfShouldBeCleaned)));
 	}
 
 	/**
@@ -260,8 +255,6 @@ public class BatchService {
 		// Synchronizes the batch (preventing to happen in parallel).
 		final String key = this.getKey(keySuffix);
 		if (this.keyValueService.getRepository().existsById(key)) {
-			final String lockKey = this.getLockKey(keySuffix);
-			this.keyValueService.lock(lockKey);
 			final KeyValue<Typable> batchExecutor = this.keyValueService.findById(key, true);
 			@SuppressWarnings("unchecked")
 			final BatchExecutor<Type> batchExecutorValue = (BatchExecutor<Type>) batchExecutor.getValue();
@@ -269,7 +262,6 @@ public class BatchService {
 			// Deletes the batch if empty.
 			if (batchExecutorValue == null) {
 				this.keyValueService.delete(key);
-				this.keyValueService.delete(lockKey);
 			}
 			// Resumes the batch if not empty.
 			else {
@@ -317,10 +309,6 @@ public class BatchService {
 						this.queueResumeAsync(keySuffix, batchExecutorValue.getDelayBetweenRuns().toSeconds());
 					}
 					throw throwable;
-				}
-				// Releases the lock.
-				finally {
-					this.queueDeleteAsync(lockKey);
 				}
 			}
 		}
@@ -377,7 +365,6 @@ public class BatchService {
 			final Boolean restart) throws BusinessException {
 
 		// Gets (and locks) the executor.
-		this.keyValueService.lock(this.getLockKey(executor.getKeySuffix()));
 		final String key = this.getKey(executor.getKeySuffix());
 		final KeyValue<Typable> batchExecutor = this.keyValueService.lock(key).get();
 
@@ -420,7 +407,7 @@ public class BatchService {
 		final KeyValue<Typable> batchExecutor = this.keyValueService.findById(key, true);
 		@SuppressWarnings("unchecked")
 		final BatchExecutor<Type> batchExecutorValue = (BatchExecutor<Type>) batchExecutor.getValue();
-		batchExecutorValue.setCancelledAt(DateTimeHelper.getCurrentLocalDateTime());
+		batchExecutorValue.setLastCancelledAt(DateTimeHelper.getCurrentLocalDateTime());
 		this.keyValueService.getRepository().save(batchExecutor);
 	}
 
@@ -438,13 +425,16 @@ public class BatchService {
 			method = RequestMethod.DELETE,
 			path = "*/clean"
 	)
-	public void cleanAll() throws BusinessException {
+	public void cleanAll(
+			@RequestParam(defaultValue = "false")
+			final Boolean sync) throws BusinessException {
 		final List<KeyValue<Typable>> batchExecutors = this.keyValueService.findByKeyStart(BatchService.BATCH_KEY_PREFIX);
 		for (final KeyValue<Typable> batchExecutor : batchExecutors) {
-			final BatchExecutor<?> batchExecutorValue = (BatchExecutor<?>) batchExecutor.getValue();
-			this.queueDeleteAsync(batchExecutor.getKey());
-			if (batchExecutorValue != null) {
-				this.queueDeleteAsync(this.getLockKey(batchExecutorValue.getKeySuffix()));
+			if (sync) {
+				this.deleteAsync(Map.of("key", batchExecutor.getKey(), "onlyIfShouldBeCleaned", false));
+			}
+			else {
+				this.queueDeleteAsync(batchExecutor.getKey(), false);
 			}
 		}
 	}
@@ -471,8 +461,7 @@ public class BatchService {
 			if ((batchExecutorValue != null)) {
 				// Deletes old batches.
 				if (batchExecutorValue.shouldBeCleaned()) {
-					this.queueDeleteAsync(batchExecutor.getKey());
-					this.queueDeleteAsync(this.getLockKey(batchExecutorValue.getKeySuffix()));
+					this.queueDeleteAsync(batchExecutor.getKey(), true);
 				}
 				// Makes sure non-expired are still running.
 				else if (!batchExecutorValue.isFinished() && !batchExecutorValue.isExpired()) {

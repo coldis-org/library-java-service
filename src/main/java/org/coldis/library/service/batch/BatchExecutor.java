@@ -122,7 +122,7 @@ public class BatchExecutor<Type> implements Typable {
 	/**
 	 * When the batch was cancelled.
 	 */
-	private LocalDateTime cancelledAt;
+	private LocalDateTime lastCancelledAt;
 
 	/**
 	 * Last processed count.
@@ -563,8 +563,8 @@ public class BatchExecutor<Type> implements Typable {
 	 * @return The cancelledAt.
 	 */
 	@JsonView({ ModelView.Persistent.class, ModelView.Public.class })
-	public LocalDateTime getCancelledAt() {
-		return this.cancelledAt;
+	public LocalDateTime getLastCancelledAt() {
+		return this.lastCancelledAt;
 	}
 
 	/**
@@ -572,9 +572,9 @@ public class BatchExecutor<Type> implements Typable {
 	 *
 	 * @param cancelledAt New cancelledAt.
 	 */
-	public void setCancelledAt(
+	public void setLastCancelledAt(
 			final LocalDateTime cancelledAt) {
-		this.cancelledAt = cancelledAt;
+		this.lastCancelledAt = cancelledAt;
 	}
 
 	/**
@@ -584,7 +584,7 @@ public class BatchExecutor<Type> implements Typable {
 	 */
 	@JsonView({ ModelView.Persistent.class, ModelView.Public.class })
 	public LocalDateTime getExpiredAt() {
-		return (this.getCancelledAt() == null ? this.getLastStartedAt().plus(this.getFinishWithin()) : this.getCancelledAt());
+		return (this.getLastCancelledAt() == null ? this.getLastStartedAt().plus(this.getFinishWithin()) : this.getLastCancelledAt());
 	}
 
 	/**
@@ -642,7 +642,7 @@ public class BatchExecutor<Type> implements Typable {
 	 */
 	public void reset() {
 		this.setLastStartedAt(null);
-		this.setCancelledAt(null);
+		this.setLastCancelledAt(null);
 		this.setLastProcessed(null);
 		this.setLastProcessedCount(null);
 		this.getLastStartedAt();
@@ -663,7 +663,7 @@ public class BatchExecutor<Type> implements Typable {
 	 */
 	@Override
 	public int hashCode() {
-		return Objects.hash(this.actionBeanName, this.actionDelegateMethods, this.arguments, this.cancelledAt, this.cleansWithin, this.delayBetweenRuns,
+		return Objects.hash(this.actionBeanName, this.actionDelegateMethods, this.arguments, this.lastCancelledAt, this.cleansWithin, this.delayBetweenRuns,
 				this.finishWithin, this.itemTypeName, this.keySuffix, this.lastFinishedAt, this.lastProcessed, this.lastProcessedCount, this.lastStartedAt,
 				this.messagesTemplates, this.size, this.slackChannels);
 	}
@@ -682,7 +682,7 @@ public class BatchExecutor<Type> implements Typable {
 		}
 		final BatchExecutor other = (BatchExecutor) obj;
 		return Objects.equals(this.actionBeanName, other.actionBeanName) && Objects.equals(this.actionDelegateMethods, other.actionDelegateMethods)
-				&& Objects.equals(this.arguments, other.arguments) && Objects.equals(this.cancelledAt, other.cancelledAt)
+				&& Objects.equals(this.arguments, other.arguments) && Objects.equals(this.lastCancelledAt, other.lastCancelledAt)
 				&& Objects.equals(this.cleansWithin, other.cleansWithin) && Objects.equals(this.delayBetweenRuns, other.delayBetweenRuns)
 				&& Objects.equals(this.finishWithin, other.finishWithin) && Objects.equals(this.itemTypeName, other.itemTypeName)
 				&& Objects.equals(this.keySuffix, other.keySuffix) && Objects.equals(this.lastFinishedAt, other.lastFinishedAt)

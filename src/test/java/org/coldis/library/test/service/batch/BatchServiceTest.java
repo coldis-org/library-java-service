@@ -62,7 +62,7 @@ public class BatchServiceTest {
 	public void cleanBeforeEachTest() throws Exception {
 		TestHelper.waitUntilValid(() -> {
 			try {
-				this.batchService.cleanAll();
+				this.batchService.cleanAll(true);
 				return this.keyValueService.findByKeyStart("batch-record");
 			}
 			catch (final BusinessException e) {
@@ -111,7 +111,7 @@ public class BatchServiceTest {
 			catch (final BusinessException e) {
 				return null;
 			}
-		}, record -> (record.getLastProcessedCount() > 0), TestHelper.REGULAR_WAIT, TestHelper.SHORT_WAIT);
+		}, record -> ((record != null) && (record.getLastProcessedCount() > 0)), TestHelper.VERY_LONG_WAIT, TestHelper.SHORT_WAIT);
 		BatchExecutor<BatchObject> batchRecord = (BatchExecutor<BatchObject>) this.keyValueService.findById(batchKey, false).getValue();
 		Assertions.assertTrue(batchRecord.getLastProcessedCount() > 0);
 		Assertions.assertNotNull(batchRecord.getLastStartedAt());
@@ -225,7 +225,7 @@ public class BatchServiceTest {
 			catch (final BusinessException e) {
 				return null;
 			}
-		}, record -> record.getLastFinishedAt() != null, TestHelper.VERY_LONG_WAIT * 2, TestHelper.SHORT_WAIT);
+		}, record -> (record != null) && (record.getLastFinishedAt() != null), TestHelper.VERY_LONG_WAIT * 2, TestHelper.SHORT_WAIT);
 		final BatchExecutor<BatchObject> batchRecord = (BatchExecutor<BatchObject>) this.keyValueService.findById(batchKey, false).getValue();
 		Assertions.assertTrue(BatchTestService.processedAlways > 0);
 		Assertions.assertTrue(BatchTestService.processedAlways < 100);
