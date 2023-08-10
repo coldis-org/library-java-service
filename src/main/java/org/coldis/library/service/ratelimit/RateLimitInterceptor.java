@@ -7,6 +7,7 @@ import java.security.SecureRandom;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collection;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -172,29 +173,39 @@ public class RateLimitInterceptor {
 
 					// Gets the exception constructor.
 					Constructor<? extends Exception> constructor = null;
+					boolean useSimpleMessages = false;
 					boolean useSimpleMessage = false;
 					boolean useString = false;
 					try {
-						constructor = limit.errorType().getConstructor(SimpleMessage.class);
-						useSimpleMessage = true;
+						constructor = limit.errorType().getConstructor(Collection.class);
+						useSimpleMessages = true;
 					}
 					catch (final Exception constructorException1) {
 						try {
-							constructor = limit.errorType().getConstructor(String.class);
-							useString = true;
+							constructor = limit.errorType().getConstructor(SimpleMessage.class);
+							useSimpleMessage = true;
 						}
 						catch (final Exception constructorException2) {
 							try {
-								constructor = limit.errorType().getConstructor();
+								constructor = limit.errorType().getConstructor(String.class);
+								useString = true;
 							}
 							catch (final Exception constructorException3) {
+								try {
+									constructor = limit.errorType().getConstructor();
+								}
+								catch (final Exception constructorException4) {
+								}
 							}
 						}
 					}
 
 					// Initializes the exception.
 					if (constructor != null) {
-						if (useSimpleMessage) {
+						if (useSimpleMessages) {
+							actualException = constructor.newInstance(List.of(new SimpleMessage(message)));
+						}
+						else if (useSimpleMessage) {
 							actualException = constructor.newInstance(new SimpleMessage(message));
 						}
 						else if (useString) {
@@ -203,7 +214,6 @@ public class RateLimitInterceptor {
 						else {
 							actualException = constructor.newInstance();
 						}
-						actualException.initCause(exception);
 					}
 
 				}

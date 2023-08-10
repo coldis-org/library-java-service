@@ -5,6 +5,7 @@ import java.util.Objects;
 import java.util.Random;
 import java.util.stream.Collectors;
 
+import org.coldis.library.exception.BusinessException;
 import org.coldis.library.exception.IntegrationException;
 import org.coldis.library.service.ratelimit.RateLimit;
 import org.coldis.library.service.ratelimit.RateLimitInterceptor;
@@ -38,7 +39,9 @@ public class RateLimitTest {
 	 */
 	@RateLimit(
 			limit = 100,
-			period = 5
+			period = 5,
+			errorType = BusinessException.class,
+			randomErrorMessages = { "Error 1", "Error 2" }
 	)
 	private void localRateLimit1() {
 	}
@@ -49,9 +52,7 @@ public class RateLimitTest {
 	@RateLimits(
 			limits = { @RateLimit(
 					limit = 100,
-					period = 5,
-					errorType = IntegrationException.class,
-					randomErrorMessages = { "Error 1", "Error 2" }
+					period = 5
 			), @RateLimit(limit = 200,
 					period = 15,
 					errorType = Exception.class,
@@ -66,7 +67,9 @@ public class RateLimitTest {
 	 */
 	@RateLimit(
 			limit = 100,
-			period = 5
+			period = 5,
+			errorType = IntegrationException.class,
+			randomErrorMessages = { "Error 5", "Error 6" }
 	)
 	private void localRateLimitWithKey1(
 			@RateLimitKey
@@ -81,7 +84,9 @@ public class RateLimitTest {
 					limit = 100,
 					period = 5
 			), @RateLimit(limit = 200,
-					period = 15
+					period = 15,
+					errorType = BusinessException.class,
+					randomErrorMessages = { "Error 7", "Error 8" }
 			) }
 	)
 	private void localRateLimitWithKey2(
