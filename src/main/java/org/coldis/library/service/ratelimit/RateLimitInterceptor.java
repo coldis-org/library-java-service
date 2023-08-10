@@ -1,7 +1,9 @@
 package org.coldis.library.service.ratelimit;
 
+import java.lang.reflect.Constructor;
 import java.lang.reflect.Method;
 import java.lang.reflect.Parameter;
+import java.security.SecureRandom;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -13,6 +15,7 @@ import java.util.TreeMap;
 import java.util.stream.Collectors;
 
 import org.apache.commons.collections4.CollectionUtils;
+import org.apache.commons.lang3.ArrayUtils;
 import org.apache.commons.lang3.StringUtils;
 import org.apache.logging.log4j.util.Strings;
 import org.aspectj.lang.ProceedingJoinPoint;
@@ -21,8 +24,9 @@ import org.aspectj.lang.annotation.Aspect;
 import org.aspectj.lang.annotation.Pointcut;
 import org.aspectj.lang.reflect.MethodSignature;
 import org.coldis.library.exception.BusinessException;
-import org.coldis.library.exception.IntegrationException;
 import org.coldis.library.model.SimpleMessage;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.scheduling.annotation.Scheduled;
 
 /**
@@ -30,6 +34,16 @@ import org.springframework.scheduling.annotation.Scheduled;
  */
 @Aspect
 public class RateLimitInterceptor {
+
+	/**
+	 * Random.
+	 */
+	private static final SecureRandom RANDOM = new SecureRandom();
+
+	/**
+	 * Logger.
+	 */
+	private static final Logger LOGGER = LoggerFactory.getLogger(RateLimitInterceptor.class);
 
 	/**
 	 * Local executions.
@@ -87,13 +101,13 @@ public class RateLimitInterceptor {
 	private RateLimitStats getLocalExecutions(
 			final String name,
 			final String key,
-			final Duration defaultDuration) {
+			final RateLimit limit) {
 		RateLimitStats executions = null;
 		final Map<String, RateLimitStats> executionsMap = this.getLocalExecutionsMap(name);
 		synchronized (executionsMap) {
 			executions = executionsMap.get(key);
 			if (executions == null) {
-				executions = new RateLimitStats(defaultDuration);
+				executions = new RateLimitStats();
 				executionsMap.put(key, executions);
 			}
 		}
@@ -133,17 +147,69 @@ public class RateLimitInterceptor {
 			final String key,
 			final RateLimit limit) throws Exception {
 		// Gets the execution for the method.
-		final RateLimitStats executions = this.getLocalExecutions(name, key, Duration.ofSeconds(limit.period()));
+		final RateLimitStats executions = this.getLocalExecutions(name, key, limit);
 		// Adds the execution and check if the limit has been reached.
 		synchronized (executions) {
-			final Integer executionsCount = executions.getExecutions().size();
-			if ((executionsCount + 1) > limit.limit()) {
-				final SimpleMessage errorMessage = new SimpleMessage("service.ratelimit.exceeded",
-						"Limit (" + limit.limit() + ") has been reached for method '" + name + "': " + executionsCount,
-						new Object[] { limit.limit(), executions.getExecutions().size() });
-				throw (limit.businessError() ? new BusinessException(errorMessage) : new IntegrationException(errorMessage));
+			// Updates the constraints.
+			executions.setLimit(limit.limit());
+			executions.setPeriod(Duration.ofSeconds(limit.period()));
+			executions.setBackoffPeriod(Duration.ofSeconds(limit.backoffPeriod()));
+
+			// Checks the limit.
+			try {
+				executions.checkLimit(name + (StringUtils.isNotBlank(key) ? "-" + key : ""));
 			}
-			executions.getExecutions().add(System.nanoTime());
+			// Uses a delegate exception if needed.
+			catch (final RateLimitException exception) {
+				Exception actualException = exception;
+				if (!Objects.equals(limit.errorType(), RateLimitException.class) || ArrayUtils.isNotEmpty(limit.randomErrorMessages())) {
+
+					// Selects the message to be used.
+					String message = exception.getLocalizedMessage();
+					if (ArrayUtils.isNotEmpty(limit.randomErrorMessages())) {
+						message = limit.randomErrorMessages()[RateLimitInterceptor.RANDOM.nextInt(limit.randomErrorMessages().length)];
+					}
+
+					// Gets the exception constructor.
+					Constructor<? extends Exception> constructor = null;
+					boolean useSimpleMessage = false;
+					boolean useString = false;
+					try {
+						constructor = limit.errorType().getConstructor(SimpleMessage.class);
+						useSimpleMessage = true;
+					}
+					catch (final Exception constructorException1) {
+						try {
+							constructor = limit.errorType().getConstructor(String.class);
+							useString = true;
+						}
+						catch (final Exception constructorException2) {
+							try {
+								constructor = limit.errorType().getConstructor();
+							}
+							catch (final Exception constructorException3) {
+							}
+						}
+					}
+
+					// Initializes the exception.
+					if (constructor != null) {
+						if (useSimpleMessage) {
+							actualException = constructor.newInstance(new SimpleMessage(message));
+						}
+						else if (useString) {
+							actualException = constructor.newInstance(message);
+						}
+						else {
+							actualException = constructor.newInstance();
+						}
+						actualException.initCause(exception);
+					}
+
+				}
+				RateLimitInterceptor.LOGGER.debug("Rate limited: " + actualException.getLocalizedMessage());
+				throw actualException;
+			}
 		}
 	}
 

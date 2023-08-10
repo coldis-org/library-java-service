@@ -26,6 +26,11 @@ public @interface RateLimit {
 	int period() default 60;
 
 	/**
+	 * Backoff period is the period by default.
+	 */
+	int backoffPeriod() default -1;
+
+	/**
 	 * Limit for the period.
 	 */
 	long limit();
@@ -41,8 +46,13 @@ public @interface RateLimit {
 	long errorMargin() default 10;
 
 	/**
-	 * If rate limit should be treated as a business error.
+	 * If the exception type should be changed.
 	 */
-	boolean businessError() default false;
+	Class<? extends Exception> errorType() default RateLimitException.class;
+
+	/**
+	 * Error messages to be used randomly.
+	 */
+	String[] randomErrorMessages() default {};
 
 }

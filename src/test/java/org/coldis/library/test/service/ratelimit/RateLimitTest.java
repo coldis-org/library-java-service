@@ -5,6 +5,7 @@ import java.util.Objects;
 import java.util.Random;
 import java.util.stream.Collectors;
 
+import org.coldis.library.exception.IntegrationException;
 import org.coldis.library.service.ratelimit.RateLimit;
 import org.coldis.library.service.ratelimit.RateLimitInterceptor;
 import org.coldis.library.service.ratelimit.RateLimitKey;
@@ -13,6 +14,8 @@ import org.coldis.library.service.ratelimit.RateLimits;
 import org.coldis.library.test.service.TestApplication;
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.Test;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.context.SpringBootTest.WebEnvironment;
 
@@ -24,6 +27,11 @@ import org.springframework.boot.test.context.SpringBootTest.WebEnvironment;
 		classes = TestApplication.class
 )
 public class RateLimitTest {
+
+	/**
+	 * Logger.
+	 */
+	private static final Logger LOGGER = LoggerFactory.getLogger(RateLimitTest.class);
 
 	/**
 	 * Rate limit 1.
@@ -41,9 +49,13 @@ public class RateLimitTest {
 	@RateLimits(
 			limits = { @RateLimit(
 					limit = 100,
-					period = 5
+					period = 5,
+					errorType = IntegrationException.class,
+					randomErrorMessages = { "Error 1", "Error 2" }
 			), @RateLimit(limit = 200,
-					period = 15
+					period = 15,
+					errorType = Exception.class,
+					randomErrorMessages = { "Error 3", "Error 4" }
 			) }
 	)
 	private void localRateLimit2() {
@@ -89,9 +101,9 @@ public class RateLimitTest {
 		for (Integer count = 1; count <= 100; count++) {
 			this.localRateLimit1();
 			this.localRateLimit2();
-			System.out.println(count);
-			System.out.println(RateLimitInterceptor.EXECUTIONS.entrySet().stream()
-					.map(entry -> entry.getValue().getOrDefault("", new RateLimitStats()).getExecutions().size()).collect(Collectors.toList()));
+			RateLimitTest.LOGGER.debug(count.toString());
+			RateLimitTest.LOGGER.debug(RateLimitInterceptor.EXECUTIONS.entrySet().stream()
+					.map(entry -> entry.getValue().getOrDefault("", new RateLimitStats()).getExecutions().size()).collect(Collectors.toList()).toString());
 		}
 
 		// The next call should pass the limits.
@@ -139,9 +151,9 @@ public class RateLimitTest {
 			for (Integer count = 1; count <= 100; count++) {
 				this.localRateLimitWithKey1(key);
 				this.localRateLimitWithKey2(key, Objects.toString(random.nextInt()));
-				System.out.println(count);
-				System.out.println(RateLimitInterceptor.EXECUTIONS.entrySet().stream()
-						.map(entry -> entry.getValue().getOrDefault("", new RateLimitStats()).getExecutions().size()).collect(Collectors.toList()));
+				RateLimitTest.LOGGER.debug(count.toString());
+				RateLimitTest.LOGGER.debug(RateLimitInterceptor.EXECUTIONS.entrySet().stream()
+						.map(entry -> entry.getValue().getOrDefault("", new RateLimitStats()).getExecutions().size()).collect(Collectors.toList()).toString());
 			}
 		}
 
