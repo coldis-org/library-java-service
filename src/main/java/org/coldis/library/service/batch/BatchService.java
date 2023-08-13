@@ -1,5 +1,6 @@
 package org.coldis.library.service.batch;
 
+import java.time.LocalDateTime;
 import java.time.temporal.ChronoUnit;
 import java.util.List;
 import java.util.Map;
@@ -16,8 +17,10 @@ import org.coldis.library.persistence.keyvalue.KeyValueService;
 import org.coldis.library.service.jms.JmsMessage;
 import org.coldis.library.service.jms.JmsTemplateHelper;
 import org.coldis.library.service.slack.SlackIntegration;
+import org.junit.jupiter.params.shadow.com.univocity.parsers.common.beans.BeanHelper;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.BeanUtils;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnBean;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
@@ -370,8 +373,10 @@ public class BatchService {
 
 		// If there is no previous record for the batch, saves the given one.
 		if (batchExecutor.getValue() == null) {
-			batchExecutor.setValue(executor);
+			batchExecutor.setValue(new BatchExecutor<>());
 		}
+		// Updates fields.
+		BeanUtils.copyProperties(executor, batchExecutor.getValue(), "lastStartedAt", "lastFinishedAt", "lastCancelledAt", "lastProcessedCount");
 
 		// If the executor should be restarted, resets it.
 		@SuppressWarnings("unchecked")
