@@ -374,7 +374,8 @@ public class BatchService {
 			batchExecutor.setValue(new BatchExecutor<>());
 		}
 		// Updates fields.
-		BeanUtils.copyProperties(executor, batchExecutor.getValue(), "lastStartedAt", "lastFinishedAt", "lastCancelledAt", "lastProcessedCount");
+		BeanUtils.copyProperties(executor, batchExecutor.getValue(), "lastProcessed", "lastStartedAt", "lastFinishedAt", "lastCancelledAt",
+				"lastProcessedCount");
 
 		// If the executor should be restarted, resets it.
 		@SuppressWarnings("unchecked")
