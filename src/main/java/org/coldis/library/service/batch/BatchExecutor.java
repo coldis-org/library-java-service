@@ -377,7 +377,7 @@ public class BatchExecutor<Type> implements Typable {
 	 * @param arguments New arguments.
 	 */
 	@JsonView({ ModelView.Persistent.class, ModelView.Public.class })
-	public void setGetArguments(
+	public void setArguments(
 			final Map<String, String> getArguments) {
 		this.arguments = getArguments;
 	}
@@ -663,8 +663,8 @@ public class BatchExecutor<Type> implements Typable {
 	 */
 	@Override
 	public int hashCode() {
-		return Objects.hash(this.actionBeanName, this.actionDelegateMethods, this.arguments, this.lastCancelledAt, this.cleansWithin, this.delayBetweenRuns,
-				this.finishWithin, this.itemTypeName, this.keySuffix, this.lastFinishedAt, this.lastProcessed, this.lastProcessedCount, this.lastStartedAt,
+		return Objects.hash(this.actionBeanName, this.actionDelegateMethods, this.arguments, this.cleansWithin, this.delayBetweenRuns, this.finishWithin,
+				this.itemTypeName, this.keySuffix, this.lastCancelledAt, this.lastFinishedAt, this.lastProcessed, this.lastProcessedCount, this.lastStartedAt,
 				this.messagesTemplates, this.size, this.slackChannels);
 	}
 
@@ -682,10 +682,10 @@ public class BatchExecutor<Type> implements Typable {
 		}
 		final BatchExecutor other = (BatchExecutor) obj;
 		return Objects.equals(this.actionBeanName, other.actionBeanName) && Objects.equals(this.actionDelegateMethods, other.actionDelegateMethods)
-				&& Objects.equals(this.arguments, other.arguments) && Objects.equals(this.lastCancelledAt, other.lastCancelledAt)
-				&& Objects.equals(this.cleansWithin, other.cleansWithin) && Objects.equals(this.delayBetweenRuns, other.delayBetweenRuns)
-				&& Objects.equals(this.finishWithin, other.finishWithin) && Objects.equals(this.itemTypeName, other.itemTypeName)
-				&& Objects.equals(this.keySuffix, other.keySuffix) && Objects.equals(this.lastFinishedAt, other.lastFinishedAt)
+				&& Objects.equals(this.arguments, other.arguments) && Objects.equals(this.cleansWithin, other.cleansWithin)
+				&& Objects.equals(this.delayBetweenRuns, other.delayBetweenRuns) && Objects.equals(this.finishWithin, other.finishWithin)
+				&& Objects.equals(this.itemTypeName, other.itemTypeName) && Objects.equals(this.keySuffix, other.keySuffix)
+				&& Objects.equals(this.lastCancelledAt, other.lastCancelledAt) && Objects.equals(this.lastFinishedAt, other.lastFinishedAt)
 				&& Objects.equals(this.lastProcessed, other.lastProcessed) && Objects.equals(this.lastProcessedCount, other.lastProcessedCount)
 				&& Objects.equals(this.lastStartedAt, other.lastStartedAt) && Objects.equals(this.messagesTemplates, other.messagesTemplates)
 				&& Objects.equals(this.size, other.size) && Objects.equals(this.slackChannels, other.slackChannels);
