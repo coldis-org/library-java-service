@@ -7,6 +7,7 @@ import java.util.Random;
 
 import org.coldis.library.exception.BusinessException;
 import org.coldis.library.helper.DateTimeHelper;
+import org.coldis.library.persistence.LockBehavior;
 import org.coldis.library.persistence.keyvalue.KeyValueService;
 import org.coldis.library.service.batch.BatchExecutor;
 import org.coldis.library.service.batch.BatchService;
@@ -106,13 +107,13 @@ public class BatchServiceTest {
 
 		TestHelper.waitUntilValid(() -> {
 			try {
-				return (BatchExecutor<BatchObject>) this.keyValueService.findById(batchKey, false).getValue();
+				return (BatchExecutor<BatchObject>) this.keyValueService.findById(batchKey, LockBehavior.NO_LOCK, false).getValue();
 			}
 			catch (final BusinessException e) {
 				return null;
 			}
 		}, record -> ((record != null) && (record.getLastProcessedCount() > 0)), TestHelper.VERY_LONG_WAIT, TestHelper.SHORT_WAIT);
-		BatchExecutor<BatchObject> batchRecord = (BatchExecutor<BatchObject>) this.keyValueService.findById(batchKey, false).getValue();
+		BatchExecutor<BatchObject> batchRecord = (BatchExecutor<BatchObject>) this.keyValueService.findById(batchKey, LockBehavior.NO_LOCK, false).getValue();
 		Assertions.assertTrue(batchRecord.getLastProcessedCount() > 0);
 		Assertions.assertNotNull(batchRecord.getLastStartedAt());
 		Assertions.assertNotNull(batchRecord.getLastProcessed());
@@ -120,13 +121,13 @@ public class BatchServiceTest {
 		// Waits until batch is finished.
 		TestHelper.waitUntilValid(() -> {
 			try {
-				return (BatchExecutor<BatchObject>) this.keyValueService.findById(batchKey, false).getValue();
+				return (BatchExecutor<BatchObject>) this.keyValueService.findById(batchKey, LockBehavior.NO_LOCK, false).getValue();
 			}
 			catch (final BusinessException e) {
 				return null;
 			}
 		}, record -> record.getLastFinishedAt() != null, TestHelper.VERY_LONG_WAIT, TestHelper.SHORT_WAIT);
-		batchRecord = (BatchExecutor<BatchObject>) this.keyValueService.findById(batchKey, false).getValue();
+		batchRecord = (BatchExecutor<BatchObject>) this.keyValueService.findById(batchKey, LockBehavior.NO_LOCK, false).getValue();
 		Assertions.assertEquals(processedNow, batchRecord.getLastProcessedCount());
 		Assertions.assertEquals(processedTotal, BatchTestService.processedAlways);
 		Assertions.assertNotNull(batchRecord.getLastStartedAt());
@@ -138,7 +139,7 @@ public class BatchServiceTest {
 		this.batchService.checkAll();
 		this.batchService.start(testBatchExecutor, false);
 		this.batchService.checkAll();
-		batchRecord = (BatchExecutor<BatchObject>) this.keyValueService.findById(batchKey, false).getValue();
+		batchRecord = (BatchExecutor<BatchObject>) this.keyValueService.findById(batchKey, LockBehavior.NO_LOCK, false).getValue();
 		Assertions.assertEquals(processedNow, batchRecord.getLastProcessedCount());
 		Assertions.assertEquals(processedTotal, BatchTestService.processedAlways);
 	}
@@ -158,7 +159,7 @@ public class BatchServiceTest {
 
 		// Record should not exist.
 		try {
-			this.keyValueService.findById(batchKey, false).getValue();
+			this.keyValueService.findById(batchKey, LockBehavior.NO_LOCK, false).getValue();
 			Assertions.fail("Record should not exist.");
 		}
 		catch (final Exception exception) {
@@ -181,7 +182,7 @@ public class BatchServiceTest {
 			}
 		}, List::isEmpty, TestHelper.VERY_LONG_WAIT * 3, TestHelper.SHORT_WAIT);
 		try {
-			this.keyValueService.findById(batchKey, false);
+			this.keyValueService.findById(batchKey, LockBehavior.NO_LOCK, false);
 			Assertions.fail("Batch should no longer exist.");
 		}
 		catch (final Exception exception) {
@@ -205,7 +206,7 @@ public class BatchServiceTest {
 
 		// Record should not exist.
 		try {
-			this.keyValueService.findById(batchKey, false).getValue();
+			this.keyValueService.findById(batchKey, LockBehavior.NO_LOCK, false).getValue();
 			Assertions.fail("Record should not exist.");
 		}
 		catch (final Exception exception) {
@@ -220,13 +221,13 @@ public class BatchServiceTest {
 		// Waits for a while (this batch should not reach the end).
 		TestHelper.waitUntilValid(() -> {
 			try {
-				return (BatchExecutor<BatchObject>) this.keyValueService.findById(batchKey, false).getValue();
+				return (BatchExecutor<BatchObject>) this.keyValueService.findById(batchKey, LockBehavior.NO_LOCK, false).getValue();
 			}
 			catch (final BusinessException e) {
 				return null;
 			}
 		}, record -> (record != null) && (record.getLastFinishedAt() != null), TestHelper.VERY_LONG_WAIT * 2, TestHelper.SHORT_WAIT);
-		final BatchExecutor<BatchObject> batchRecord = (BatchExecutor<BatchObject>) this.keyValueService.findById(batchKey, false).getValue();
+		final BatchExecutor<BatchObject> batchRecord = (BatchExecutor<BatchObject>) this.keyValueService.findById(batchKey, LockBehavior.NO_LOCK, false).getValue();
 		Assertions.assertTrue(BatchTestService.processedAlways > 0);
 		Assertions.assertTrue(BatchTestService.processedAlways < 100);
 		Assertions.assertTrue(batchRecord.getLastProcessedCount() > 0);
@@ -246,7 +247,7 @@ public class BatchServiceTest {
 			}
 		}, List::isEmpty, TestHelper.VERY_LONG_WAIT * 3, TestHelper.SHORT_WAIT);
 		try {
-			this.keyValueService.findById(batchKey, false);
+			this.keyValueService.findById(batchKey, LockBehavior.NO_LOCK, false);
 			Assertions.fail("Batch should no longer exist.");
 		}
 		catch (final Exception exception) {
@@ -270,7 +271,7 @@ public class BatchServiceTest {
 
 		// Record should not exist.
 		try {
-			this.keyValueService.findById(batchKey, false).getValue();
+			this.keyValueService.findById(batchKey, LockBehavior.NO_LOCK, false).getValue();
 			Assertions.fail("Record should not exist.");
 		}
 		catch (final Exception exception) {
@@ -287,7 +288,7 @@ public class BatchServiceTest {
 		this.batchService.cancel(testBatchExecutor.getKeySuffix());
 
 		// This batch should not reach the end.
-		final BatchExecutor<BatchObject> batchRecord = (BatchExecutor<BatchObject>) this.keyValueService.findById(batchKey, false).getValue();
+		final BatchExecutor<BatchObject> batchRecord = (BatchExecutor<BatchObject>) this.keyValueService.findById(batchKey, LockBehavior.NO_LOCK, false).getValue();
 		Assertions.assertTrue(BatchTestService.processedAlways > 0);
 		Assertions.assertTrue(BatchTestService.processedAlways < 100);
 		Assertions.assertTrue(batchRecord.getLastProcessedCount() > 0);
@@ -307,7 +308,7 @@ public class BatchServiceTest {
 			}
 		}, List::isEmpty, TestHelper.VERY_LONG_WAIT * 3, TestHelper.SHORT_WAIT);
 		try {
-			this.keyValueService.findById(batchKey, false);
+			this.keyValueService.findById(batchKey, LockBehavior.NO_LOCK, false);
 			Assertions.fail("Batch should no longer exist.");
 		}
 		catch (final Exception exception) {

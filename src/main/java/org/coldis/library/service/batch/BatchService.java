@@ -11,6 +11,7 @@ import org.coldis.library.exception.BusinessException;
 import org.coldis.library.helper.DateTimeHelper;
 import org.coldis.library.model.SimpleMessage;
 import org.coldis.library.model.Typable;
+import org.coldis.library.persistence.LockBehavior;
 import org.coldis.library.persistence.keyvalue.KeyValue;
 import org.coldis.library.persistence.keyvalue.KeyValueService;
 import org.coldis.library.service.jms.JmsMessage;
@@ -134,10 +135,8 @@ public class BatchService {
 				// Gets the message properties.
 				final String key = this.getKey(executor.getKeySuffix());
 				final Type lastProcessed = executor.getLastProcessed();
-				final KeyValue<Typable> batchExecutor = this.keyValueService.findById(key, false);
 				@SuppressWarnings("unchecked")
-				final BatchExecutor<Type> batchExecutorValue = (BatchExecutor<Type>) batchExecutor.getValue();
-				final Long duration = (batchExecutorValue.getLastStartedAt().until(DateTimeHelper.getCurrentLocalDateTime(), ChronoUnit.MINUTES));
+				final Long duration = (executor.getLastStartedAt().until(DateTimeHelper.getCurrentLocalDateTime(), ChronoUnit.MINUTES));
 				final Properties messageProperties = new Properties();
 				messageProperties.put("key", key);
 				messageProperties.put("lastProcessed", Objects.toString(lastProcessed));
@@ -215,7 +214,7 @@ public class BatchService {
 		final String key = (String) message.get("key");
 		final Boolean onlyIfShouldBeCleaned = (Boolean) message.get("onlyIfShouldBeCleaned");
 		if (this.keyValueService.getRepository().existsById(key)) {
-			final KeyValue<Typable> batchExecutor = this.keyValueService.findById(key, true);
+			final KeyValue<Typable> batchExecutor = this.keyValueService.findById(key, LockBehavior.WAIT_AND_LOCK, false);
 			final BatchExecutor<?> batchExecutorValue = (BatchExecutor<?>) batchExecutor.getValue();
 			if (!onlyIfShouldBeCleaned || batchExecutorValue.shouldBeCleaned()) {
 				this.keyValueService.delete(key);
@@ -255,8 +254,8 @@ public class BatchService {
 			final String keySuffix) throws BusinessException {
 		// Synchronizes the batch (preventing to happen in parallel).
 		final String key = this.getKey(keySuffix);
-		if (this.keyValueService.getRepository().existsById(key)) {
-			final KeyValue<Typable> batchExecutor = this.keyValueService.findById(key, true);
+		final KeyValue<Typable> batchExecutor = this.keyValueService.findById(key, LockBehavior.LOCK_SKIP, true);
+		if (batchExecutor != null) {
 			@SuppressWarnings("unchecked")
 			final BatchExecutor<Type> batchExecutorValue = (BatchExecutor<Type>) batchExecutor.getValue();
 
@@ -313,10 +312,7 @@ public class BatchService {
 				}
 			}
 		}
-		// Logs if key does not exits.
-		else {
-			BatchService.LOGGER.error("Could not find batch for key '" + key + "'.");
-		}
+
 	}
 
 	/**
@@ -367,7 +363,7 @@ public class BatchService {
 
 		// Gets (and locks) the executor.
 		final String key = this.getKey(executor.getKeySuffix());
-		final KeyValue<Typable> batchExecutor = this.keyValueService.lock(key).get();
+		final KeyValue<Typable> batchExecutor = this.keyValueService.lock(key, LockBehavior.WAIT_AND_LOCK);
 
 		// If there is no previous record for the batch, saves the given one.
 		if (batchExecutor.getValue() == null) {
@@ -408,7 +404,7 @@ public class BatchService {
 			@PathVariable
 			final String keySuffix) throws BusinessException {
 		final String key = this.getKey(keySuffix);
-		final KeyValue<Typable> batchExecutor = this.keyValueService.findById(key, true);
+		final KeyValue<Typable> batchExecutor = this.keyValueService.findById(key, LockBehavior.WAIT_AND_LOCK, false);
 		@SuppressWarnings("unchecked")
 		final BatchExecutor<Type> batchExecutorValue = (BatchExecutor<Type>) batchExecutor.getValue();
 		batchExecutorValue.setLastCancelledAt(DateTimeHelper.getCurrentLocalDateTime());
