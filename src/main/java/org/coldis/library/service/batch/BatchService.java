@@ -45,7 +45,7 @@ import org.springframework.web.bind.annotation.RestController;
 @ConditionalOnProperty(
 		name = "org.coldis.configuration.service.batch-enabled",
 		havingValue = "true",
-		matchIfMissing = true
+		matchIfMissing = false
 )
 public class BatchService {
 

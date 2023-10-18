@@ -8,7 +8,7 @@ import org.springframework.context.annotation.PropertySource;
  */
 @Configuration
 @PropertySource(
-		value = { "service.properties" },
+		value = { "classpath:service.properties" },
 		ignoreResourceNotFound = true
 )
 public class ServiceConfiguration {
