@@ -21,10 +21,8 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.BeanUtils;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.boot.autoconfigure.condition.ConditionalOnBean;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.jms.annotation.JmsListener;
-import org.springframework.jms.config.JmsListenerContainerFactory;
 import org.springframework.jms.core.JmsTemplate;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.transaction.annotation.Propagation;
@@ -44,7 +42,6 @@ import org.springframework.web.bind.annotation.RestController;
 @RequestMapping(path = "service-batch")
 @ConditionalOnProperty(
 		name = "org.coldis.configuration.service.batch-enabled",
-		havingValue = "true",
 		matchIfMissing = false
 )
 public class BatchService {
@@ -208,7 +205,6 @@ public class BatchService {
 			destination = BatchService.DELETE_QUEUE,
 			concurrency = "1-3"
 	)
-	@ConditionalOnBean(value = JmsListenerContainerFactory.class)
 	private void deleteAsync(
 			final Map<String, Object> message) throws BusinessException {
 		final String key = (String) message.get("key");

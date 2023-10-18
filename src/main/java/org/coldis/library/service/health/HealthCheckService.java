@@ -15,7 +15,6 @@ import org.springframework.web.bind.annotation.RestController;
 @RequestMapping(path = "${org.coldis.configuration.health-check:/health-check}")
 @ConditionalOnProperty(
 		name = "org.coldis.configuration.health-check-enabled",
-		havingValue = "true",
 		matchIfMissing = true
 )
 public class HealthCheckService {
