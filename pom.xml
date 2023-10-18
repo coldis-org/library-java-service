@@ -7,7 +7,7 @@
 	</parent>
 	<groupId>org.coldis.library</groupId>
 	<artifactId>service</artifactId>
-	<version>1.0.20</version>
+	<version>1.0.21-SNAPSHOT</version>
 	<packaging>jar</packaging>
 	<name>Spring boot utilities</name>
 	<description>Java Spring Boot utilities.</description>
@@ -33,7 +33,7 @@
 			scm:git:https://github.com/coldis-org/library-java-service.git</connection>
 		<developerConnection>
 			scm:git:git@github.com:coldis-org/library-java-service.git</developerConnection>
-		<tag>service-1.0.20</tag>
+		<tag>HEAD</tag>
 	</scm>
 	<dependencies>
 		<dependency>
