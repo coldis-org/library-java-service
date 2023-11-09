@@ -42,7 +42,6 @@ import org.springframework.web.bind.annotation.RestController;
  */
 @RestController
 @RequestMapping(path = "service-batch")
-@ConditionalOnBean(value = JmsListenerContainerFactory.class)
 @ConditionalOnProperty(
 		name = "org.coldis.configuration.service.batch-enabled",
 		matchIfMissing = false
