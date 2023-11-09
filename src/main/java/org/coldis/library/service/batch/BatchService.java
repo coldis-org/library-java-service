@@ -21,8 +21,10 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.BeanUtils;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnBean;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.jms.annotation.JmsListener;
+import org.springframework.jms.config.JmsListenerContainerFactory;
 import org.springframework.jms.core.JmsTemplate;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.transaction.annotation.Propagation;
@@ -40,6 +42,7 @@ import org.springframework.web.bind.annotation.RestController;
  */
 @RestController
 @RequestMapping(path = "service-batch")
+@ConditionalOnBean(value = JmsListenerContainerFactory.class)
 @ConditionalOnProperty(
 		name = "org.coldis.configuration.service.batch-enabled",
 		matchIfMissing = false
@@ -289,7 +292,7 @@ public class BatchService {
 						batchExecutorValue.setLastFinishedAt(DateTimeHelper.getCurrentLocalDateTime());
 					}
 					else {
-						this.queueResumeAsync(keySuffix, batchExecutorValue.getDelayBetweenRuns().toSeconds());
+						this.queueResumeAsync(keySuffix, batchExecutorValue.getDelayBetweenRuns().toMillis());
 					}
 
 					// Saves the executor.
@@ -302,7 +305,7 @@ public class BatchService {
 					BatchService.LOGGER.debug("Error processing batch '" + key + "'.", throwable);
 					if (!(throwable instanceof BusinessException)
 							|| (!((BusinessException) throwable).getCode().equals(BatchService.BATCH_EXPIRED_MESSAGE_CODE))) {
-						this.queueResumeAsync(keySuffix, batchExecutorValue.getDelayBetweenRuns().toSeconds());
+						this.queueResumeAsync(keySuffix, batchExecutorValue.getDelayBetweenRuns().toMillis());
 					}
 					throw throwable;
 				}
@@ -461,7 +464,7 @@ public class BatchService {
 				}
 				// Makes sure non-expired are still running.
 				else if (!batchExecutorValue.isFinished() && !batchExecutorValue.isExpired()) {
-					this.queueResumeAsync(batchExecutorValue.getKeySuffix(), batchExecutorValue.getDelayBetweenRuns().toSeconds());
+					this.queueResumeAsync(batchExecutorValue.getKeySuffix(), batchExecutorValue.getDelayBetweenRuns().toMillis());
 				}
 			}
 		}
