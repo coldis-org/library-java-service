@@ -322,7 +322,7 @@ public class BatchService {
 	 */
 	@JmsListener(
 			destination = BatchService.RESUME_QUEUE,
-			concurrency = "${org.coldis.configuration.service.batch-concurrency}"
+			concurrency = "${org.coldis.configuration.service.batch-concurrency:1-17}"
 	)
 	public <Type> void resumeAsync(
 			final String keySuffix) throws BusinessException {
