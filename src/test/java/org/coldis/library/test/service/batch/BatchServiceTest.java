@@ -12,7 +12,6 @@ import org.coldis.library.persistence.keyvalue.KeyValueService;
 import org.coldis.library.service.batch.BatchExecutor;
 import org.coldis.library.service.batch.BatchService;
 import org.coldis.library.test.TestHelper;
-import org.coldis.library.test.service.TestApplication;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.BeforeEach;
@@ -20,16 +19,11 @@ import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.context.SpringBootTest.WebEnvironment;
-import org.springframework.jms.annotation.EnableJms;
 
 /**
  * Batch record test.
  */
-@EnableJms
-@SpringBootTest(
-		webEnvironment = WebEnvironment.RANDOM_PORT,
-		classes = TestApplication.class
-)
+@SpringBootTest(webEnvironment = WebEnvironment.DEFINED_PORT)
 public class BatchServiceTest {
 
 	/**
@@ -227,7 +221,8 @@ public class BatchServiceTest {
 				return null;
 			}
 		}, record -> (record != null) && (record.getLastFinishedAt() != null), TestHelper.VERY_LONG_WAIT * 2, TestHelper.SHORT_WAIT);
-		final BatchExecutor<BatchObject> batchRecord = (BatchExecutor<BatchObject>) this.keyValueService.findById(batchKey, LockBehavior.NO_LOCK, false).getValue();
+		final BatchExecutor<BatchObject> batchRecord = (BatchExecutor<BatchObject>) this.keyValueService.findById(batchKey, LockBehavior.NO_LOCK, false)
+				.getValue();
 		Assertions.assertTrue(BatchTestService.processedAlways > 0);
 		Assertions.assertTrue(BatchTestService.processedAlways < 100);
 		Assertions.assertTrue(batchRecord.getLastProcessedCount() > 0);
@@ -288,7 +283,8 @@ public class BatchServiceTest {
 		this.batchService.cancel(testBatchExecutor.getKeySuffix());
 
 		// This batch should not reach the end.
-		final BatchExecutor<BatchObject> batchRecord = (BatchExecutor<BatchObject>) this.keyValueService.findById(batchKey, LockBehavior.NO_LOCK, false).getValue();
+		final BatchExecutor<BatchObject> batchRecord = (BatchExecutor<BatchObject>) this.keyValueService.findById(batchKey, LockBehavior.NO_LOCK, false)
+				.getValue();
 		Assertions.assertTrue(BatchTestService.processedAlways > 0);
 		Assertions.assertTrue(BatchTestService.processedAlways < 100);
 		Assertions.assertTrue(batchRecord.getLastProcessedCount() > 0);

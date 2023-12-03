@@ -1,13 +1,15 @@
-<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+	xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+	xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
 	<modelVersion>4.0.0</modelVersion>
 	<parent>
 		<groupId>org.coldis</groupId>
 		<artifactId>configuration</artifactId>
-		<version>1.0.24</version>
+		<version>2.0.38</version>
 	</parent>
 	<groupId>org.coldis.library</groupId>
 	<artifactId>service</artifactId>
-	<version>1.0.28-SNAPSHOT</version>
+	<version>2.0.0-SNAPSHOT</version>
 	<packaging>jar</packaging>
 	<name>Spring boot utilities</name>
 	<description>Java Spring Boot utilities.</description>
@@ -26,6 +28,7 @@
 		<project.config.source.test.compile.annotationProcessors>
 			org.coldis.library.dto.DtoGenerator,org.coldis.library.service.client.generator.ServiceClientGenerator</project.config.source.test.compile.annotationProcessors>
 		<project.config.swagger.scope>compile</project.config.swagger.scope>
+		<project.config.release.arguments>-Dnet.bytebuddy.experimental=true</project.config.release.arguments>
 	</properties>
 	<scm>
 		<url>https://github.com/coldis-org/library-java-service</url>
@@ -33,70 +36,31 @@
 			scm:git:https://github.com/coldis-org/library-java-service.git</connection>
 		<developerConnection>
 			scm:git:git@github.com:coldis-org/library-java-service.git</developerConnection>
-		<tag>service-1.0.26</tag>
+		<tag>HEAD</tag>
 	</scm>
 	<dependencies>
 		<dependency>
 			<groupId>org.coldis.library</groupId>
 			<artifactId>service-client</artifactId>
-			<version>1.0.18</version>
+			<version>2.0.2</version>
 		</dependency>
 		<dependency>
 			<groupId>org.coldis.library</groupId>
 			<artifactId>serialization</artifactId>
-			<version>1.0.2</version>
+			<version>2.0.3</version>
 			<optional>true</optional>
 		</dependency>
 		<dependency>
 			<groupId>org.coldis.library</groupId>
 			<artifactId>test</artifactId>
-			<version>1.0.1</version>
+			<version>2.0.3</version>
 			<scope>test</scope>
 		</dependency>
 		<dependency>
 			<groupId>org.coldis.library</groupId>
 			<artifactId>persistence</artifactId>
-			<version>1.0.28</version>
+			<version>2.0.2</version>
 			<optional>true</optional>
-		</dependency>
-
-
-		<dependency>
-			<groupId>org.aspectj</groupId>
-			<artifactId>aspectjrt</artifactId>
-		</dependency>
-		<dependency>
-			<groupId>org.aspectj</groupId>
-			<artifactId>aspectjweaver</artifactId>
-			<scope>provided</scope>
-		</dependency>
-
-		<dependency>
-			<groupId>org.apache.activemq</groupId>
-			<artifactId>artemis-jms-client</artifactId>
-			<scope>test</scope>
-		</dependency>
-		<dependency>
-			<groupId>org.apache.activemq</groupId>
-			<artifactId>artemis-jms-server</artifactId>
-			<scope>test</scope>
-		</dependency>
-
-		<dependency>
-			<groupId>org.messaginghub</groupId>
-			<artifactId>pooled-jms</artifactId>
-			<optional>true</optional>
-		</dependency>
-
-		<dependency>
-			<groupId>org.postgresql</groupId>
-			<artifactId>postgresql</artifactId>
-			<scope>test</scope>
-		</dependency>
-
-		<dependency>
-			<groupId>org.springframework</groupId>
-			<artifactId>spring-aspects</artifactId>
 		</dependency>
 
 		<dependency>
@@ -122,10 +86,79 @@
 			<artifactId>spring-boot-starter-artemis</artifactId>
 			<optional>true</optional>
 		</dependency>
+		<dependency>
+			<groupId>org.springframework.boot</groupId>
+			<artifactId>spring-boot-starter-cache</artifactId>
+			<optional>true</optional>
+		</dependency>
+		<dependency>
+			<groupId>org.springframework.boot</groupId>
+			<artifactId>spring-boot-starter-data-redis</artifactId>
+			<optional>true</optional>
+		</dependency>
+
+		<dependency>
+			<groupId>org.apache.activemq</groupId>
+			<artifactId>artemis-jms-server</artifactId>
+			<scope>test</scope>
+		</dependency>
+		<dependency>
+			<groupId>org.apache.activemq</groupId>
+			<artifactId>artemis-jms-client</artifactId>
+			<optional>true</optional>
+		</dependency>
+
+		<dependency>
+			<groupId>org.aspectj</groupId>
+			<artifactId>aspectjrt</artifactId>
+		</dependency>
+		<dependency>
+			<groupId>org.aspectj</groupId>
+			<artifactId>aspectjweaver</artifactId>
+			<scope>provided</scope>
+		</dependency>
+
+		<dependency>
+			<groupId>org.postgresql</groupId>
+			<artifactId>postgresql</artifactId>
+			<scope>test</scope>
+		</dependency>
+
+		<dependency>
+			<groupId>org.springframework</groupId>
+			<artifactId>spring-aspects</artifactId>
+		</dependency>
+		<dependency>
+			<groupId>org.springframework</groupId>
+			<artifactId>spring-web</artifactId>
+		</dependency>
+		<dependency>
+			<groupId>org.springframework</groupId>
+			<artifactId>spring-context</artifactId>
+		</dependency>
+		<dependency>
+			<groupId>org.springframework</groupId>
+			<artifactId>spring-jms</artifactId>
+			<optional>true</optional>
+		</dependency>
+
+		<dependency>
+			<groupId>com.github.ben-manes.caffeine</groupId>
+			<artifactId>caffeine</artifactId>
+			<optional>true</optional>
+		</dependency>
 
 		<dependency>
 			<groupId>com.zaxxer</groupId>
 			<artifactId>HikariCP</artifactId>
+			<optional>true</optional>
+		</dependency>
+
+		<dependency>
+			<groupId>it.ozimov</groupId>
+			<artifactId>embedded-redis</artifactId>
+			<version>0.7.3</version>
+			<scope>test</scope>
 		</dependency>
 
 	</dependencies>

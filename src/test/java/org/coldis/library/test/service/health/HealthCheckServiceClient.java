@@ -18,7 +18,7 @@ public class HealthCheckServiceClient extends GenericRestServiceClient {
 	/**
 	 * Service endpoint.
 	 */
-	@Value("http://localhost:8080")
+	@Value("http://localhost:9090")
 	private String endpoint;
 
 	/**

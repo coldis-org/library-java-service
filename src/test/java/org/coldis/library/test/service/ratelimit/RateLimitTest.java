@@ -12,7 +12,6 @@ import org.coldis.library.service.ratelimit.RateLimitInterceptor;
 import org.coldis.library.service.ratelimit.RateLimitKey;
 import org.coldis.library.service.ratelimit.RateLimitStats;
 import org.coldis.library.service.ratelimit.RateLimits;
-import org.coldis.library.test.service.TestApplication;
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.Test;
 import org.slf4j.Logger;
@@ -23,10 +22,7 @@ import org.springframework.boot.test.context.SpringBootTest.WebEnvironment;
 /**
  * Rate limit test.
  */
-@SpringBootTest(
-		webEnvironment = WebEnvironment.RANDOM_PORT,
-		classes = TestApplication.class
-)
+@SpringBootTest(webEnvironment = WebEnvironment.DEFINED_PORT)
 public class RateLimitTest {
 
 	/**
