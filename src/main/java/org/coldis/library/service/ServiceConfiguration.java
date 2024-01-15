@@ -13,6 +13,15 @@ import org.springframework.core.annotation.Order;
 		value = { "classpath:service.properties" },
 		ignoreResourceNotFound = true
 )
+@PropertySource(
+		value = { "classpath:integration.properties" },
+		ignoreResourceNotFound = true
+)
 public class ServiceConfiguration {
+
+	/**
+	 * Base package.
+	 */
+	public static final String BASE_PACKAGE = "org.coldis";
 
 }
