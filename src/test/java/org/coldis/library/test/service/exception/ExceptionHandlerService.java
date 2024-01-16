@@ -17,8 +17,11 @@ import org.springframework.web.bind.annotation.RestController;
  */
 @RestController
 @RequestMapping(path = "exception")
-@ServiceClient(namespace = "org.coldis.library.test.service.exception", targetPath = "src/test/java",
-endpoint = "http://localhost:9090/exception")
+@ServiceClient(
+		namespace = "org.coldis.library.test.service.exception",
+		targetPath = "src/test/java",
+		endpoint = "http://localhost:9090/exception"
+)
 public class ExceptionHandlerService {
 
 	/**
@@ -34,9 +37,15 @@ public class ExceptionHandlerService {
 	 * @param  parameters        Parameters.
 	 * @throws BusinessException Exception.
 	 */
-	@RequestMapping(path = "business", method = RequestMethod.POST)
-	public void businessExceptionService(@RequestParam final String code, @RequestParam final Object[] parameters)
-			throws BusinessException {
+	@RequestMapping(
+			path = "business",
+			method = RequestMethod.POST
+	)
+	public void businessExceptionService(
+			@RequestParam
+			final String code,
+			@RequestParam
+			final Object[] parameters) throws BusinessException {
 		throw new BusinessException(new SimpleMessage(code, parameters));
 	}
 
@@ -47,9 +56,15 @@ public class ExceptionHandlerService {
 	 * @param  parameters           Parameters.
 	 * @throws IntegrationException Exception.
 	 */
-	@RequestMapping(path = "integration", method = RequestMethod.POST)
-	public void integrationExceptionService(@RequestParam final String code, @RequestParam final Object[] parameters)
-			throws IntegrationException {
+	@RequestMapping(
+			path = "integration",
+			method = RequestMethod.POST
+	)
+	public void integrationExceptionService(
+			@RequestParam
+			final String code,
+			@RequestParam
+			final Object[] parameters) throws IntegrationException {
 		throw new IntegrationException(new SimpleMessage(code, parameters));
 	}
 
@@ -58,8 +73,13 @@ public class ExceptionHandlerService {
 	 *
 	 * @param object Test object.
 	 */
-	@RequestMapping(path = "constraint-violation", method = RequestMethod.POST)
-	public void constraintViolationExceptionService(@RequestBody final TestClass object) {
+	@RequestMapping(
+			path = "constraint-violation",
+			method = RequestMethod.POST
+	)
+	public void constraintViolationExceptionService(
+			@RequestBody
+			final TestClass object) {
 		this.extendedValidator.validateAndThrowViolations(object);
 	}
 
