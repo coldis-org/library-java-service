@@ -1,0 +1,30 @@
+{
+	"serviceOperationUrl": "http://localhost:${property:server.port}/${property:org.coldis.library.spring.test.data-installer}",
+	"idProperties": [
+		"property1",
+		"property2"
+	],
+	"idPropertiesStrategy": "PATH",
+	"searchProperties": [
+		"property1",
+		"property2"
+	],
+	"searchPropertiesStrategy": "PATH",
+	"data": [
+		{
+			"property1": 10,
+			"property2": 20,
+			"property3": "30"
+		},
+		{
+			"property1": 11,
+			"property2": 21,
+			"property3": "31"
+		},
+		{
+			"property1": 12,
+			"property2": 22,
+			"property3": "32"
+		}
+	]
+}

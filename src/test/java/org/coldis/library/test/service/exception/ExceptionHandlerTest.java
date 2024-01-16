@@ -94,7 +94,7 @@ public class ExceptionHandlerTest extends TestHelper {
 	public void testConstraintViolationException() throws Exception {
 		// Tests exception messages.
 		try {
-			this.exceptionHandlerServiceClient.constraintViolationExceptionService(new TestClass());
+			this.exceptionHandlerServiceClient.constraintViolationExceptionService(new ExceptionTestClass());
 		}
 		// Makes sure the message is enhanced from the code.
 		catch (final BusinessException exception) {

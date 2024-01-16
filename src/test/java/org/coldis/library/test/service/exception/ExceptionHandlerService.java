@@ -79,7 +79,7 @@ public class ExceptionHandlerService {
 	)
 	public void constraintViolationExceptionService(
 			@RequestBody
-			final TestClass object) {
+			final ExceptionTestClass object) {
 		this.extendedValidator.validateAndThrowViolations(object);
 	}
 

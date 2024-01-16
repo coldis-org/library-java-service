@@ -269,7 +269,7 @@ this.serviceClient.executeOperation(path.toString(), method, headers,
 	 */
 	
 	public void constraintViolationExceptionService(
-org.coldis.library.test.service.exception.TestClass object
+org.coldis.library.test.service.exception.ExceptionTestClass object
 			) throws BusinessException {
 		// Operation parameters.
 		StringBuilder path = new StringBuilder(this.valueResolver

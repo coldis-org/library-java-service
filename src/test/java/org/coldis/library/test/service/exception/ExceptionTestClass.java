@@ -6,7 +6,7 @@ import jakarta.validation.constraints.NotNull;
 /**
  * Test class.
  */
-public class TestClass {
+public class ExceptionTestClass {
 
 	/**
 	 * Test attribute.

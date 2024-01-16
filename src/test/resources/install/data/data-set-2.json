@@ -1,0 +1,21 @@
+{
+    "asynchronously": true,
+    "serviceOperationUrl": "http://localhost:${property:server.port}/${property:org.coldis.library.spring.test.data-installer}",
+    "idProperties": ["property1", "property2"],
+    "searchProperties": ["property1", "property2"],
+    "searchPropertiesStrategy": "PARAMETER",
+    "searchOperationPath": "search",
+    "createOnly": true,
+    "data": [
+        {
+            "property1": 13,
+            "property2": 23,
+            "property3": "${property:org.coldis.library.spring.test.data-installer-attribute}"
+		},
+        {
+            "property1": 14,
+            "property2": 24,
+            "property3": "${resource:classpath:install/resource/resource-1}"
+		}
+	]
+}
