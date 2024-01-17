@@ -45,7 +45,7 @@ public class TypableJmsMessageConverter extends SimpleMessageConverter {
 	private ObjectMapper objectMapper;
 
 	/**
-	 * @see org.springframework.jms.support.converter.SimpleMessageConverter#fromMessage(javax.jms.Message)
+	 * @see org.springframework.jms.support.converter.SimpleMessageConverter#fromMessage(jakarta.jms.Message)
 	 */
 	@Override
 	public Object fromMessage(
@@ -76,7 +76,7 @@ public class TypableJmsMessageConverter extends SimpleMessageConverter {
 
 	/**
 	 * @see org.springframework.jms.support.converter.SimpleMessageConverter#toMessage(java.lang.Object,
-	 *      javax.jms.Session)
+	 *      jakarta.jms.Session)
 	 */
 	@Override
 	public Message toMessage(

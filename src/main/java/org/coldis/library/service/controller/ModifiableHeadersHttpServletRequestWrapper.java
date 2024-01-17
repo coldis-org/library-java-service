@@ -72,7 +72,7 @@ public class ModifiableHeadersHttpServletRequestWrapper extends HttpServletReque
 	}
 
 	/**
-	 * @see javax.servlet.http.HttpServletRequestWrapper#getHeader(java.lang.String)
+	 * @see jakarta.servlet.http.HttpServletRequestWrapper#getHeader(java.lang.String)
 	 */
 	@Override
 	public String getHeader(
@@ -82,7 +82,7 @@ public class ModifiableHeadersHttpServletRequestWrapper extends HttpServletReque
 	}
 
 	/**
-	 * @see javax.servlet.http.HttpServletRequestWrapper#getHeaderNames()
+	 * @see jakarta.servlet.http.HttpServletRequestWrapper#getHeaderNames()
 	 */
 	@Override
 	public Enumeration<String> getHeaderNames() {
@@ -90,7 +90,7 @@ public class ModifiableHeadersHttpServletRequestWrapper extends HttpServletReque
 	}
 
 	/**
-	 * @see javax.servlet.http.HttpServletRequestWrapper#getHeaders(java.lang.String)
+	 * @see jakarta.servlet.http.HttpServletRequestWrapper#getHeaders(java.lang.String)
 	 */
 	@Override
 	public Enumeration<String> getHeaders(

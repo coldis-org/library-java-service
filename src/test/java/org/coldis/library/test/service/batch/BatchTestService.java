@@ -1,5 +1,6 @@
 package org.coldis.library.test.service.batch;
 
+import java.security.SecureRandom;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -14,7 +15,7 @@ import org.springframework.stereotype.Component;
 @Component
 public class BatchTestService {
 
-	private static Random RANDOM = new Random();
+	private static Random RANDOM = new SecureRandom();
 	public static Long processedAlways = 0L;
 	public static Long processedLatestCompleteBatch = 0L;
 	public static Long processedLatestPartialBatch = 0L;
@@ -42,14 +43,10 @@ public class BatchTestService {
 			final Long size,
 			final Map<String, String> arguments) {
 		return BatchTestService.processedLatestCompleteBatch < 100 ? List.of(new BatchObject(Objects.toString(BatchTestService.RANDOM.nextInt())),
-				new BatchObject(Objects.toString(BatchTestService.RANDOM.nextInt())),
-				new BatchObject(Objects.toString(BatchTestService.RANDOM.nextInt())),
-				new BatchObject(Objects.toString(BatchTestService.RANDOM.nextInt())),
-				new BatchObject(Objects.toString(BatchTestService.RANDOM.nextInt())),
-				new BatchObject(Objects.toString(BatchTestService.RANDOM.nextInt())),
-				new BatchObject(Objects.toString(BatchTestService.RANDOM.nextInt())),
-				new BatchObject(Objects.toString(BatchTestService.RANDOM.nextInt())),
-				new BatchObject(Objects.toString(BatchTestService.RANDOM.nextInt())),
+				new BatchObject(Objects.toString(BatchTestService.RANDOM.nextInt())), new BatchObject(Objects.toString(BatchTestService.RANDOM.nextInt())),
+				new BatchObject(Objects.toString(BatchTestService.RANDOM.nextInt())), new BatchObject(Objects.toString(BatchTestService.RANDOM.nextInt())),
+				new BatchObject(Objects.toString(BatchTestService.RANDOM.nextInt())), new BatchObject(Objects.toString(BatchTestService.RANDOM.nextInt())),
+				new BatchObject(Objects.toString(BatchTestService.RANDOM.nextInt())), new BatchObject(Objects.toString(BatchTestService.RANDOM.nextInt())),
 				new BatchObject(Objects.toString(BatchTestService.RANDOM.nextInt()))) : List.of();
 	}
 

@@ -132,7 +132,6 @@ public class BatchService {
 				// Gets the message properties.
 				final String key = this.getKey(executor.getKeySuffix());
 				final Type lastProcessed = executor.getLastProcessed();
-				@SuppressWarnings("unchecked")
 				final Long duration = (executor.getLastStartedAt().until(DateTimeHelper.getCurrentLocalDateTime(), ChronoUnit.MINUTES));
 				final Properties messageProperties = new Properties();
 				messageProperties.put("key", key);

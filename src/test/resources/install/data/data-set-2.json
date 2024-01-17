@@ -1,6 +1,6 @@
 {
     "asynchronously": true,
-    "serviceOperationUrl": "http://localhost:${property:server.port}/${property:org.coldis.library.spring.test.data-installer}",
+    "serviceOperationUrl": "http://localhost:${property:server.port}/test/data-installer",
     "idProperties": ["property1", "property2"],
     "searchProperties": ["property1", "property2"],
     "searchPropertiesStrategy": "PARAMETER",
@@ -10,7 +10,7 @@
         {
             "property1": 13,
             "property2": 23,
-            "property3": "${property:org.coldis.library.spring.test.data-installer-attribute}"
+            "property3": "${property:org.coldis.library.test.data-installer-attribute}"
 		},
         {
             "property1": 14,

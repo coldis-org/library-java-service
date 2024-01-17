@@ -2,6 +2,7 @@ package org.coldis.library.test.service.batch;
 
 import java.time.Clock;
 import java.time.Duration;
+import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Random;
 
@@ -94,6 +95,20 @@ public class BatchServiceTest {
 
 		final String batchKey = this.batchService.getKey(testBatchExecutor.getKeySuffix());
 
+		// Initial record.
+		BatchExecutor<BatchObject> batchRecord = null;
+		try {
+			batchRecord = (BatchExecutor<BatchObject>) this.keyValueService.findById(batchKey, LockBehavior.NO_LOCK, false).getValue();
+		}
+		catch (final BusinessException exception) {
+		}
+		final LocalDateTime initialStartTime = ((batchRecord == null) || (batchRecord.getLastStartedAt() == null)
+				? DateTimeHelper.getCurrentLocalDateTime().minusYears(1L)
+				: batchRecord.getLastStartedAt());
+		final LocalDateTime initialFinishTime = ((batchRecord == null) || (batchRecord.getLastFinishedAt() == null)
+				? DateTimeHelper.getCurrentLocalDateTime().minusYears(1L)
+				: batchRecord.getLastFinishedAt());
+
 		// Starts the batch and makes sure it has started.
 		this.batchService.checkAll();
 		this.batchService.start(testBatchExecutor, false);
@@ -106,10 +121,12 @@ public class BatchServiceTest {
 			catch (final BusinessException e) {
 				return null;
 			}
-		}, record -> ((record != null) && (record.getLastProcessedCount() > 0)), TestHelper.VERY_LONG_WAIT, TestHelper.SHORT_WAIT);
-		BatchExecutor<BatchObject> batchRecord = (BatchExecutor<BatchObject>) this.keyValueService.findById(batchKey, LockBehavior.NO_LOCK, false).getValue();
+		}, record -> ((record != null) && (record.getLastStartedAt() != null) && record.getLastStartedAt().isAfter(initialStartTime)
+				&& (record.getLastProcessedCount() > 0)), TestHelper.VERY_LONG_WAIT, TestHelper.SHORT_WAIT);
+		batchRecord = (BatchExecutor<BatchObject>) this.keyValueService.findById(batchKey, LockBehavior.NO_LOCK, false).getValue();
 		Assertions.assertTrue(batchRecord.getLastProcessedCount() > 0);
 		Assertions.assertNotNull(batchRecord.getLastStartedAt());
+		Assertions.assertTrue(batchRecord.getLastStartedAt().isAfter(initialStartTime));
 		Assertions.assertNotNull(batchRecord.getLastProcessed());
 
 		// Waits until batch is finished.
@@ -120,13 +137,16 @@ public class BatchServiceTest {
 			catch (final BusinessException e) {
 				return null;
 			}
-		}, record -> record.getLastFinishedAt() != null, TestHelper.VERY_LONG_WAIT, TestHelper.SHORT_WAIT);
+		}, record -> (record != null) && (record.getLastFinishedAt() != null) && record.getLastFinishedAt().isAfter(initialFinishTime),
+				TestHelper.VERY_LONG_WAIT, TestHelper.SHORT_WAIT);
 		batchRecord = (BatchExecutor<BatchObject>) this.keyValueService.findById(batchKey, LockBehavior.NO_LOCK, false).getValue();
-		Assertions.assertEquals(processedNow, batchRecord.getLastProcessedCount());
-		Assertions.assertEquals(processedTotal, BatchTestService.processedAlways);
 		Assertions.assertNotNull(batchRecord.getLastStartedAt());
+		Assertions.assertTrue(batchRecord.getLastStartedAt().isAfter(initialStartTime));
 		Assertions.assertNotNull(batchRecord.getLastProcessed());
 		Assertions.assertNotNull(batchRecord.getLastFinishedAt());
+		Assertions.assertTrue(batchRecord.getLastFinishedAt().isAfter(initialFinishTime));
+		Assertions.assertEquals(processedNow, batchRecord.getLastProcessedCount());
+		Assertions.assertEquals(processedTotal, BatchTestService.processedAlways);
 		Assertions.assertTrue(batchRecord.isFinished());
 
 		// Tries executing the batch again, and nothing should change.
