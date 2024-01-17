@@ -167,7 +167,7 @@ public class BatchServiceTest {
 	public void testBatchInTime() throws Exception {
 
 		// Makes sure the batch is not started.
-		final BatchExecutor<BatchObject> testBatchExecutor = new BatchExecutor<>(BatchObject.class, "test", 10L, null, Duration.ofSeconds(0),
+		final BatchExecutor<BatchObject> testBatchExecutor = new BatchExecutor<>(BatchObject.class, "testBatchInTime", 10L, null, Duration.ofSeconds(0),
 				Duration.ofSeconds(30), null, "batchTestService", null, null, null);
 		final String batchKey = this.batchService.getKey(testBatchExecutor.getKeySuffix());
 
@@ -214,7 +214,7 @@ public class BatchServiceTest {
 	public void testBatchNotInTime() throws Exception {
 
 		// Makes sure the batch is not started.
-		final BatchExecutor<BatchObject> testBatchExecutor = new BatchExecutor<>(BatchObject.class, "test", 10L, null, Duration.ofSeconds(10),
+		final BatchExecutor<BatchObject> testBatchExecutor = new BatchExecutor<>(BatchObject.class, "testBatchNotInTime", 10L, null, Duration.ofSeconds(10),
 				Duration.ofSeconds(30), null, "batchTestService", null, null, null);
 		final String batchKey = this.batchService.getKey(testBatchExecutor.getKeySuffix());
 
@@ -280,7 +280,7 @@ public class BatchServiceTest {
 	public void testBatchCancel() throws Exception {
 
 		// Makes sure the batch is not started.
-		final BatchExecutor<BatchObject> testBatchExecutor = new BatchExecutor<>(BatchObject.class, "test", 10L, null, Duration.ofSeconds(1),
+		final BatchExecutor<BatchObject> testBatchExecutor = new BatchExecutor<>(BatchObject.class, "testBatchCancel", 10L, null, Duration.ofSeconds(1),
 				Duration.ofSeconds(30), null, "batchTestService", null, null, null);
 		final String batchKey = this.batchService.getKey(testBatchExecutor.getKeySuffix());
 

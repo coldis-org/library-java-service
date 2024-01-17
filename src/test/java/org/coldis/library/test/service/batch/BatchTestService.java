@@ -42,12 +42,12 @@ public class BatchTestService {
 			final BatchObject object,
 			final Long size,
 			final Map<String, String> arguments) {
-		return BatchTestService.processedLatestCompleteBatch < 100 ? List.of(new BatchObject(Objects.toString(BatchTestService.RANDOM.nextInt())),
-				new BatchObject(Objects.toString(BatchTestService.RANDOM.nextInt())), new BatchObject(Objects.toString(BatchTestService.RANDOM.nextInt())),
-				new BatchObject(Objects.toString(BatchTestService.RANDOM.nextInt())), new BatchObject(Objects.toString(BatchTestService.RANDOM.nextInt())),
-				new BatchObject(Objects.toString(BatchTestService.RANDOM.nextInt())), new BatchObject(Objects.toString(BatchTestService.RANDOM.nextInt())),
-				new BatchObject(Objects.toString(BatchTestService.RANDOM.nextInt())), new BatchObject(Objects.toString(BatchTestService.RANDOM.nextInt())),
-				new BatchObject(Objects.toString(BatchTestService.RANDOM.nextInt()))) : List.of();
+		return BatchTestService.processedLatestCompleteBatch < 100 ? List.of(new BatchObject(Objects.toString(BatchTestService.RANDOM.nextLong())),
+				new BatchObject(Objects.toString(BatchTestService.RANDOM.nextLong())), new BatchObject(Objects.toString(BatchTestService.RANDOM.nextLong())),
+				new BatchObject(Objects.toString(BatchTestService.RANDOM.nextLong())), new BatchObject(Objects.toString(BatchTestService.RANDOM.nextLong())),
+				new BatchObject(Objects.toString(BatchTestService.RANDOM.nextLong())), new BatchObject(Objects.toString(BatchTestService.RANDOM.nextLong())),
+				new BatchObject(Objects.toString(BatchTestService.RANDOM.nextLong())), new BatchObject(Objects.toString(BatchTestService.RANDOM.nextLong())),
+				new BatchObject(Objects.toString(BatchTestService.RANDOM.nextLong()))) : List.of();
 	}
 
 	/**
