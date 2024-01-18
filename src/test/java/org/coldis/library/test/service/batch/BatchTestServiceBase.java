@@ -43,7 +43,7 @@ public class BatchTestServiceBase {
 	/**
 	 * @see org.coldis.library.persistence.batch.BatchExecutor#get()
 	 */
-	public List<BatchObject> get(
+	public synchronized List<BatchObject> get(
 			final BatchObject object,
 			final Long size,
 			final Map<String, String> arguments) {
