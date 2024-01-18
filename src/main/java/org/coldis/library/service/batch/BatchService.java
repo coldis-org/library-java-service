@@ -259,7 +259,8 @@ public class BatchService {
 				this.keyValueService.delete(key);
 			}
 			// Resumes the batch if not empty.
-			else {
+			else if ((batchExecutorValue.getLastFinishedAt() == null)
+					|| !batchExecutorValue.getLastFinishedAt().isAfter(batchExecutorValue.getLastStartedAt())) {
 				try {
 					// Gets the next id to be processed.
 					Type previousLastProcessed = null;

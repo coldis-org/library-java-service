@@ -65,9 +65,9 @@ public class BatchServiceTest {
 				return List.of();
 			}
 		}, List::isEmpty, TestHelper.VERY_LONG_WAIT * 3, TestHelper.SHORT_WAIT);
-		BatchTestService.processedAlways = 0L;
-		BatchTestService.processedLatestPartialBatch = 0L;
-		BatchTestService.processedLatestCompleteBatch = 0L;
+		BatchTestServiceBase.processedAlways = 0L;
+		BatchTestServiceBase.processedLatestPartialBatch = 0L;
+		BatchTestServiceBase.processedLatestCompleteBatch = 0L;
 	}
 
 	/**
@@ -146,7 +146,7 @@ public class BatchServiceTest {
 		Assertions.assertNotNull(batchRecord.getLastFinishedAt());
 		Assertions.assertTrue(batchRecord.getLastFinishedAt().isAfter(initialFinishTime));
 		Assertions.assertEquals(processedNow, batchRecord.getLastProcessedCount());
-		Assertions.assertEquals(processedTotal, BatchTestService.processedAlways);
+		Assertions.assertEquals(processedTotal, BatchTestServiceBase.processedAlways);
 		Assertions.assertTrue(batchRecord.isFinished());
 
 		// Tries executing the batch again, and nothing should change.
@@ -155,7 +155,7 @@ public class BatchServiceTest {
 		this.batchService.checkAll();
 		batchRecord = (BatchExecutor<BatchObject>) this.keyValueService.findById(batchKey, LockBehavior.NO_LOCK, false).getValue();
 		Assertions.assertEquals(processedNow, batchRecord.getLastProcessedCount());
-		Assertions.assertEquals(processedTotal, BatchTestService.processedAlways);
+		Assertions.assertEquals(processedTotal, BatchTestServiceBase.processedAlways);
 	}
 
 	/**
@@ -168,7 +168,7 @@ public class BatchServiceTest {
 
 		// Makes sure the batch is not started.
 		final BatchExecutor<BatchObject> testBatchExecutor = new BatchExecutor<>(BatchObject.class, "testBatchInTime", 10L, null, Duration.ofSeconds(0),
-				Duration.ofSeconds(30), null, "batchTestService", null, null, null);
+				Duration.ofSeconds(30), null, "batchTestService1", null, null, null);
 		final String batchKey = this.batchService.getKey(testBatchExecutor.getKeySuffix());
 
 		// Record should not exist.
@@ -215,7 +215,7 @@ public class BatchServiceTest {
 
 		// Makes sure the batch is not started.
 		final BatchExecutor<BatchObject> testBatchExecutor = new BatchExecutor<>(BatchObject.class, "testBatchNotInTime", 10L, null, Duration.ofSeconds(10),
-				Duration.ofSeconds(30), null, "batchTestService", null, null, null);
+				Duration.ofSeconds(30), null, "batchTestService2", null, null, null);
 		final String batchKey = this.batchService.getKey(testBatchExecutor.getKeySuffix());
 
 		// Record should not exist.
@@ -243,8 +243,8 @@ public class BatchServiceTest {
 		}, record -> (record != null) && (record.getLastFinishedAt() != null), TestHelper.VERY_LONG_WAIT * 2, TestHelper.SHORT_WAIT);
 		final BatchExecutor<BatchObject> batchRecord = (BatchExecutor<BatchObject>) this.keyValueService.findById(batchKey, LockBehavior.NO_LOCK, false)
 				.getValue();
-		Assertions.assertTrue(BatchTestService.processedAlways > 0);
-		Assertions.assertTrue(BatchTestService.processedAlways < 100);
+		Assertions.assertTrue(BatchTestServiceBase.processedAlways > 0);
+		Assertions.assertTrue(BatchTestServiceBase.processedAlways < 100);
 		Assertions.assertTrue(batchRecord.getLastProcessedCount() > 0);
 		Assertions.assertTrue(batchRecord.getLastProcessedCount() < 100);
 		Assertions.assertNull(batchRecord.getLastFinishedAt());
@@ -281,7 +281,7 @@ public class BatchServiceTest {
 
 		// Makes sure the batch is not started.
 		final BatchExecutor<BatchObject> testBatchExecutor = new BatchExecutor<>(BatchObject.class, "testBatchCancel", 10L, null, Duration.ofSeconds(1),
-				Duration.ofSeconds(30), null, "batchTestService", null, null, null);
+				Duration.ofSeconds(30), null, "batchTestService3", null, null, null);
 		final String batchKey = this.batchService.getKey(testBatchExecutor.getKeySuffix());
 
 		// Record should not exist.
@@ -305,8 +305,8 @@ public class BatchServiceTest {
 		// This batch should not reach the end.
 		final BatchExecutor<BatchObject> batchRecord = (BatchExecutor<BatchObject>) this.keyValueService.findById(batchKey, LockBehavior.NO_LOCK, false)
 				.getValue();
-		Assertions.assertTrue(BatchTestService.processedAlways > 0);
-		Assertions.assertTrue(BatchTestService.processedAlways < 100);
+		Assertions.assertTrue(BatchTestServiceBase.processedAlways > 0);
+		Assertions.assertTrue(BatchTestServiceBase.processedAlways < 100);
 		Assertions.assertTrue(batchRecord.getLastProcessedCount() > 0);
 		Assertions.assertTrue(batchRecord.getLastProcessedCount() < 100);
 		Assertions.assertNull(batchRecord.getLastFinishedAt());
