@@ -135,8 +135,8 @@ public class BatchServiceTest {
 			catch (final BusinessException e) {
 				return null;
 			}
-		}, record -> (record != null) && (record.getLastFinishedAt() != null) && record.getLastFinishedAt().isAfter(initialFinishTime),
-				TestHelper.VERY_LONG_WAIT, TestHelper.SHORT_WAIT);
+		}, record -> (record != null) && (record.getLastFinishedAt() != null) && record.getLastFinishedAt().isAfter(record.getLastStartedAt())
+				&& record.getLastFinishedAt().isAfter(initialFinishTime), TestHelper.VERY_LONG_WAIT, TestHelper.SHORT_WAIT);
 		batchRecord = (BatchExecutor<BatchObject>) this.keyValueService.findById(batchKey, LockBehavior.NO_LOCK, false).getValue();
 		Assertions.assertNotNull(batchRecord.getLastStartedAt());
 		Assertions.assertTrue(batchRecord.getLastStartedAt().isAfter(initialStartTime));
