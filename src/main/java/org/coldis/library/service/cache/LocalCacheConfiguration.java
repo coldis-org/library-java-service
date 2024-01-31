@@ -181,4 +181,18 @@ public class LocalCacheConfiguration {
 						+ ((CaffeineCache) this.daysExpirationLocalCacheManager.getCache(name)).getNativeCache().stats().toString()));
 	}
 
+	/**
+	 * Evict all caches.
+	 */
+	public void evictAll() {
+		this.millisExpirationLocalCacheManager.getCacheNames().parallelStream().forEach(name -> this.millisExpirationLocalCacheManager.getCache(name).clear());
+		this.secondsExpirationLocalCacheManager.getCacheNames().parallelStream()
+				.forEach(name -> this.secondsExpirationLocalCacheManager.getCache(name).clear());
+		this.minutesExpirationLocalCacheManager.getCacheNames().parallelStream()
+				.forEach(name -> this.minutesExpirationLocalCacheManager.getCache(name).clear());
+		this.hoursExpirationLocalCacheManager.getCacheNames().parallelStream().forEach(name -> this.hoursExpirationLocalCacheManager.getCache(name).clear());
+		this.dayExpirationLocalCacheManager.getCacheNames().parallelStream().forEach(name -> this.dayExpirationLocalCacheManager.getCache(name).clear());
+		this.daysExpirationLocalCacheManager.getCacheNames().parallelStream().forEach(name -> this.daysExpirationLocalCacheManager.getCache(name).clear());
+	}
+
 }

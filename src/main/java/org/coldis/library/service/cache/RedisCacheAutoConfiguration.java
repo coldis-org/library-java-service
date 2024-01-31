@@ -189,4 +189,20 @@ public class RedisCacheAutoConfiguration {
 		return this.daysExpirationCentralCacheManager;
 	}
 
+	/**
+	 * Evict all caches.
+	 */
+	public void evictAll() {
+		this.millisExpirationCentralCacheManager.getCacheNames().parallelStream()
+				.forEach(name -> this.millisExpirationCentralCacheManager.getCache(name).clear());
+		this.secondsExpirationCentralCacheManager.getCacheNames().parallelStream()
+				.forEach(name -> this.secondsExpirationCentralCacheManager.getCache(name).clear());
+		this.minutesExpirationCentralCacheManager.getCacheNames().parallelStream()
+				.forEach(name -> this.minutesExpirationCentralCacheManager.getCache(name).clear());
+		this.hoursExpirationCentralCacheManager.getCacheNames().parallelStream()
+				.forEach(name -> this.hoursExpirationCentralCacheManager.getCache(name).clear());
+		this.dayExpirationCentralCacheManager.getCacheNames().parallelStream().forEach(name -> this.dayExpirationCentralCacheManager.getCache(name).clear());
+		this.daysExpirationCentralCacheManager.getCacheNames().parallelStream().forEach(name -> this.daysExpirationCentralCacheManager.getCache(name).clear());
+	}
+
 }
