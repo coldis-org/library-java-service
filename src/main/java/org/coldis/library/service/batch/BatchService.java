@@ -1,5 +1,6 @@
 package org.coldis.library.service.batch;
 
+import java.time.Duration;
 import java.time.temporal.ChronoUnit;
 import java.util.List;
 import java.util.Map;
@@ -289,7 +290,7 @@ public class BatchService {
 						batchExecutorValue.setLastFinishedAt(DateTimeHelper.getCurrentLocalDateTime());
 					}
 					else {
-						this.queueResumeAsync(keySuffix, batchExecutorValue.getDelayBetweenRuns().toMillis());
+						this.queueResumeAsync(keySuffix, batchExecutorValue.getDelayBetweenRuns());
 					}
 
 					// Saves the executor.
@@ -302,7 +303,7 @@ public class BatchService {
 					BatchService.LOGGER.debug("Error processing batch '" + key + "'.", throwable);
 					if (!(throwable instanceof BusinessException)
 							|| (!((BusinessException) throwable).getCode().equals(BatchService.BATCH_EXPIRED_MESSAGE_CODE))) {
-						this.queueResumeAsync(keySuffix, batchExecutorValue.getDelayBetweenRuns().toMillis());
+						this.queueResumeAsync(keySuffix, batchExecutorValue.getDelayBetweenRuns());
 					}
 					throw throwable;
 				}
@@ -334,9 +335,9 @@ public class BatchService {
 	 */
 	public <Type> void queueResumeAsync(
 			final String keySuffix,
-			final Long fixedDelay) throws BusinessException {
-		this.jmsTemplateHelper.send(this.jmsTemplate, new JmsMessage<>().withDestination(BatchService.RESUME_QUEUE)
-				.withFixedDelay((fixedDelay == null ? null : fixedDelay.intValue())).withLastValueKey(keySuffix).withMessage(keySuffix));
+			final Duration fixedDelay) throws BusinessException {
+		this.jmsTemplateHelper.send(this.jmsTemplate,
+				new JmsMessage<>().withDestination(BatchService.RESUME_QUEUE).withFixedDelay(fixedDelay).withLastValueKey(keySuffix).withMessage(keySuffix));
 	}
 
 	/**
@@ -378,7 +379,7 @@ public class BatchService {
 
 		// Saves and resumes the batch.
 		this.keyValueService.getRepository().save(batchExecutor);
-		this.queueResumeAsync(batchExecutorValue.getKeySuffix(), 0L);
+		this.queueResumeAsync(batchExecutorValue.getKeySuffix(), Duration.ofMillis(0));
 	}
 
 	/**
@@ -461,7 +462,7 @@ public class BatchService {
 				}
 				// Makes sure non-expired are still running.
 				else if (!batchExecutorValue.isFinished() && !batchExecutorValue.isExpired()) {
-					this.queueResumeAsync(batchExecutorValue.getKeySuffix(), batchExecutorValue.getDelayBetweenRuns().toMillis());
+					this.queueResumeAsync(batchExecutorValue.getKeySuffix(), batchExecutorValue.getDelayBetweenRuns());
 				}
 			}
 		}
