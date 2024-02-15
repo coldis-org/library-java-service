@@ -1,4 +1,4 @@
-package org.coldis.library.service.helper;
+package org.coldis.library.service.number;
 
 import java.math.RoundingMode;
 
