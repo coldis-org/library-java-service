@@ -1,12 +1,14 @@
 package org.coldis.library.test.service.jms;
 
 import java.io.Serializable;
-import java.util.Arrays;
 import java.util.Objects;
+import java.util.Arrays;
+import org.coldis.library.dto.DtoOrigin;
 
 /**
  * DtoTestObjectDto.
  */
+@DtoOrigin(originalClassName = "org.coldis.library.test.service.jms.DtoTestObject")
 public class DtoTestObjectDto implements Serializable {
 
 	/**

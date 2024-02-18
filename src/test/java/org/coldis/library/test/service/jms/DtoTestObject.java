@@ -1,5 +1,8 @@
 package org.coldis.library.test.service.jms;
 
+import java.util.Arrays;
+import java.util.Objects;
+
 import org.coldis.library.dto.DtoAttribute;
 import org.coldis.library.dto.DtoType;
 import org.coldis.library.model.Identifiable;
@@ -14,7 +17,10 @@ import jakarta.persistence.Transient;
  * DTO test object.
  */
 @JsonTypeName(value = DtoTestObject.TYPE_NAME)
-@DtoType(targetPath = "src/test/java", namespace = "org.coldis.library.test.service.jms")
+@DtoType(
+		targetPath = "src/test/java",
+		namespace = "org.coldis.library.test.service.jms"
+)
 public class DtoTestObject implements Typable, Identifiable {
 
 	/**
@@ -79,8 +85,7 @@ public class DtoTestObject implements Typable, Identifiable {
 	 * @param test8 Test property.
 	 * @param test9 Test property.
 	 */
-	public DtoTestObject(final Long id, final String test3, final String test5, final int test7, final int[] test8,
-			final Integer test9) {
+	public DtoTestObject(final Long id, final String test3, final String test5, final int test7, final int[] test8, final Integer test9) {
 		super();
 		this.id = id;
 		this.test3 = test3;
@@ -103,7 +108,8 @@ public class DtoTestObject implements Typable, Identifiable {
 	 *
 	 * @param id New identifier.
 	 */
-	public void setId(final Long id) {
+	public void setId(
+			final Long id) {
 		this.id = id;
 	}
 
@@ -122,7 +128,8 @@ public class DtoTestObject implements Typable, Identifiable {
 	 *
 	 * @param test3 New test3.
 	 */
-	public void setTest3(final String test3) {
+	public void setTest3(
+			final String test3) {
 		this.test3 = test3;
 	}
 
@@ -131,7 +138,10 @@ public class DtoTestObject implements Typable, Identifiable {
 	 *
 	 * @return The test5.
 	 */
-	@DtoAttribute(defaultValue = DtoTestObject.TEST_FINAL_ATTR_VALUE, modifiers = { "static", "final" })
+	@DtoAttribute(
+			defaultValue = DtoTestObject.TEST_FINAL_ATTR_VALUE,
+			modifiers = { "static", "final" }
+	)
 	public String getTest5() {
 		return this.test5;
 	}
@@ -141,7 +151,8 @@ public class DtoTestObject implements Typable, Identifiable {
 	 *
 	 * @param test5 New test5.
 	 */
-	public void setTest5(final String test5) {
+	public void setTest5(
+			final String test5) {
 		this.test5 = test5;
 	}
 
@@ -159,7 +170,8 @@ public class DtoTestObject implements Typable, Identifiable {
 	 *
 	 * @param test7 New test7.
 	 */
-	public void setTest7(final int test7) {
+	public void setTest7(
+			final int test7) {
 		this.test7 = test7;
 	}
 
@@ -179,7 +191,8 @@ public class DtoTestObject implements Typable, Identifiable {
 	 *
 	 * @param test8 New test8.
 	 */
-	public void setTest8(final int[] test8) {
+	public void setTest8(
+			final int[] test8) {
 		this.test8 = test8;
 	}
 
@@ -198,7 +211,8 @@ public class DtoTestObject implements Typable, Identifiable {
 	 *
 	 * @param test9 New test9.
 	 */
-	public void setTest9(final Integer test9) {
+	public void setTest9(
+			final Integer test9) {
 		this.test9 = test9;
 	}
 
@@ -207,8 +221,42 @@ public class DtoTestObject implements Typable, Identifiable {
 	 */
 	@Override
 	@Transient
-	@DtoAttribute(modifiers = { "final" }, readOnly = true, defaultValue = DtoTestObject.TYPE_NAME)
+	@DtoAttribute(
+			modifiers = { "final" },
+			readOnly = true,
+			defaultValue = DtoTestObject.TYPE_NAME
+	)
 	public String getTypeName() {
 		return DtoTestObject.TYPE_NAME;
 	}
+
+	/**
+	 * @see java.lang.Object#hashCode()
+	 */
+	@Override
+	public int hashCode() {
+		final int prime = 31;
+		int result = 1;
+		result = (prime * result) + Arrays.hashCode(this.test8);
+		result = (prime * result) + Objects.hash(this.id, this.test7, this.test9);
+		return result;
+	}
+
+	/**
+	 * @see java.lang.Object#equals(java.lang.Object)
+	 */
+	@Override
+	public boolean equals(
+			final Object obj) {
+		if (this == obj) {
+			return true;
+		}
+		if ((obj == null) || (this.getClass() != obj.getClass())) {
+			return false;
+		}
+		final DtoTestObject other = (DtoTestObject) obj;
+		return Objects.equals(this.id, other.id) && (this.test7 == other.test7) && Arrays.equals(this.test8, other.test8)
+				&& Objects.equals(this.test9, other.test9);
+	}
+
 }

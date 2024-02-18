@@ -4,6 +4,7 @@ import java.util.Arrays;
 import java.util.List;
 
 import org.apache.commons.collections4.CollectionUtils;
+import org.apache.commons.collections4.EnumerationUtils;
 import org.apache.commons.lang3.StringUtils;
 import org.coldis.library.dto.DtoOrigin;
 import org.coldis.library.dto.DtoType;
@@ -11,6 +12,7 @@ import org.coldis.library.dto.DtoTypeMetadata;
 import org.coldis.library.exception.IntegrationException;
 import org.coldis.library.model.SimpleMessage;
 import org.coldis.library.serialization.ObjectMapperHelper;
+import org.coldis.library.thread.ThreadMapContextHolder;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -23,8 +25,6 @@ import org.springframework.jms.support.converter.MessageConversionException;
 import org.springframework.jms.support.converter.SimpleMessageConverter;
 import org.springframework.stereotype.Component;
 import org.springframework.util.ClassUtils;
-import org.springframework.web.context.request.RequestAttributes;
-import org.springframework.web.context.request.RequestContextHolder;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 
@@ -63,16 +63,17 @@ public class EnhancedJmsMessageConverter extends SimpleMessageConverter {
 	private static final String PREFERED_TYPE_PARAMETER = "preferedType";
 
 	/**
-	 * DTO type parameter.
-	 */
-	@Deprecated
-	private static final String DTO_TYPE_PARAMETER = "dtoType";
-
-	/**
 	 * Maximum async hops.
 	 */
 	@Value("${org.coldis.configuration.jms-message-converter-enhanced.maximum-async-hops:13}")
 	private Long maximumAsyncHops;
+
+	/**
+	 * If the original type should precede the DTO type when trying to convert
+	 * message.
+	 */
+	@Value("${org.coldis.configuration.jms-message-converter-enhanced.original-type-precedence:true}")
+	private Boolean originalTypePrecedence;
 
 	/**
 	 * Object mapper.
@@ -81,23 +82,73 @@ public class EnhancedJmsMessageConverter extends SimpleMessageConverter {
 	private ObjectMapper objectMapper;
 
 	/**
+	 * DTO JMS message converter.
+	 */
+	@Autowired
+	private DtoJmsMessageConverter dtoJmsMessageConverter;
+
+	/**
+	 * Typable JMS message converter.
+	 */
+	@Autowired
+	private TypableJmsMessageConverter typableJmsMessageConverter;
+
+	/**
+	 * Gets the maximumAsyncHops.
+	 *
+	 * @return The maximumAsyncHops.
+	 */
+	public Long getMaximumAsyncHops() {
+		return this.maximumAsyncHops;
+	}
+
+	/**
+	 * Sets the maximumAsyncHops.
+	 *
+	 * @param maximumAsyncHops New maximumAsyncHops.
+	 */
+	public void setMaximumAsyncHops(
+			final Long maximumAsyncHops) {
+		this.maximumAsyncHops = maximumAsyncHops;
+	}
+
+	/**
+	 * Gets the originalTypePrecedence.
+	 *
+	 * @return The originalTypePrecedence.
+	 */
+	public Boolean getOriginalTypePrecedence() {
+		return this.originalTypePrecedence;
+	}
+
+	/**
+	 * Sets the originalTypePrecedence.
+	 *
+	 * @param originalTypePrecedence New originalTypePrecedence.
+	 */
+	public void setOriginalTypePrecedence(
+			final Boolean originalTypePrecedence) {
+		this.originalTypePrecedence = originalTypePrecedence;
+	}
+
+	/**
 	 * Gets the current async hop from the request.
 	 *
 	 * @return Current async hop.
 	 */
-	private Long getCurrentAsyncHopFromRequest() {
-		final RequestAttributes requestAttributes = RequestContextHolder.getRequestAttributes();
-		final Long currentAsyncHop = (Long) requestAttributes.getAttribute(EnhancedJmsMessageConverter.CURRENT_ASYNC_HOP_PARAMETER,
-				RequestAttributes.SCOPE_REQUEST);
+	private Long getCurrentAsyncHop() {
+		final Long currentAsyncHop = (Long) ThreadMapContextHolder.getAttribute(EnhancedJmsMessageConverter.CURRENT_ASYNC_HOP_PARAMETER);
 		return (currentAsyncHop == null ? 1 : currentAsyncHop);
 	}
 
 	/**
 	 * Validates if the maximum number of async hops was exceeded.
 	 */
-	private void validateAsyncHops() {
-		if (this.getCurrentAsyncHopFromRequest() > this.maximumAsyncHops) {
-			throw new IntegrationException(new SimpleMessage("jms.async.hops.exceeded"));
+	private void validateAsyncHops(
+			final Object payload) {
+		if (this.getCurrentAsyncHop() > this.maximumAsyncHops) {
+			throw new IntegrationException(
+					new SimpleMessage("jms.async.hops.exceeded", "The maximum number of async hops was exceeded for message '" + payload + "'."));
 		}
 	}
 
@@ -107,7 +158,7 @@ public class EnhancedJmsMessageConverter extends SimpleMessageConverter {
 	private void addParametersToMessage(
 			final Message message) throws JMSException {
 		// Adds current async hop to message.
-		message.setLongProperty(EnhancedJmsMessageConverter.CURRENT_ASYNC_HOP_PARAMETER, this.getCurrentAsyncHopFromRequest());
+		message.setLongProperty(EnhancedJmsMessageConverter.CURRENT_ASYNC_HOP_PARAMETER, this.getCurrentAsyncHop());
 
 	}
 
@@ -127,10 +178,11 @@ public class EnhancedJmsMessageConverter extends SimpleMessageConverter {
 			final DtoType dtoTypeAnnotation = Arrays.stream(payload.getClass().getAnnotationsByType(DtoType.class))
 					.filter(dto -> "java".equals(dto.fileExtension())).findFirst().orElse(null);
 			final DtoOrigin dtoOriginAnnotation = payload.getClass().getAnnotation(DtoOrigin.class);
-			final List<String> preferedClassesNames = (dtoTypeAnnotation != null
+			List<String> preferedClassesNames = (dtoTypeAnnotation != null
 					? (List.of(payload.getClass().getName().toString(),
-							new DtoTypeMetadata(payload.getClass().getName().toString(), dtoTypeAnnotation).getName()))
+							new DtoTypeMetadata(payload.getClass().getName().toString(), dtoTypeAnnotation).getQualifiedName()))
 					: dtoOriginAnnotation != null ? (List.of(dtoOriginAnnotation.originalClassName(), payload.getClass().getName().toString())) : null);
+			preferedClassesNames = ((preferedClassesNames == null) || this.originalTypePrecedence ? preferedClassesNames : preferedClassesNames.reversed());
 			// Serializes the payload with JSON serializer if preferred classes are
 			// reacheable.
 			if (CollectionUtils.isNotEmpty(preferedClassesNames)) {
@@ -138,9 +190,10 @@ public class EnhancedJmsMessageConverter extends SimpleMessageConverter {
 					final String actualPayload = ObjectMapperHelper.serialize(this.objectMapper, payload, null, false);
 					message = session.createTextMessage(actualPayload);
 					// Adds the preferred types to the message.
-					message.setStringProperty(EnhancedJmsMessageConverter.PREFERED_TYPE_PARAMETER, preferedClassesNames.stream().reduce((
+					final String preferedClassesNamesAttribute = preferedClassesNames.stream().reduce((
 							a,
-							b) -> a + "," + b).get());
+							b) -> a + "," + b).get();
+					message.setStringProperty(EnhancedJmsMessageConverter.PREFERED_TYPE_PARAMETER, preferedClassesNamesAttribute);
 				}
 				// If the object cannot be converted from JSON.
 				catch (final Exception exception) {
@@ -166,7 +219,7 @@ public class EnhancedJmsMessageConverter extends SimpleMessageConverter {
 			final Session session) throws JMSException, MessageConversionException {
 
 		// Validates async hops.
-		this.validateAsyncHops();
+		this.validateAsyncHops(payload);
 
 		// Tries creating a message with DTO information.
 		Message message = this.toMessageUsingDtoInformation(payload, session);
@@ -195,14 +248,15 @@ public class EnhancedJmsMessageConverter extends SimpleMessageConverter {
 
 				// Gets the preferred classes for conversion.
 				final String preferedClassesNamesAttribute = message.getStringProperty(EnhancedJmsMessageConverter.PREFERED_TYPE_PARAMETER);
-				final List<String> preferedClassesNames = (StringUtils.isBlank(preferedClassesNamesAttribute) ? null
+				final List<String> preferedClassesNames = (StringUtils.isBlank(preferedClassesNamesAttribute) ? List.of()
 						: List.of(preferedClassesNamesAttribute.split(",")));
 				final List<String> availablePreferedClasses = preferedClassesNames.stream()
 						.filter(className -> ClassUtils.isPresent(className, message.getClass().getClassLoader())).toList();
-				final Class<?> preferedClass = ClassUtils.forName(availablePreferedClasses.getFirst(), message.getClass().getClassLoader());
+				final Class<?> preferedClass = (CollectionUtils.isEmpty(availablePreferedClasses) ? null
+						: ClassUtils.forName(availablePreferedClasses.getFirst(), message.getClass().getClassLoader()));
 
 				// Converts the message to the preferred class if available.
-				if (CollectionUtils.isNotEmpty(availablePreferedClasses)) {
+				if (preferedClass != null) {
 					object = ObjectMapperHelper.deserialize(this.objectMapper, ((TextMessage) message).getText(), preferedClass, false);
 				}
 
@@ -224,12 +278,14 @@ public class EnhancedJmsMessageConverter extends SimpleMessageConverter {
 	 * @return              Current async hop.
 	 * @throws JMSException If the increment cannot be performed.
 	 */
+	@SuppressWarnings("unchecked")
 	private Long incrementCurrentAsyncHopOnRequest(
 			final Message message) throws JMSException {
-		Long currentAsyncHop = message.getLongProperty(EnhancedJmsMessageConverter.CURRENT_ASYNC_HOP_PARAMETER);
+		Long currentAsyncHop = (EnumerationUtils.toList(message.getPropertyNames()).contains(EnhancedJmsMessageConverter.CURRENT_ASYNC_HOP_PARAMETER)
+				? message.getLongProperty(EnhancedJmsMessageConverter.CURRENT_ASYNC_HOP_PARAMETER)
+				: null);
 		currentAsyncHop = (currentAsyncHop == null ? 1 : currentAsyncHop + 1);
-		final RequestAttributes requestAttributes = RequestContextHolder.getRequestAttributes();
-		requestAttributes.setAttribute(EnhancedJmsMessageConverter.CURRENT_ASYNC_HOP_PARAMETER, currentAsyncHop, RequestAttributes.SCOPE_REQUEST);
+		ThreadMapContextHolder.setAttribute(EnhancedJmsMessageConverter.CURRENT_ASYNC_HOP_PARAMETER, currentAsyncHop);
 		return currentAsyncHop;
 	}
 
@@ -248,7 +304,10 @@ public class EnhancedJmsMessageConverter extends SimpleMessageConverter {
 
 		// Tries converting the message using deprecated converters.
 		if (object == null) {
-
+			object = this.typableJmsMessageConverter.fromMessageUsingCurrentConverter(message);
+		}
+		if (object == null) {
+			object = this.dtoJmsMessageConverter.fromMessageUsingCurrentConverter(message);
 		}
 
 		// Tries using simple converter.
