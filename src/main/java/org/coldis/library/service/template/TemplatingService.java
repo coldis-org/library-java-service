@@ -102,7 +102,7 @@ public class TemplatingService {
 		}
 		// Throws an invalid template exception.
 		catch (final Exception exception) {
-			throw new IntegrationException(new SimpleMessage("message.template.invalid"), exception);
+			throw new IntegrationException(new SimpleMessage("template.invalid"), exception);
 		}
 	}
 
