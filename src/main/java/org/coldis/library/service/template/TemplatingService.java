@@ -24,22 +24,13 @@ public class TemplatingService {
 	 */
 	public static final String DEFAULT_CHARSET = "UTF-8";
 
-	/**
-	 * String velocity repository.
-	 */
-	private final StringResourceRepository stringVelocityRepository = StringResourceLoader.getRepository();
-
 	/** String velocity engine. */
 	private VelocityEngine stringVelocityEngine;
 
 	/**
 	 * String velocity repository.
 	 */
-	@Bean
-	@Qualifier(value = "stringVelocityRepository")
-	public StringResourceRepository stringVelocityRepository() {
-		return this.stringVelocityRepository;
-	}
+	private StringResourceRepository stringVelocityRepository;
 
 	/**
 	 * String velocity engine.
@@ -48,8 +39,7 @@ public class TemplatingService {
 	 */
 	@Bean
 	@Qualifier(value = "stringVelocityEngine")
-	public VelocityEngine stringVelocityEngine(
-			final StringResourceRepository stringVelocityRepository) {
+	public VelocityEngine stringVelocityEngine() {
 		this.stringVelocityEngine = new VelocityEngine();
 		this.stringVelocityEngine.setProperty(RuntimeConstants.RESOURCE_LOADERS, "string");
 		this.stringVelocityEngine.setProperty("resource.loader.string.class", StringResourceLoader.class.getName());
@@ -57,6 +47,18 @@ public class TemplatingService {
 		this.stringVelocityEngine.setProperty("resource.loader.string.modification_check_interval", 60);
 		this.stringVelocityEngine.init();
 		return this.stringVelocityEngine;
+	}
+
+	/**
+	 * String velocity repository.
+	 */
+	@Bean
+	@Qualifier(value = "stringVelocityRepository")
+	public StringResourceRepository stringVelocityRepository(
+			@Qualifier(value = "stringVelocityEngine")
+			VelocityEngine stringVelocityEngine) {
+		this.stringVelocityRepository = StringResourceLoader.getRepository();
+		return this.stringVelocityRepository;
 	}
 
 	/**
