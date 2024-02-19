@@ -190,9 +190,7 @@ public class EnhancedJmsMessageConverter extends SimpleMessageConverter {
 					final String actualPayload = ObjectMapperHelper.serialize(this.objectMapper, payload, null, false);
 					message = session.createTextMessage(actualPayload);
 					// Adds the preferred types to the message.
-					final String preferedClassesNamesAttribute = preferedClassesNames.stream().reduce((
-							a,
-							b) -> a + "," + b).get();
+					final String preferedClassesNamesAttribute = preferedClassesNames.stream().reduce(StringUtils::join).get();
 					message.setStringProperty(EnhancedJmsMessageConverter.PREFERED_TYPE_PARAMETER, preferedClassesNamesAttribute);
 				}
 				// If the object cannot be converted from JSON.
