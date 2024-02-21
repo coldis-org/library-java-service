@@ -38,7 +38,7 @@ import jakarta.jms.TextMessage;
  */
 @Primary
 @Component
-@Qualifier("dtoJmsMessageConverter")
+@Qualifier("enhancedJmsMessageConverter")
 @ConditionalOnClass(value = Message.class)
 @ConditionalOnProperty(
 		name = "org.coldis.configuration.jms-message-converter-enhanced-enabled",
