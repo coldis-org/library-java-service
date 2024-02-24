@@ -166,7 +166,7 @@ public class BatchServiceTest {
 
 		// Makes sure the batch is not started.
 		final BatchExecutor<BatchObject> testBatchExecutor = new BatchExecutor<>(BatchObject.class, "testBatchInTime", 10L, null, Duration.ofSeconds(0),
-				Duration.ofSeconds(30), null, "batchTestService", null, null, null);
+				Duration.ofSeconds(2), null, "batchTestService", null, null, null);
 		final String batchKey = this.batchService.getKey(testBatchExecutor.getKeySuffix());
 
 		// Record should not exist.
@@ -213,7 +213,7 @@ public class BatchServiceTest {
 
 		// Makes sure the batch is not started.
 		final BatchExecutor<BatchObject> testBatchExecutor = new BatchExecutor<>(BatchObject.class, "testBatchNotInTime", 10L, null, Duration.ofSeconds(10),
-				Duration.ofSeconds(30), null, "batchTestService", null, null, null);
+				Duration.ofSeconds(2), null, "batchTestService", null, null, null);
 		final String batchKey = this.batchService.getKey(testBatchExecutor.getKeySuffix());
 
 		// Record should not exist.
@@ -278,8 +278,8 @@ public class BatchServiceTest {
 	public void testBatchCancel() throws Exception {
 
 		// Makes sure the batch is not started.
-		final BatchExecutor<BatchObject> testBatchExecutor = new BatchExecutor<>(BatchObject.class, "testBatchCancel", 10L, null, Duration.ofSeconds(1),
-				Duration.ofSeconds(30), null, "batchTestService", null, null, null);
+		final BatchExecutor<BatchObject> testBatchExecutor = new BatchExecutor<>(BatchObject.class, "testBatchCancel", 10L, null, Duration.ofMillis(300),
+				Duration.ofSeconds(2), null, "batchTestService", null, null, null);
 		final String batchKey = this.batchService.getKey(testBatchExecutor.getKeySuffix());
 
 		// Record should not exist.
@@ -297,7 +297,7 @@ public class BatchServiceTest {
 		this.batchService.checkAll();
 
 		// Waits a bit and cancels.
-		Thread.sleep(5 * 1000);
+		Thread.sleep(700);
 		this.batchService.cancel(testBatchExecutor.getKeySuffix());
 
 		// This batch should not reach the end.
