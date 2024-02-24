@@ -212,7 +212,7 @@ public class BatchServiceTest {
 	public void testBatchNotInTime() throws Exception {
 
 		// Makes sure the batch is not started.
-		final BatchExecutor<BatchObject> testBatchExecutor = new BatchExecutor<>(BatchObject.class, "testBatchNotInTime", 10L, null, Duration.ofSeconds(10),
+		final BatchExecutor<BatchObject> testBatchExecutor = new BatchExecutor<>(BatchObject.class, "testBatchNotInTime", 10L, null, Duration.ofMillis(300),
 				Duration.ofSeconds(2), null, "batchTestService", null, null, null);
 		final String batchKey = this.batchService.getKey(testBatchExecutor.getKeySuffix());
 
