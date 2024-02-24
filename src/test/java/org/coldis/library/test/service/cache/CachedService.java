@@ -24,7 +24,7 @@ public class CachedService {
 	 * @return The aTTR_1.
 	 */
 	@Cacheable(
-			cacheManager = "secondsExpirationCentralCacheManager",
+			cacheManager = "millisExpirationCentralCacheManager",
 			value = "cachedService-getFromCentralCache1"
 	)
 	public Integer getFromCentralCache1() {
@@ -38,7 +38,7 @@ public class CachedService {
 	 * @return The aTTR_1.
 	 */
 	@Cacheable(
-			cacheManager = "secondsExpirationCentralCacheManager",
+			cacheManager = "millisExpirationCentralCacheManager",
 			value = "cachedService-getFromCentralCache2"
 	)
 	public CacheSimpleObject1 getFromCentralCache2() {
@@ -52,7 +52,7 @@ public class CachedService {
 	 * @return The aTTR_1.
 	 */
 	@Cacheable(
-			cacheManager = "secondsExpirationCentralCacheManager",
+			cacheManager = "millisExpirationCentralCacheManager",
 			value = "cachedService-getFromCentralCache3"
 	)
 	public BigDecimal getFromCentralCache3() {
@@ -66,7 +66,7 @@ public class CachedService {
 	 * @return The aTTR_1.
 	 */
 	@Cacheable(
-			cacheManager = "secondsExpirationCentralCacheManager",
+			cacheManager = "millisExpirationCentralCacheManager",
 			value = "cachedService-getFromCentralCache4"
 	)
 	public CacheSimpleObject2 getFromCentralCache4() {
@@ -81,7 +81,7 @@ public class CachedService {
 	 * @return The aTTR_1.
 	 */
 	@Cacheable(
-			cacheManager = "secondsExpirationLocalCacheManager",
+			cacheManager = "millisExpirationLocalCacheManager",
 			value = "cachedService-getFromLocalCache1"
 	)
 	public Integer getFromLocalCache1() {
@@ -95,7 +95,7 @@ public class CachedService {
 	 * @return The aTTR_1.
 	 */
 	@Cacheable(
-			cacheManager = "secondsExpirationLocalCacheManager",
+			cacheManager = "millisExpirationLocalCacheManager",
 			value = "cachedService-getFromLocalCache2"
 	)
 	public CacheSimpleObject1 getFromLocalCache2() {
@@ -109,7 +109,7 @@ public class CachedService {
 	 * @return The aTTR_1.
 	 */
 	@Cacheable(
-			cacheManager = "secondsExpirationLocalCacheManager",
+			cacheManager = "millisExpirationLocalCacheManager",
 			value = "cachedService-getFromLocalCache3"
 	)
 	public BigDecimal getFromLocalCache3() {
@@ -123,7 +123,7 @@ public class CachedService {
 	 * @return The aTTR_1.
 	 */
 	@Cacheable(
-			cacheManager = "secondsExpirationLocalCacheManager",
+			cacheManager = "millisExpirationLocalCacheManager",
 			value = "cachedService-getFromLocalCache4"
 	)
 	public CacheSimpleObject2 getFromLocalCache4() {

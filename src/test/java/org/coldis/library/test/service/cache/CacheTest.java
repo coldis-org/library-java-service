@@ -16,7 +16,7 @@ public class CacheTest {
 	/**
 	 * Expiration.
 	 */
-	@Value("${org.coldis.configuration.cache.seconds-expiration}")
+	@Value("${org.coldis.configuration.cache.millis-expiration}")
 	private Long expiration;
 
 	/**
@@ -36,7 +36,7 @@ public class CacheTest {
 		Assertions.assertEquals(attr1, this.cachedService.getFromCentralCache1());
 		Assertions.assertEquals(attr1, this.cachedService.getFromCentralCache1());
 		Assertions.assertEquals(attr1, this.cachedService.getFromCentralCache1());
-		Thread.sleep(this.expiration * 1000);
+		Thread.sleep(this.expiration );
 		Assertions.assertEquals(attr1 + 1, this.cachedService.getFromCentralCache1());
 		Assertions.assertEquals(attr1 + 1, this.cachedService.getFromCentralCache1());
 		Assertions.assertEquals(attr1 + 1, this.cachedService.getFromCentralCache1());
@@ -45,7 +45,7 @@ public class CacheTest {
 		Assertions.assertEquals(attr2, this.cachedService.getFromCentralCache2().getAttribute());
 		Assertions.assertEquals(attr2, this.cachedService.getFromCentralCache2().getAttribute());
 		Assertions.assertEquals(attr2, this.cachedService.getFromCentralCache2().getAttribute());
-		Thread.sleep(this.expiration * 1000);
+		Thread.sleep(this.expiration );
 		Assertions.assertEquals(attr2 + 1, this.cachedService.getFromCentralCache2().getAttribute());
 		Assertions.assertEquals(attr2 + 1, this.cachedService.getFromCentralCache2().getAttribute());
 		Assertions.assertEquals(attr2 + 1, this.cachedService.getFromCentralCache2().getAttribute());
@@ -54,7 +54,7 @@ public class CacheTest {
 		Assertions.assertEquals(attr3, this.cachedService.getFromCentralCache3().intValue());
 		Assertions.assertEquals(attr3, this.cachedService.getFromCentralCache3().intValue());
 		Assertions.assertEquals(attr3, this.cachedService.getFromCentralCache3().intValue());
-		Thread.sleep(this.expiration * 1000);
+		Thread.sleep(this.expiration );
 		Assertions.assertEquals(attr3 + 1, this.cachedService.getFromCentralCache3().intValue());
 		Assertions.assertEquals(attr3 + 1, this.cachedService.getFromCentralCache3().intValue());
 		Assertions.assertEquals(attr3 + 1, this.cachedService.getFromCentralCache3().intValue());
@@ -63,7 +63,7 @@ public class CacheTest {
 		Assertions.assertEquals(attr4, this.cachedService.getFromCentralCache4().getAttribute().intValue());
 		Assertions.assertEquals(attr4, this.cachedService.getFromCentralCache4().getAttribute().intValue());
 		Assertions.assertEquals(attr4, this.cachedService.getFromCentralCache4().getAttribute().intValue());
-		Thread.sleep(this.expiration * 1000);
+		Thread.sleep(this.expiration );
 		Assertions.assertEquals(attr4 + 1, this.cachedService.getFromCentralCache4().getAttribute().intValue());
 		Assertions.assertEquals(attr4 + 1, this.cachedService.getFromCentralCache4().getAttribute().intValue());
 		Assertions.assertEquals(attr4 + 1, this.cachedService.getFromCentralCache4().getAttribute().intValue());
@@ -81,7 +81,7 @@ public class CacheTest {
 		Assertions.assertEquals(attr1, this.cachedService.getFromLocalCache1());
 		Assertions.assertEquals(attr1, this.cachedService.getFromLocalCache1());
 		Assertions.assertEquals(attr1, this.cachedService.getFromLocalCache1());
-		Thread.sleep(this.expiration * 1000);
+		Thread.sleep(this.expiration );
 		Assertions.assertEquals(attr1 + 1, this.cachedService.getFromLocalCache1());
 		Assertions.assertEquals(attr1 + 1, this.cachedService.getFromLocalCache1());
 		Assertions.assertEquals(attr1 + 1, this.cachedService.getFromLocalCache1());
@@ -90,7 +90,7 @@ public class CacheTest {
 		Assertions.assertEquals(attr2, this.cachedService.getFromLocalCache2().getAttribute());
 		Assertions.assertEquals(attr2, this.cachedService.getFromLocalCache2().getAttribute());
 		Assertions.assertEquals(attr2, this.cachedService.getFromLocalCache2().getAttribute());
-		Thread.sleep(this.expiration * 1000);
+		Thread.sleep(this.expiration );
 		Assertions.assertEquals(attr2 + 1, this.cachedService.getFromLocalCache2().getAttribute());
 		Assertions.assertEquals(attr2 + 1, this.cachedService.getFromLocalCache2().getAttribute());
 		Assertions.assertEquals(attr2 + 1, this.cachedService.getFromLocalCache2().getAttribute());
@@ -99,7 +99,7 @@ public class CacheTest {
 		Assertions.assertEquals(attr3, this.cachedService.getFromLocalCache3().intValue());
 		Assertions.assertEquals(attr3, this.cachedService.getFromLocalCache3().intValue());
 		Assertions.assertEquals(attr3, this.cachedService.getFromLocalCache3().intValue());
-		Thread.sleep(this.expiration * 1000);
+		Thread.sleep(this.expiration );
 		Assertions.assertEquals(attr3 + 1, this.cachedService.getFromLocalCache3().intValue());
 		Assertions.assertEquals(attr3 + 1, this.cachedService.getFromLocalCache3().intValue());
 		Assertions.assertEquals(attr3 + 1, this.cachedService.getFromLocalCache3().intValue());
@@ -108,7 +108,7 @@ public class CacheTest {
 		Assertions.assertEquals(attr4, this.cachedService.getFromLocalCache4().getAttribute().intValue());
 		Assertions.assertEquals(attr4, this.cachedService.getFromLocalCache4().getAttribute().intValue());
 		Assertions.assertEquals(attr4, this.cachedService.getFromLocalCache4().getAttribute().intValue());
-		Thread.sleep(this.expiration * 1000);
+		Thread.sleep(this.expiration );
 		Assertions.assertEquals(attr4 + 1, this.cachedService.getFromLocalCache4().getAttribute().intValue());
 		Assertions.assertEquals(attr4 + 1, this.cachedService.getFromLocalCache4().getAttribute().intValue());
 		Assertions.assertEquals(attr4 + 1, this.cachedService.getFromLocalCache4().getAttribute().intValue());

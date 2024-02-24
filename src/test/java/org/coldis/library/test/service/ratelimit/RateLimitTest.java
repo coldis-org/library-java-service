@@ -35,7 +35,7 @@ public class RateLimitTest {
 	 */
 	@RateLimit(
 			limit = 100,
-			period = 5,
+			period = 1,
 			errorType = BusinessException.class,
 			randomErrorMessages = { "Error 1", "Error 2" }
 	)
@@ -48,9 +48,9 @@ public class RateLimitTest {
 	@RateLimits(
 			limits = { @RateLimit(
 					limit = 100,
-					period = 5
+					period = 1
 			), @RateLimit(limit = 200,
-					period = 15,
+					period = 3,
 					errorType = Exception.class,
 					randomErrorMessages = { "Error 3", "Error 4" }
 			) }
@@ -63,9 +63,9 @@ public class RateLimitTest {
 	 */
 	@RateLimit(
 			limit = 100,
-			period = 5,
+			period = 1,
 			errorType = IntegrationException.class,
-			randomErrorMessages = { "Error 5", "Error 6" }
+			randomErrorMessages = { "Error 1", "Error 6" }
 	)
 	private void localRateLimitWithKey1(
 			@RateLimitKey
@@ -78,9 +78,9 @@ public class RateLimitTest {
 	@RateLimits(
 			limits = { @RateLimit(
 					limit = 100,
-					period = 5
+					period = 1
 			), @RateLimit(limit = 200,
-					period = 15,
+					period = 3,
 					errorType = BusinessException.class,
 					randomErrorMessages = { "Error 7", "Error 8" }
 			) }
@@ -112,7 +112,7 @@ public class RateLimitTest {
 		Assertions.assertThrows(Exception.class, () -> this.localRateLimit2());
 
 		// Waits the period and try again.
-		Thread.sleep(5 * 1000);
+		Thread.sleep(1 * 1000);
 		for (Integer count = 1; count <= 100; count++) {
 			this.localRateLimit1();
 			this.localRateLimit2();
@@ -122,14 +122,14 @@ public class RateLimitTest {
 		Assertions.assertThrows(Exception.class, () -> this.localRateLimit1());
 
 		// Waits the period and try again.
-		Thread.sleep(5 * 1000);
+		Thread.sleep(1 * 1000);
 		for (Integer count = 1; count <= 100; count++) {
 			this.localRateLimit1();
 			Assertions.assertThrows(Exception.class, () -> this.localRateLimit2());
 		}
 
 		// Waits the period and try again.
-		Thread.sleep(5 * 1000);
+		Thread.sleep(1 * 1000);
 		for (Integer count = 1; count <= 100; count++) {
 			this.localRateLimit1();
 			this.localRateLimit2();
@@ -165,7 +165,7 @@ public class RateLimitTest {
 		}
 
 		// Waits the period and try again.
-		Thread.sleep(5 * 1000);
+		Thread.sleep(1 * 1000);
 		for (final String key : keys) {
 			for (Integer count = 1; count <= 100; count++) {
 				this.localRateLimitWithKey1(key);
@@ -179,7 +179,7 @@ public class RateLimitTest {
 		}
 
 		// Waits the period and try again.
-		Thread.sleep(5 * 1000);
+		Thread.sleep(1 * 1000);
 		for (final String key : keys) {
 			for (Integer count = 1; count <= 100; count++) {
 				this.localRateLimitWithKey1(key);
@@ -188,7 +188,7 @@ public class RateLimitTest {
 		}
 
 		// Waits the period and try again.
-		Thread.sleep(5 * 1000);
+		Thread.sleep(1 * 1000);
 		for (final String key : keys) {
 			for (Integer count = 1; count <= 100; count++) {
 				this.localRateLimitWithKey1(key);

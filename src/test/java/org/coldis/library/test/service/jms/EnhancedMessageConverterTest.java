@@ -18,6 +18,7 @@ import org.springframework.boot.test.context.SpringBootTest.WebEnvironment;
 import org.springframework.jms.annotation.EnableJms;
 import org.springframework.jms.annotation.JmsListener;
 import org.springframework.jms.core.JmsTemplate;
+import org.springframework.test.annotation.DirtiesContext;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 
@@ -26,6 +27,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
  */
 @EnableJms
 @SpringBootTest(webEnvironment = WebEnvironment.DEFINED_PORT)
+@DirtiesContext(classMode = DirtiesContext.ClassMode.BEFORE_CLASS)
 public class EnhancedMessageConverterTest {
 
 	/**
