@@ -45,11 +45,6 @@ public class EnhancedMessageConverterTest {
 	public static GenericContainer<?> ARTEMIS_CONTAINER = TestHelper.createArtemisContainer();
 
 	/**
-	 * Redis container.
-	 */
-	public static GenericContainer<?> REDIS_CONTAINER = TestHelper.createRedisContainer();
-
-	/**
 	 * Test data.
 	 */
 	private static final List<DtoTestObject> TEST_DATA = List.of(new DtoTestObject(1L, "2", "3", 4, new int[] { 5, 6 }, 7),

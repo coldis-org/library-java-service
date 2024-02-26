@@ -28,11 +28,6 @@ public class HealthCheckServiceTest {
 	public static GenericContainer<?> ARTEMIS_CONTAINER = TestHelper.createArtemisContainer();
 
 	/**
-	 * Redis container.
-	 */
-	public static GenericContainer<?> REDIS_CONTAINER = TestHelper.createRedisContainer();
-
-	/**
 	 * Health check service client.
 	 */
 	@Autowired

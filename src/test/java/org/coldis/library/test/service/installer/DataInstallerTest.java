@@ -34,11 +34,6 @@ public class DataInstallerTest extends TestHelper {
 	public static GenericContainer<?> ARTEMIS_CONTAINER = TestHelper.createArtemisContainer();
 
 	/**
-	 * Redis container.
-	 */
-	public static GenericContainer<?> REDIS_CONTAINER = TestHelper.createRedisContainer();
-
-	/**
 	 * Test data.
 	 */
 	public static final DataInstallerTestEntity[] NON_UPDATABLE_DATA = { new DataInstallerTestEntity(13, 23, "33"),

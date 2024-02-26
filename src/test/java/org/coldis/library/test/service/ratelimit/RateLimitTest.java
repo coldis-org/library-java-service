@@ -41,11 +41,6 @@ public class RateLimitTest {
 	public static GenericContainer<?> ARTEMIS_CONTAINER = TestHelper.createArtemisContainer();
 
 	/**
-	 * Redis container.
-	 */
-	public static GenericContainer<?> REDIS_CONTAINER = TestHelper.createRedisContainer();
-
-	/**
 	 * Logger.
 	 */
 	private static final Logger LOGGER = LoggerFactory.getLogger(RateLimitTest.class);

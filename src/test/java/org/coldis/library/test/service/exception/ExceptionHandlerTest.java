@@ -30,11 +30,6 @@ public class ExceptionHandlerTest extends TestHelper {
 	public static GenericContainer<?> ARTEMIS_CONTAINER = TestHelper.createArtemisContainer();
 
 	/**
-	 * Redis container.
-	 */
-	public static GenericContainer<?> REDIS_CONTAINER = TestHelper.createRedisContainer();
-
-	/**
 	 * Exception handler service client.
 	 */
 	@Autowired

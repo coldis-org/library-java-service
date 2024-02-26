@@ -42,11 +42,6 @@ public class BatchServiceTest {
 	public static GenericContainer<?> ARTEMIS_CONTAINER = TestHelper.createArtemisContainer();
 
 	/**
-	 * Redis container.
-	 */
-	public static GenericContainer<?> REDIS_CONTAINER = TestHelper.createRedisContainer();
-
-	/**
 	 * Regular clock.
 	 */
 	public static final Clock REGULAR_CLOCK = DateTimeHelper.getClock();
