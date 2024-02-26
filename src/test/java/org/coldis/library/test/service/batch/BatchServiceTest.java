@@ -12,20 +12,39 @@ import org.coldis.library.persistence.LockBehavior;
 import org.coldis.library.persistence.keyvalue.KeyValueService;
 import org.coldis.library.service.batch.BatchExecutor;
 import org.coldis.library.service.batch.BatchService;
+import org.coldis.library.test.ContainerExtension;
 import org.coldis.library.test.TestHelper;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.context.SpringBootTest.WebEnvironment;
+import org.testcontainers.containers.GenericContainer;
 
 /**
  * Batch record test.
  */
+@ExtendWith(ContainerExtension.class)
 @SpringBootTest(webEnvironment = WebEnvironment.DEFINED_PORT)
 public class BatchServiceTest {
+
+	/**
+	 * Postgres container.
+	 */
+	public static GenericContainer<?> POSTGRES_CONTAINER = TestHelper.createPostgresContainer();
+
+	/**
+	 * Artemis container.
+	 */
+	public static GenericContainer<?> ARTEMIS_CONTAINER = TestHelper.createArtemisContainer();
+
+	/**
+	 * Redis container.
+	 */
+	public static GenericContainer<?> REDIS_CONTAINER = TestHelper.createRedisContainer();
 
 	/**
 	 * Regular clock.

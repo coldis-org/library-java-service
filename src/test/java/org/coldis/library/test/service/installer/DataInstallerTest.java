@@ -4,30 +4,51 @@ import java.util.Objects;
 
 import org.apache.commons.lang3.ArrayUtils;
 import org.coldis.library.service.installer.DataInstaller;
+import org.coldis.library.test.ContainerExtension;
 import org.coldis.library.test.TestHelper;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.context.SpringBootTest.WebEnvironment;
 import org.springframework.transaction.annotation.Transactional;
+import org.testcontainers.containers.GenericContainer;
 
 /**
  * Data installer test.
  */
+@ExtendWith(ContainerExtension.class)
 @SpringBootTest(webEnvironment = WebEnvironment.DEFINED_PORT)
 public class DataInstallerTest extends TestHelper {
 
 	/**
-	 * Test data.
+	 * Postgres container.
 	 */
-	public static final DataInstallerTestEntity[] NON_UPDATABLE_DATA = { new DataInstallerTestEntity(13, 23, "33"), new DataInstallerTestEntity(14, 24, "teste5\r\n	\r\n\"abc") };
+	public static GenericContainer<?> POSTGRES_CONTAINER = TestHelper.createPostgresContainer();
+
+	/**
+	 * Artemis container.
+	 */
+	public static GenericContainer<?> ARTEMIS_CONTAINER = TestHelper.createArtemisContainer();
+
+	/**
+	 * Redis container.
+	 */
+	public static GenericContainer<?> REDIS_CONTAINER = TestHelper.createRedisContainer();
 
 	/**
 	 * Test data.
 	 */
-	public static final DataInstallerTestEntity[] UPDATABLE_DATA = { new DataInstallerTestEntity(10, 20, "30"), new DataInstallerTestEntity(11, 21, "31"), new DataInstallerTestEntity(12, 22, "32") };
+	public static final DataInstallerTestEntity[] NON_UPDATABLE_DATA = { new DataInstallerTestEntity(13, 23, "33"),
+			new DataInstallerTestEntity(14, 24, "teste5\r\n	\r\n\"abc") };
+
+	/**
+	 * Test data.
+	 */
+	public static final DataInstallerTestEntity[] UPDATABLE_DATA = { new DataInstallerTestEntity(10, 20, "30"), new DataInstallerTestEntity(11, 21, "31"),
+			new DataInstallerTestEntity(12, 22, "32") };
 
 	/**
 	 * Test data.
@@ -98,8 +119,8 @@ public class DataInstallerTest extends TestHelper {
 					() -> this.testRepository.findById(new DataInstallerTestEntityKey(testEntity.getProperty1(), testEntity.getProperty2())).orElse(null),
 					data -> Objects.equals(testEntity, data), TestHelper.LONG_WAIT, TestHelper.SHORT_WAIT));
 			// Gets the persisted entity.
-			final DataInstallerTestEntity persistedEntity = this.testRepository.findById(new DataInstallerTestEntityKey(testEntity.getProperty1(), testEntity.getProperty2()))
-					.orElse(null);
+			final DataInstallerTestEntity persistedEntity = this.testRepository
+					.findById(new DataInstallerTestEntityKey(testEntity.getProperty1(), testEntity.getProperty2())).orElse(null);
 			// Makes sure the created and updated date are different.
 			Assertions.assertTrue(persistedEntity.getCreatedAt().isBefore(persistedEntity.getUpdatedAt()));
 		}
@@ -110,8 +131,8 @@ public class DataInstallerTest extends TestHelper {
 					() -> this.testRepository.findById(new DataInstallerTestEntityKey(testEntity.getProperty1(), testEntity.getProperty2())).orElse(null),
 					data -> Objects.equals(testEntity, data), TestHelper.LONG_WAIT, TestHelper.SHORT_WAIT));
 			// Gets the persisted entity.
-			final DataInstallerTestEntity persistedEntity = this.testRepository.findById(new DataInstallerTestEntityKey(testEntity.getProperty1(), testEntity.getProperty2()))
-					.orElse(null);
+			final DataInstallerTestEntity persistedEntity = this.testRepository
+					.findById(new DataInstallerTestEntityKey(testEntity.getProperty1(), testEntity.getProperty2())).orElse(null);
 			// Makes sure the created and updated date are different.
 			Assertions.assertTrue(persistedEntity.getCreatedAt().isEqual(persistedEntity.getUpdatedAt()));
 		}

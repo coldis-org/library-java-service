@@ -118,8 +118,7 @@ public class BatchService {
 	 **/
 	@Transactional(
 			propagation = Propagation.NOT_SUPPORTED,
-			readOnly = true,
-			timeout = 23
+			readOnly = true
 	)
 	private <Type> void log(
 			final BatchExecutor<Type> executor,
@@ -415,8 +414,7 @@ public class BatchService {
 	 */
 	@Transactional(
 			propagation = Propagation.NOT_SUPPORTED,
-			readOnly = true,
-			timeout = 67
+			readOnly = true
 	)
 	@RequestMapping(
 			method = RequestMethod.DELETE,
@@ -444,8 +442,7 @@ public class BatchService {
 	@Scheduled(cron = "0 */5 * * * *")
 	@Transactional(
 			propagation = Propagation.NOT_SUPPORTED,
-			readOnly = true,
-			timeout = 67
+			readOnly = true
 	)
 	@RequestMapping(
 			method = RequestMethod.POST,
