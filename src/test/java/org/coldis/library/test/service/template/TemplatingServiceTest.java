@@ -22,6 +22,11 @@ import org.testcontainers.containers.GenericContainer;
 public class TemplatingServiceTest {
 
 	/**
+	 * Redis container.
+	 */
+	public static GenericContainer<?> REDIS_CONTAINER = TestHelper.createRedisContainer();
+
+	/**
 	 * Postgres container.
 	 */
 	public static GenericContainer<?> POSTGRES_CONTAINER = TestHelper.createPostgresContainer();

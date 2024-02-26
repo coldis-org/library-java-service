@@ -20,6 +20,11 @@ import org.testcontainers.containers.GenericContainer;
 public class ExceptionHandlerTest extends TestHelper {
 
 	/**
+	 * Redis container.
+	 */
+	public static GenericContainer<?> REDIS_CONTAINER = TestHelper.createRedisContainer();
+
+	/**
 	 * Postgres container.
 	 */
 	public static GenericContainer<?> POSTGRES_CONTAINER = TestHelper.createPostgresContainer();
