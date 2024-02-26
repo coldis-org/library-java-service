@@ -19,6 +19,11 @@ import org.testcontainers.containers.GenericContainer;
 public class CacheTest {
 
 	/**
+	 * Redis container.
+	 */
+	public static GenericContainer<?> REDIS_CONTAINER = TestHelper.createRedisContainer();
+
+	/**
 	 * Postgres container.
 	 */
 	public static GenericContainer<?> POSTGRES_CONTAINER = TestHelper.createPostgresContainer();
@@ -27,11 +32,6 @@ public class CacheTest {
 	 * Artemis container.
 	 */
 	public static GenericContainer<?> ARTEMIS_CONTAINER = TestHelper.createArtemisContainer();
-
-	/**
-	 * Redis container.
-	 */
-	public static GenericContainer<?> REDIS_CONTAINER = TestHelper.createRedisContainer();
 
 	/**
 	 * Expiration.
