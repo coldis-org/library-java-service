@@ -1,5 +1,6 @@
 package org.coldis.library.service.transaction;
 
+import org.springframework.boot.autoconfigure.condition.ConditionalOnClass;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.transaction.aspectj.AnnotationTransactionAspect;
 import org.springframework.transaction.interceptor.AbstractFallbackTransactionAttributeSource;
@@ -9,6 +10,7 @@ import org.springframework.util.StringValueResolver;
  * Extended transaction auto-configuration.
  */
 @Configuration
+@ConditionalOnClass(value = AnnotationTransactionAspect.class)
 public class ExtendedTransactionAutoConfiguration {
 
 	/**

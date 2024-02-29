@@ -249,10 +249,14 @@ public class DataInstaller implements ApplicationListener<ApplicationReadyEvent>
 				Map<String, Object> existentDataObject = null;
 				// Tries to get existent data.
 				try {
-					existentDataObject = (serviceClient.executeOperation(
-							this.getSearchOperationUrl(dataSetMetadata.getServiceOperationUrl() + "/" + dataSetMetadata.getSearchOperationPath(),
-									dataSetMetadata.getSearchPropertiesStrategy(), dataSetMetadata.getSearchProperties(), dataObject),
-							HttpMethod.GET, null, null, null, new ParameterizedTypeReference<Map<String, Object>>() {}).getBody());
+					existentDataObject = (serviceClient
+							.executeOperation(
+									this.getSearchOperationUrl(
+											dataSetMetadata.getServiceOperationUrl() + (StringUtils.isBlank(dataSetMetadata.getSearchOperationPath()) ? ""
+													: "/" + dataSetMetadata.getSearchOperationPath()),
+											dataSetMetadata.getSearchPropertiesStrategy(), dataSetMetadata.getSearchProperties(), dataObject),
+									HttpMethod.GET, null, null, null, new ParameterizedTypeReference<Map<String, Object>>() {})
+							.getBody());
 				}
 				// If the object does not exist.
 				catch (final Exception exception) {

@@ -26,7 +26,6 @@
 		<project.config.source.test.compile.annotationProcessors>
 			org.coldis.library.dto.DtoGenerator,org.coldis.library.service.client.generator.ServiceClientGenerator</project.config.source.test.compile.annotationProcessors>
 		<project.config.swagger.scope>compile</project.config.swagger.scope>
-		<project.config.release.arguments>-Dnet.bytebuddy.experimental=true</project.config.release.arguments>
 	</properties>
 	<scm>
 		<url>https://github.com/coldis-org/library-java-service</url>
@@ -61,7 +60,7 @@
 		<dependency>
 			<groupId>org.coldis.library</groupId>
 			<artifactId>test</artifactId>
-			<version>2.0.11</version>
+			<version>2.0.14</version>
 			<scope>test</scope>
 		</dependency>
 		<dependency>
