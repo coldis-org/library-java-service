@@ -11,6 +11,7 @@ import org.springframework.context.annotation.Configuration;
 import org.springframework.context.annotation.Primary;
 import org.springframework.http.converter.json.Jackson2ObjectMapperBuilder;
 
+import com.fasterxml.jackson.databind.DeserializationFeature;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
 /**
@@ -37,13 +38,10 @@ public class JsonMapperAutoConfiguration {
 	@Bean(name = { "objectMapper", "jsonMapper" })
 	public ObjectMapper createJsonMapper(
 			final Jackson2ObjectMapperBuilder builder) {
-		// Creates the object mapper.
 		ObjectMapper objectMapper = builder.build();
-		// Registers the date/time module.
+		objectMapper.disable(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES);
 		objectMapper.registerModule(ObjectMapperHelper.getDateTimeModule());
-		// Registers the subtypes from the base packages.
 		objectMapper = ObjectMapperHelper.addSubtypesFromPackage(objectMapper, ArrayUtils.add(this.jsonTypePackages, ServiceConfiguration.BASE_PACKAGE));
-		// Returns the configured object mapper.
 		return objectMapper;
 	}
 
