@@ -9,6 +9,7 @@ import org.coldis.library.service.jms.EnhancedJmsMessageConverter;
 import org.coldis.library.service.jms.TypableJmsMessageConverter;
 import org.coldis.library.test.ContainerExtension;
 import org.coldis.library.test.TestHelper;
+import org.coldis.library.thread.ThreadMapContextHolder;
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -24,6 +25,8 @@ import org.springframework.test.annotation.DirtiesContext;
 import org.testcontainers.containers.GenericContainer;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+
+import jakarta.jms.Message;
 
 /**
  * JMS message converter test.
@@ -303,5 +306,38 @@ public class EnhancedMessageConverterTest {
 					TestHelper.LONG_WAIT, TestHelper.SHORT_WAIT));
 		}
 	}
+	
+	/**
+	 * Tests the JSON JMS message converter.
+	 *
+	 * @throws Exception If the test fails.
+	 */
+	@Test
+	public void testSendThreadAttributes() throws Exception {
+		// For each test data.
+		for (final DtoTestObject testData : EnhancedMessageConverterTest.TEST_DATA) {
+			// Generates random attributes.
+			Long attr1 = RandomHelper.getPositiveRandomLong(Long.MAX_VALUE);
+			Long attr2 = RandomHelper.getPositiveRandomLong(Long.MAX_VALUE);
+			Long attr3 = RandomHelper.getPositiveRandomLong(Long.MAX_VALUE);
+			ThreadMapContextHolder.setAttribute("testJmsAttr1", attr1);
+			ThreadMapContextHolder.setAttribute("testJmsAttr2", attr2);
+			ThreadMapContextHolder.setAttribute("testJmsAttr3", attr3);
+			
+			this.jmsTemplate.convertAndSend("message/thread", ObjectMapperHelper.convert(this.objectMapper, testData, DtoTestObjectDto.class, true));
+			ThreadMapContextHolder.clear();
+			Message receivedMessage = jmsTemplate.receive("message/thread");
+			
+
+			Assertions.assertEquals(attr1, receivedMessage.getObjectProperty("testJmsAttr1"));
+			Assertions.assertEquals(attr2, receivedMessage.getObjectProperty("testJmsAttr2"));
+			Assertions.assertNull(receivedMessage.getObjectProperty("testJmsAttr3"));
+
+			Assertions.assertEquals(ThreadMapContextHolder.getAttribute("testJmsAttr1"), receivedMessage.getObjectProperty("testJmsAttr1"));
+			Assertions.assertEquals(ThreadMapContextHolder.getAttribute("testJmsAttr1"), receivedMessage.getObjectProperty("testJmsAttr2"));
+			Assertions.assertNull(receivedMessage.getObjectProperty("testJmsAttr3"));
+}
+	}
+	
 
 }

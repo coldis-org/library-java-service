@@ -63,6 +63,12 @@ public class EnhancedJmsMessageConverter extends SimpleMessageConverter {
 	private static final String PREFERED_TYPE_PARAMETER = "preferedType";
 
 	/**
+	 * Thread attributes.
+	 */
+	@Value(value = "#{'${org.coldis.library.service.jms.thread-attributes:}'.split(',')}")
+	private List<String> threadAttributes;
+
+	/**
 	 * Maximum async hops.
 	 */
 	@Value("${org.coldis.configuration.jms-message-converter-enhanced.maximum-async-hops:13}")
@@ -159,6 +165,13 @@ public class EnhancedJmsMessageConverter extends SimpleMessageConverter {
 			final Message message) throws JMSException {
 		// Adds current async hop to message.
 		message.setLongProperty(EnhancedJmsMessageConverter.CURRENT_ASYNC_HOP_PARAMETER, this.getCurrentAsyncHop());
+		// Adds thread local properties.
+		for (final String attributeName : this.threadAttributes) {
+			final Object attributeValue = ThreadMapContextHolder.getAttribute(attributeName);
+			if (attributeValue != null) {
+				message.setObjectProperty(attributeName, attributeValue);
+			}
+		}
 
 	}
 
@@ -173,6 +186,8 @@ public class EnhancedJmsMessageConverter extends SimpleMessageConverter {
 		Message message = null;
 
 		if (payload != null) {
+			// Pass thread attributes to
+
 			// Tries to get preferred classes for conversion using DTO annotations. Original
 			// class is always preferred over DTO class.
 			final DtoType dtoTypeAnnotation = Arrays.stream(payload.getClass().getAnnotationsByType(DtoType.class))
@@ -290,14 +305,30 @@ public class EnhancedJmsMessageConverter extends SimpleMessageConverter {
 	}
 
 	/**
+	 * Get parameters from the JMS message.
+	 */
+	private void getParametersFromMessage(
+			final Message message) throws JMSException {
+		// Increments the current async hop on the request.
+		this.incrementCurrentAsyncHopOnRequest(message);
+		// Adds thread local properties.
+		for (final String attributeName : this.threadAttributes) {
+			final Object attributeValue = message.getObjectProperty(attributeName);
+			if (attributeValue != null) {
+				ThreadMapContextHolder.setAttribute(attributeName, attributeValue);
+			}
+		}
+	}
+
+	/**
 	 * @see org.springframework.jms.support.converter.SimpleMessageConverter#fromMessage(jakarta.jms.Message)
 	 */
 	@Override
 	public Object fromMessage(
 			final Message message) throws JMSException, MessageConversionException {
 
-		// Increments the current async hop on the request.
-		this.incrementCurrentAsyncHopOnRequest(message);
+		// Gets parameters from the message.
+		this.getParametersFromMessage(message);
 
 		// Tries to convert using preferred classes.
 		Object object = this.fromMessageUsingPreferedClassesInformation(message);
