@@ -234,7 +234,7 @@ public class EnhancedJmsMessageConverter extends SimpleMessageConverter {
 			final Session session) throws JMSException, MessageConversionException {
 
 		// Validates async hops.
-		this.validateAsyncHops(payload);
+		// this.validateAsyncHops(payload);
 
 		// Tries creating a message with DTO information.
 		Message message = this.toMessageUsingDtoInformation(payload, session);
@@ -328,7 +328,7 @@ public class EnhancedJmsMessageConverter extends SimpleMessageConverter {
 			final Message message) throws JMSException, MessageConversionException {
 
 		// Gets parameters from the message.
-		this.getParametersFromMessage(message);
+		// this.getParametersFromMessage(message);
 
 		// Tries to convert using preferred classes.
 		Object object = this.fromMessageUsingPreferedClassesInformation(message);

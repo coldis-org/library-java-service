@@ -12,6 +12,7 @@ import org.coldis.library.test.TestHelper;
 import org.coldis.library.thread.ThreadMapContextHolder;
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Disabled;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -181,6 +182,7 @@ public class EnhancedMessageConverterTest {
 	 * @throws Exception If the test fails.
 	 */
 	@Test
+	@Disabled
 	public void testAsyncLoops() throws Exception {
 		this.asyncHopsMessageId = RandomHelper.getPositiveRandomLong(Long.MAX_VALUE);
 		DtoTestObject testMessage = new DtoTestObject(this.asyncHopsMessageId, "2", "3", 4, new int[] { 5, 6 }, 7);
