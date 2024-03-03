@@ -1,6 +1,7 @@
 package org.coldis.library.test.service.jms;
 
 import java.util.List;
+import java.util.Objects;
 
 import org.coldis.library.helper.RandomHelper;
 import org.coldis.library.serialization.ObjectMapperHelper;
@@ -170,7 +171,7 @@ public class EnhancedMessageConverterTest {
 	)
 	public void consumeMessageLoop(
 			final DtoTestObject message) throws InterruptedException {
-		if (this.asyncHopsMessageId.equals(message.getId())) {
+		if (Objects.equals(this.asyncHopsMessageId, message.getId())) {
 			EnhancedMessageConverterTest.asyncHops++;
 		}
 		this.jmsTemplate.convertAndSend("message/loop", message);
