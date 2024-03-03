@@ -12,7 +12,6 @@ import org.coldis.library.dto.DtoTypeMetadata;
 import org.coldis.library.exception.IntegrationException;
 import org.coldis.library.model.SimpleMessage;
 import org.coldis.library.serialization.ObjectMapperHelper;
-import org.coldis.library.thread.ThreadMapContextHolder;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -28,6 +27,9 @@ import org.springframework.util.ClassUtils;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 
+import io.micrometer.observation.Observation;
+import io.micrometer.observation.Observation.Scope;
+import io.micrometer.observation.ObservationRegistry;
 import jakarta.jms.JMSException;
 import jakarta.jms.Message;
 import jakarta.jms.Session;
@@ -53,9 +55,14 @@ public class EnhancedJmsMessageConverter extends SimpleMessageConverter {
 	private static final Logger LOGGER = LoggerFactory.getLogger(EnhancedJmsMessageConverter.class);
 
 	/**
+	 * Local observation scope.
+	 */
+	public static final ObservationRegistry REGISTRY = ObservationRegistry.create();
+
+	/**
 	 * Current async hop parameter.
 	 */
-	private static final String CURRENT_ASYNC_HOP_PARAMETER = "currentAsyncHop";
+	private static final String CURRENT_ASYNC_HOP_PARAMETER = "asyncHop";
 
 	/**
 	 * Prefered type parameter.
@@ -137,13 +144,52 @@ public class EnhancedJmsMessageConverter extends SimpleMessageConverter {
 		this.originalTypePrecedence = originalTypePrecedence;
 	}
 
+	/** Gets the context. */
+	public static Observation.Scope getContext() {
+		Scope scope = EnhancedJmsMessageConverter.REGISTRY.getCurrentObservationScope();
+		if (scope == null) {
+			scope = new SimpleObservation(EnhancedJmsMessageConverter.REGISTRY).openScope();
+		}
+		return scope;
+	}
+
+	/**
+	 * Gets a context attribute.
+	 */
+	public static Object getContextAttribute(
+			final String name) {
+		Object attribute = null;
+		final Observation.Scope scope = EnhancedJmsMessageConverter.getContext();
+		if (scope != null) {
+			final Observation observation = scope.getCurrentObservation();
+			attribute = observation.getContext().get(name);
+		}
+		return attribute;
+	}
+
+	/**
+	 * Puts a context attribute.
+	 *
+	 * @param name  Name of the attribute.
+	 * @param value Value of the attribute.
+	 */
+	public static void setContextAttribute(
+			final String name,
+			final Object value) {
+		final Observation.Scope scope = EnhancedJmsMessageConverter.getContext();
+		if (scope != null) {
+			final Observation observation = scope.getCurrentObservation();
+			observation.getContext().put(name, value);
+		}
+	}
+
 	/**
 	 * Gets the current async hop from the request.
 	 *
 	 * @return Current async hop.
 	 */
 	private Long getCurrentAsyncHop() {
-		final Long currentAsyncHop = (Long) ThreadMapContextHolder.getAttribute(EnhancedJmsMessageConverter.CURRENT_ASYNC_HOP_PARAMETER);
+		final Long currentAsyncHop = (Long) EnhancedJmsMessageConverter.getContextAttribute(EnhancedJmsMessageConverter.CURRENT_ASYNC_HOP_PARAMETER);
 		return (currentAsyncHop == null ? 1 : currentAsyncHop);
 	}
 
@@ -167,7 +213,7 @@ public class EnhancedJmsMessageConverter extends SimpleMessageConverter {
 		message.setLongProperty(EnhancedJmsMessageConverter.CURRENT_ASYNC_HOP_PARAMETER, this.getCurrentAsyncHop());
 		// Adds thread local properties.
 		for (final String attributeName : this.threadAttributes) {
-			final Object attributeValue = ThreadMapContextHolder.getAttribute(attributeName);
+			final Object attributeValue = EnhancedJmsMessageConverter.getContextAttribute(attributeName);
 			if (attributeValue != null) {
 				message.setObjectProperty(attributeName, attributeValue);
 			}
@@ -234,7 +280,7 @@ public class EnhancedJmsMessageConverter extends SimpleMessageConverter {
 			final Session session) throws JMSException, MessageConversionException {
 
 		// Validates async hops.
-		// this.validateAsyncHops(payload);
+		this.validateAsyncHops(payload);
 
 		// Tries creating a message with DTO information.
 		Message message = this.toMessageUsingDtoInformation(payload, session);
@@ -245,6 +291,7 @@ public class EnhancedJmsMessageConverter extends SimpleMessageConverter {
 		}
 		// Adds parameters to the message.
 		this.addParametersToMessage(message);
+
 		// Returns the message.
 		return message;
 
@@ -300,7 +347,7 @@ public class EnhancedJmsMessageConverter extends SimpleMessageConverter {
 				? message.getLongProperty(EnhancedJmsMessageConverter.CURRENT_ASYNC_HOP_PARAMETER)
 				: null);
 		currentAsyncHop = (currentAsyncHop == null ? 1 : currentAsyncHop + 1);
-		ThreadMapContextHolder.setAttribute(EnhancedJmsMessageConverter.CURRENT_ASYNC_HOP_PARAMETER, currentAsyncHop);
+		EnhancedJmsMessageConverter.setContextAttribute(EnhancedJmsMessageConverter.CURRENT_ASYNC_HOP_PARAMETER, currentAsyncHop);
 		return currentAsyncHop;
 	}
 
@@ -315,7 +362,7 @@ public class EnhancedJmsMessageConverter extends SimpleMessageConverter {
 		for (final String attributeName : this.threadAttributes) {
 			final Object attributeValue = message.getObjectProperty(attributeName);
 			if (attributeValue != null) {
-				ThreadMapContextHolder.setAttribute(attributeName, attributeValue);
+				EnhancedJmsMessageConverter.setContextAttribute(attributeName, attributeValue);
 			}
 		}
 	}
@@ -328,7 +375,7 @@ public class EnhancedJmsMessageConverter extends SimpleMessageConverter {
 			final Message message) throws JMSException, MessageConversionException {
 
 		// Gets parameters from the message.
-		// this.getParametersFromMessage(message);
+		this.getParametersFromMessage(message);
 
 		// Tries to convert using preferred classes.
 		Object object = this.fromMessageUsingPreferedClassesInformation(message);

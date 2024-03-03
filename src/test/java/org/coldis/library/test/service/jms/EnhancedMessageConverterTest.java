@@ -77,7 +77,7 @@ public class EnhancedMessageConverterTest {
 	/**
 	 * Maximum async hops.
 	 */
-	@Value("${org.coldis.configuration.jms-message-converter-enhanced.maximum-async-hops:13}")
+	@Value("${org.coldis.configuration.jms-message-converter-enhanced.maximum-async-hops:103}")
 	private Long maximumAsyncHops;
 
 	/**
@@ -182,23 +182,46 @@ public class EnhancedMessageConverterTest {
 	 * @throws Exception If the test fails.
 	 */
 	@Test
-	@Disabled
+	// @Disabled
 	public void testAsyncLoops() throws Exception {
-		this.asyncHopsMessageId = RandomHelper.getPositiveRandomLong(Long.MAX_VALUE);
-		DtoTestObject testMessage = new DtoTestObject(this.asyncHopsMessageId, "2", "3", 4, new int[] { 5, 6 }, 7);
-		this.jmsTemplate.convertAndSend("message/loop", testMessage);
-		TestHelper.waitUntilValid(() -> EnhancedMessageConverterTest.asyncHops, asyncHops -> asyncHops > this.maximumAsyncHops, TestHelper.REGULAR_WAIT,
-				TestHelper.SHORT_WAIT);
-		Assertions.assertEquals(13, EnhancedMessageConverterTest.asyncHops);
+		for (int i = 0; i < 17; i++) {
+			EnhancedMessageConverterTest.asyncHops = 0L;
+			this.asyncHopsMessageId = RandomHelper.getPositiveRandomLong(Long.MAX_VALUE);
+			final DtoTestObject testMessage = new DtoTestObject(this.asyncHopsMessageId, "2", "3", 4, new int[] { 5, 6 }, 7);
+			this.jmsTemplate.convertAndSend("message/loop", testMessage);
+			TestHelper.waitUntilValid(() -> EnhancedMessageConverterTest.asyncHops, asyncHops -> asyncHops > this.maximumAsyncHops, TestHelper.REGULAR_WAIT,
+					TestHelper.SHORT_WAIT);
+			Assertions.assertEquals(this.maximumAsyncHops, EnhancedMessageConverterTest.asyncHops);
+		}
+	}
 
-		EnhancedMessageConverterTest.asyncHops = 0L;
-		this.asyncHopsMessageId = RandomHelper.getPositiveRandomLong(Long.MAX_VALUE);
-		testMessage = new DtoTestObject(this.asyncHopsMessageId, "2", "3", 4, new int[] { 5, 6 }, 7);
-		this.jmsTemplate.convertAndSend("message/loop", testMessage);
-		TestHelper.waitUntilValid(() -> EnhancedMessageConverterTest.asyncHops, asyncHops -> asyncHops > this.maximumAsyncHops, TestHelper.REGULAR_WAIT,
-				TestHelper.SHORT_WAIT);
-		Assertions.assertEquals(13, EnhancedMessageConverterTest.asyncHops);
+	/**
+	 * Tests the JSON JMS message converter.
+	 *
+	 * @throws Exception If the test fails.
+	 */
+	@Test
+	@Disabled
+	public void testSendThreadAttributes() throws Exception {
+		// For each test data.
+		for (final DtoTestObject testData : EnhancedMessageConverterTest.TEST_DATA) {
+			// Generates random attributes.
+			final Long attr1 = RandomHelper.getPositiveRandomLong(Long.MAX_VALUE);
+			final Long attr2 = RandomHelper.getPositiveRandomLong(Long.MAX_VALUE);
+			final Long attr3 = RandomHelper.getPositiveRandomLong(Long.MAX_VALUE);
+			EnhancedJmsMessageConverter.setContextAttribute("testJmsAttr1", attr1);
+			EnhancedJmsMessageConverter.setContextAttribute("testJmsAttr2", attr2);
+			EnhancedJmsMessageConverter.setContextAttribute("testJmsAttr3", attr3);
 
+			this.jmsTemplate.convertAndSend("message/thread", ObjectMapperHelper.convert(this.objectMapper, testData, DtoTestObjectDto.class, true));
+			ThreadMapContextHolder.clear();
+			final Message receivedMessage = this.jmsTemplate.receive("message/thread");
+
+			Assertions.assertEquals(attr1, receivedMessage.getObjectProperty("testJmsAttr1"));
+			Assertions.assertEquals(attr2, receivedMessage.getObjectProperty("testJmsAttr2"));
+			Assertions.assertNull(receivedMessage.getObjectProperty("testJmsAttr3"));
+
+		}
 	}
 
 	/**
@@ -308,38 +331,5 @@ public class EnhancedMessageConverterTest {
 					TestHelper.LONG_WAIT, TestHelper.SHORT_WAIT));
 		}
 	}
-	
-	/**
-	 * Tests the JSON JMS message converter.
-	 *
-	 * @throws Exception If the test fails.
-	 */
-	@Test
-	public void testSendThreadAttributes() throws Exception {
-		// For each test data.
-		for (final DtoTestObject testData : EnhancedMessageConverterTest.TEST_DATA) {
-			// Generates random attributes.
-			Long attr1 = RandomHelper.getPositiveRandomLong(Long.MAX_VALUE);
-			Long attr2 = RandomHelper.getPositiveRandomLong(Long.MAX_VALUE);
-			Long attr3 = RandomHelper.getPositiveRandomLong(Long.MAX_VALUE);
-			ThreadMapContextHolder.setAttribute("testJmsAttr1", attr1);
-			ThreadMapContextHolder.setAttribute("testJmsAttr2", attr2);
-			ThreadMapContextHolder.setAttribute("testJmsAttr3", attr3);
-			
-			this.jmsTemplate.convertAndSend("message/thread", ObjectMapperHelper.convert(this.objectMapper, testData, DtoTestObjectDto.class, true));
-			ThreadMapContextHolder.clear();
-			Message receivedMessage = jmsTemplate.receive("message/thread");
-			
-
-			Assertions.assertEquals(attr1, receivedMessage.getObjectProperty("testJmsAttr1"));
-			Assertions.assertEquals(attr2, receivedMessage.getObjectProperty("testJmsAttr2"));
-			Assertions.assertNull(receivedMessage.getObjectProperty("testJmsAttr3"));
-
-			Assertions.assertEquals(ThreadMapContextHolder.getAttribute("testJmsAttr1"), receivedMessage.getObjectProperty("testJmsAttr1"));
-			Assertions.assertEquals(ThreadMapContextHolder.getAttribute("testJmsAttr1"), receivedMessage.getObjectProperty("testJmsAttr2"));
-			Assertions.assertNull(receivedMessage.getObjectProperty("testJmsAttr3"));
-}
-	}
-	
 
 }

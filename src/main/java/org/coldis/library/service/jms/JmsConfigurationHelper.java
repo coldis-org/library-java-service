@@ -88,6 +88,7 @@ public class JmsConfigurationHelper {
 			backOff.setMaxElapsedTime(backoffMaxElapsedTime);
 			jmsContainerFactory.setBackOff(backOff);
 		}
+		jmsContainerFactory.setObservationRegistry(EnhancedJmsMessageConverter.REGISTRY);
 		// Returns the container factory.
 		return jmsContainerFactory;
 	}
