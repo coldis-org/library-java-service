@@ -71,7 +71,7 @@ public class EnhancedJmsMessageConverter extends SimpleMessageConverter {
 	/**
 	 * Maximum async hops.
 	 */
-	@Value("${org.coldis.configuration.jms-message-converter-enhanced.maximum-async-hops:37}")
+	@Value("${org.coldis.configuration.jms-message-converter-enhanced.maximum-async-hops:103}")
 	private Long maximumAsyncHops;
 
 	/**
