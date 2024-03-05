@@ -107,6 +107,25 @@ public class EnhancedJmsMessageConverter extends SimpleMessageConverter {
 	private TypableJmsMessageConverter typableJmsMessageConverter;
 
 	/**
+	 * Gets the maximumAsyncHops.
+	 *
+	 * @return The maximumAsyncHops.
+	 */
+	public Long getMaximumAsyncHops() {
+		return this.maximumAsyncHops;
+	}
+
+	/**
+	 * Sets the maximumAsyncHops.
+	 *
+	 * @param maximumAsyncHops New maximumAsyncHops.
+	 */
+	public void setMaximumAsyncHops(
+			final Long maximumAsyncHops) {
+		this.maximumAsyncHops = maximumAsyncHops;
+	}
+
+	/**
 	 * Gets the originalTypePrecedence.
 	 *
 	 * @return The originalTypePrecedence.
