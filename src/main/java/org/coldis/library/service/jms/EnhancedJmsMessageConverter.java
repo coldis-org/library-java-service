@@ -107,25 +107,6 @@ public class EnhancedJmsMessageConverter extends SimpleMessageConverter {
 	private TypableJmsMessageConverter typableJmsMessageConverter;
 
 	/**
-	 * Gets the maximumAsyncHops.
-	 *
-	 * @return The maximumAsyncHops.
-	 */
-	public Long getMaximumAsyncHops() {
-		return this.maximumAsyncHops;
-	}
-
-	/**
-	 * Sets the maximumAsyncHops.
-	 *
-	 * @param maximumAsyncHops New maximumAsyncHops.
-	 */
-	public void setMaximumAsyncHops(
-			final Long maximumAsyncHops) {
-		this.maximumAsyncHops = maximumAsyncHops;
-	}
-
-	/**
 	 * Gets the originalTypePrecedence.
 	 *
 	 * @return The originalTypePrecedence.
@@ -198,7 +179,7 @@ public class EnhancedJmsMessageConverter extends SimpleMessageConverter {
 	 */
 	private void validateAsyncHops(
 			final Object payload) {
-		if (this.getCurrentAsyncHop() > this.maximumAsyncHops) {
+		if ((this.maximumAsyncHops > 0) && (this.getCurrentAsyncHop() > this.maximumAsyncHops)) {
 			throw new IntegrationException(
 					new SimpleMessage("jms.async.hops.exceeded", "The maximum number of async hops was exceeded for message '" + payload + "'."));
 		}
