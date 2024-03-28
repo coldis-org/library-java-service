@@ -1,4 +1,4 @@
-package org.coldis.library.service.number;
+package org.coldis.library.service.helper;
 
 import java.math.RoundingMode;
 
@@ -15,22 +15,22 @@ public class NumberProperties {
 	/**
 	 * Calculation scale.
 	 */
-	public static Integer CALCULATION_SCALE;
+	public static Integer CALCULATION_SCALE = 34;
 
 	/**
 	 * Rate scale.
 	 */
-	public static Integer RATE_SCALE;
+	public static Integer RATE_SCALE = 4;
 
 	/**
 	 * Currency scale.
 	 */
-	public static Integer CURRENCY_SCALE;
+	public static Integer CURRENCY_SCALE = 2;
 
 	/**
 	 * Rounding mode.
 	 */
-	public static RoundingMode ROUNDING_MODE;
+	public static RoundingMode ROUNDING_MODE = RoundingMode.HALF_DOWN;
 
 	/**
 	 * Gets the calculation scale.
@@ -46,7 +46,8 @@ public class NumberProperties {
 	 *
 	 * @param calculationScale New calculation scale.
 	 */
-	public void setCalculationScale(final Integer calculationScale) {
+	public void setCalculationScale(
+			final Integer calculationScale) {
 		NumberProperties.CALCULATION_SCALE = calculationScale;
 	}
 
@@ -64,7 +65,8 @@ public class NumberProperties {
 	 *
 	 * @param rateScale New rate scale.
 	 */
-	public void setRateScale(final Integer rateScale) {
+	public void setRateScale(
+			final Integer rateScale) {
 		NumberProperties.RATE_SCALE = rateScale;
 	}
 
@@ -82,7 +84,8 @@ public class NumberProperties {
 	 *
 	 * @param currencyScale New currency scale.
 	 */
-	public void setCurrencyScale(final Integer currencyScale) {
+	public void setCurrencyScale(
+			final Integer currencyScale) {
 		NumberProperties.CURRENCY_SCALE = currencyScale;
 	}
 
@@ -100,7 +103,8 @@ public class NumberProperties {
 	 *
 	 * @param roundingMode New rounding mode.
 	 */
-	public void setRoundingMode(final RoundingMode roundingMode) {
+	public void setRoundingMode(
+			final RoundingMode roundingMode) {
 		NumberProperties.ROUNDING_MODE = roundingMode;
 	}
 

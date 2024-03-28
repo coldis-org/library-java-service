@@ -1,4 +1,4 @@
-package org.coldis.library.service.validation;
+package org.coldis.library.service.helper;
 
 import org.coldis.library.helper.ExtendedValidator;
 import org.springframework.context.annotation.Bean;

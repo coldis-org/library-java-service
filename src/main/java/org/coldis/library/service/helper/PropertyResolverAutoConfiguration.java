@@ -1,4 +1,4 @@
-package org.coldis.library.service.property;
+package org.coldis.library.service.helper;
 
 import org.springframework.beans.factory.config.ConfigurableBeanFactory;
 import org.springframework.beans.factory.config.EmbeddedValueResolver;

@@ -3,7 +3,7 @@ package org.coldis.library.test.service.template;
 import java.util.Map;
 
 import org.apache.velocity.VelocityContext;
-import org.coldis.library.service.template.TemplatingService;
+import org.coldis.library.service.helper.TemplatingService;
 import org.coldis.library.test.ContainerExtension;
 import org.coldis.library.test.TestHelper;
 import org.junit.jupiter.api.Assertions;
