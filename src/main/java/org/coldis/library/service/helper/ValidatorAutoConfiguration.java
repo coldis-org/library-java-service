@@ -17,7 +17,7 @@ public class ValidatorAutoConfiguration {
 	/**
 	 * Validator.
 	 */
-	public static ExtendedValidator VALIDATOR;
+	public static ExtendedValidator VALIDATOR = new ExtendedValidator(new LocalValidatorFactoryBean());
 
 	/**
 	 * Creates the internal validator.
@@ -38,10 +38,7 @@ public class ValidatorAutoConfiguration {
 	@Bean(name = "extendedValidator")
 	public ExtendedValidator createExtendedValidator(
 			final Validator validator) {
-		// Makes sure the validator is initialized.
-		ValidatorAutoConfiguration.VALIDATOR = (ValidatorAutoConfiguration.VALIDATOR == null ? new ExtendedValidator(validator)
-				: ValidatorAutoConfiguration.VALIDATOR);
-		// Returns the validator.
+		ValidatorAutoConfiguration.VALIDATOR = new ExtendedValidator(validator);
 		return ValidatorAutoConfiguration.VALIDATOR;
 	}
 
