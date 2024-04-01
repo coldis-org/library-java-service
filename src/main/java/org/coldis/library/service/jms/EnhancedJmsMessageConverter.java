@@ -148,7 +148,7 @@ public class EnhancedJmsMessageConverter extends SimpleMessageConverter {
 	public static Observation.Scope getContext() {
 		Scope scope = EnhancedJmsMessageConverter.REGISTRY.getCurrentObservationScope();
 		if (scope == null) {
-			scope = new SimpleObservation(EnhancedJmsMessageConverter.REGISTRY).openScope();
+			scope = Observation.createNotStarted(EnhancedJmsMessageConverter.class.getName(), EnhancedJmsMessageConverter.REGISTRY).openScope();
 		}
 		return scope;
 	}
