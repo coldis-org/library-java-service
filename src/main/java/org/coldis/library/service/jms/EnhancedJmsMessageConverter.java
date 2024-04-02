@@ -2,6 +2,7 @@ package org.coldis.library.service.jms;
 
 import java.util.Arrays;
 import java.util.List;
+import java.util.Objects;
 
 import org.apache.commons.collections4.CollectionUtils;
 import org.apache.commons.collections4.EnumerationUtils;
@@ -16,7 +17,6 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Qualifier;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnClass;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.context.annotation.Primary;
@@ -43,7 +43,7 @@ import jakarta.jms.TextMessage;
 @Qualifier("enhancedJmsMessageConverter")
 @ConditionalOnClass(value = Message.class)
 @ConditionalOnProperty(
-		name = "org.coldis.configuration.jms-message-converter-enhanced-enabled",
+		name = "org.coldis.library.service.jms.message-converter-enhanced-enabled",
 		havingValue = "true",
 		matchIfMissing = true
 )
@@ -70,23 +70,10 @@ public class EnhancedJmsMessageConverter extends SimpleMessageConverter {
 	private static final String PREFERED_TYPE_PARAMETER = "preferedType";
 
 	/**
-	 * Thread attributes.
+	 * JMS converter properties.
 	 */
-	@Value(value = "#{'${org.coldis.library.service.jms.thread-attributes:}'.split(',')}")
-	private List<String> threadAttributes;
-
-	/**
-	 * Maximum async hops.
-	 */
-	@Value("${org.coldis.configuration.jms-message-converter-enhanced.maximum-async-hops:29}")
-	private Long maximumAsyncHops;
-
-	/**
-	 * If the original type should precede the DTO type when trying to convert
-	 * message.
-	 */
-	@Value("${org.coldis.configuration.jms-message-converter-enhanced.original-type-precedence:true}")
-	private Boolean originalTypePrecedence;
+	@Autowired
+	private JmsConverterProperties jmsConverterProperties;
 
 	/**
 	 * Object mapper.
@@ -105,44 +92,6 @@ public class EnhancedJmsMessageConverter extends SimpleMessageConverter {
 	 */
 	@Autowired
 	private TypableJmsMessageConverter typableJmsMessageConverter;
-
-	/**
-	 * Gets the maximumAsyncHops.
-	 *
-	 * @return The maximumAsyncHops.
-	 */
-	public Long getMaximumAsyncHops() {
-		return this.maximumAsyncHops;
-	}
-
-	/**
-	 * Sets the maximumAsyncHops.
-	 *
-	 * @param maximumAsyncHops New maximumAsyncHops.
-	 */
-	public void setMaximumAsyncHops(
-			final Long maximumAsyncHops) {
-		this.maximumAsyncHops = maximumAsyncHops;
-	}
-
-	/**
-	 * Gets the originalTypePrecedence.
-	 *
-	 * @return The originalTypePrecedence.
-	 */
-	public Boolean getOriginalTypePrecedence() {
-		return this.originalTypePrecedence;
-	}
-
-	/**
-	 * Sets the originalTypePrecedence.
-	 *
-	 * @param originalTypePrecedence New originalTypePrecedence.
-	 */
-	public void setOriginalTypePrecedence(
-			final Boolean originalTypePrecedence) {
-		this.originalTypePrecedence = originalTypePrecedence;
-	}
 
 	/** Gets the context. */
 	public static Observation.Scope getContext() {
@@ -198,7 +147,8 @@ public class EnhancedJmsMessageConverter extends SimpleMessageConverter {
 	 */
 	private void validateAsyncHops(
 			final Object payload) {
-		if ((this.maximumAsyncHops > 0) && (this.getCurrentAsyncHop() > this.maximumAsyncHops)) {
+		final Long maximumAsyncHops = this.jmsConverterProperties.getMaximumAsyncHops();
+		if ((maximumAsyncHops > 0) && (this.getCurrentAsyncHop() > maximumAsyncHops)) {
 			throw new IntegrationException(
 					new SimpleMessage("jms.async.hops.exceeded", "The maximum number of async hops was exceeded for message '" + payload + "'."));
 		}
@@ -212,7 +162,7 @@ public class EnhancedJmsMessageConverter extends SimpleMessageConverter {
 		// Adds current async hop to message.
 		message.setLongProperty(EnhancedJmsMessageConverter.CURRENT_ASYNC_HOP_PARAMETER, this.getCurrentAsyncHop());
 		// Adds thread local properties.
-		for (final String attributeName : this.threadAttributes) {
+		for (final String attributeName : this.jmsConverterProperties.getThreadAttributes()) {
 			final Object attributeValue = EnhancedJmsMessageConverter.getContextAttribute(attributeName);
 			if (attributeValue != null) {
 				message.setObjectProperty(attributeName, attributeValue);
@@ -243,7 +193,8 @@ public class EnhancedJmsMessageConverter extends SimpleMessageConverter {
 					? (List.of(payload.getClass().getName().toString(),
 							new DtoTypeMetadata(payload.getClass().getName().toString(), dtoTypeAnnotation).getQualifiedName()))
 					: dtoOriginAnnotation != null ? (List.of(dtoOriginAnnotation.originalClassName(), payload.getClass().getName().toString())) : null);
-			preferedClassesNames = ((preferedClassesNames == null) || this.originalTypePrecedence ? preferedClassesNames : preferedClassesNames.reversed());
+			preferedClassesNames = ((preferedClassesNames == null) || this.jmsConverterProperties.getOriginalTypePrecedence() ? preferedClassesNames
+					: preferedClassesNames.reversed());
 			// Serializes the payload with JSON serializer if preferred classes are
 			// reacheable.
 			if (CollectionUtils.isNotEmpty(preferedClassesNames)) {
@@ -346,7 +297,12 @@ public class EnhancedJmsMessageConverter extends SimpleMessageConverter {
 		Long currentAsyncHop = (EnumerationUtils.toList(message.getPropertyNames()).contains(EnhancedJmsMessageConverter.CURRENT_ASYNC_HOP_PARAMETER)
 				? message.getLongProperty(EnhancedJmsMessageConverter.CURRENT_ASYNC_HOP_PARAMETER)
 				: null);
-		currentAsyncHop = (currentAsyncHop == null ? 1 : currentAsyncHop + 1);
+		final String destination = Objects.toString(message.getJMSDestination());
+		final String[] destinationParts = destination.split("[\\[\\]]");
+		final String convertedDestination = (destinationParts.length > 1 ? destinationParts[1] : destination).replaceAll("/", "-");
+		if (!this.jmsConverterProperties.getMaximumAsyncHopsIgnoredFor(convertedDestination)) {
+			currentAsyncHop = (currentAsyncHop == null ? 1 : currentAsyncHop + 1);
+		}
 		EnhancedJmsMessageConverter.setContextAttribute(EnhancedJmsMessageConverter.CURRENT_ASYNC_HOP_PARAMETER, currentAsyncHop);
 		return currentAsyncHop;
 	}
@@ -359,7 +315,7 @@ public class EnhancedJmsMessageConverter extends SimpleMessageConverter {
 		// Increments the current async hop on the request.
 		this.incrementCurrentAsyncHopOnRequest(message);
 		// Adds thread local properties.
-		for (final String attributeName : this.threadAttributes) {
+		for (final String attributeName : this.jmsConverterProperties.getThreadAttributes()) {
 			final Object attributeValue = message.getObjectProperty(attributeName);
 			if (attributeValue != null) {
 				EnhancedJmsMessageConverter.setContextAttribute(attributeName, attributeValue);

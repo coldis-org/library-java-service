@@ -17,7 +17,7 @@ import jakarta.jms.Message;
 @Qualifier("simpleJmsConverter")
 @ConditionalOnClass(value = Message.class)
 @ConditionalOnProperty(
-		name = "org.coldis.configuration.jms-message-converter-simple-enabled",
+		name = "org.coldis.library.service.jms.message-converter-simple-enabled",
 		havingValue = "true",
 		matchIfMissing = false
 )
