@@ -77,7 +77,7 @@ public class JmsConfigurationHelper {
 			final Integer maxPoolSize,
 			@Value("${org.coldis.library.service.jms.listener.executor.max-size-cpu-multiplier:30}")
 			final Double maxPoolSizeCpuMultiplier,
-			@Value("${org.coldis.library.service.jms.listener.executor.queue-size:30000}")
+			@Value("${org.coldis.library.service.jms.listener.executor.queue-size:50000}")
 			final Integer queueSize,
 			@Value("${org.coldis.library.service.jms.listener.executor.keep-alive-seconds:30}")
 			final Integer keepAliveSeconds) {
