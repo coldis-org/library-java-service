@@ -71,11 +71,11 @@ public class JmsConfigurationHelper {
 			final Boolean useVirtualThreads,
 			@Value("${org.coldis.library.service.jms.listener.executor.core-size:}")
 			final Integer corePoolSize,
-			@Value("${org.coldis.library.service.jms.listener.executor.core-size-cpu-multiplier:5}")
+			@Value("${org.coldis.library.service.jms.listener.executor.core-size-cpu-multiplier:10}")
 			final Double corePoolSizeCpuMultiplier,
 			@Value("${org.coldis.library.service.jms.listener.executor.max-size:}")
 			final Integer maxPoolSize,
-			@Value("${org.coldis.library.service.jms.listener.executor.max-size-cpu-multiplier:20}")
+			@Value("${org.coldis.library.service.jms.listener.executor.max-size-cpu-multiplier:30}")
 			final Double maxPoolSizeCpuMultiplier,
 			@Value("${org.coldis.library.service.jms.listener.executor.queue-size:30000}")
 			final Integer queueSize,
