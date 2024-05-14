@@ -2,16 +2,12 @@ package org.coldis.library.service.jms;
 
 import java.util.Arrays;
 import java.util.List;
-import java.util.Objects;
 
 import org.apache.commons.collections4.CollectionUtils;
-import org.apache.commons.collections4.EnumerationUtils;
 import org.apache.commons.lang3.StringUtils;
 import org.coldis.library.dto.DtoOrigin;
 import org.coldis.library.dto.DtoType;
 import org.coldis.library.dto.DtoTypeMetadata;
-import org.coldis.library.exception.IntegrationException;
-import org.coldis.library.model.SimpleMessage;
 import org.coldis.library.serialization.ObjectMapperHelper;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -27,9 +23,6 @@ import org.springframework.util.ClassUtils;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 
-import io.micrometer.observation.Observation;
-import io.micrometer.observation.Observation.Scope;
-import io.micrometer.observation.ObservationRegistry;
 import jakarta.jms.JMSException;
 import jakarta.jms.Message;
 import jakarta.jms.Session;
@@ -53,16 +46,6 @@ public class EnhancedJmsMessageConverter extends SimpleMessageConverter {
 	 * Logger.
 	 */
 	private static final Logger LOGGER = LoggerFactory.getLogger(EnhancedJmsMessageConverter.class);
-
-	/**
-	 * Local observation scope.
-	 */
-	public static final ObservationRegistry REGISTRY = ObservationRegistry.create();
-
-	/**
-	 * Current async hop parameter.
-	 */
-	private static final String CURRENT_ASYNC_HOP_PARAMETER = "asyncHop";
 
 	/**
 	 * Prefered type parameter.
@@ -92,84 +75,6 @@ public class EnhancedJmsMessageConverter extends SimpleMessageConverter {
 	 */
 	@Autowired
 	private TypableJmsMessageConverter typableJmsMessageConverter;
-
-	/** Gets the context. */
-	public static Observation.Scope getContext() {
-		Scope scope = EnhancedJmsMessageConverter.REGISTRY.getCurrentObservationScope();
-		if (scope == null) {
-			scope = Observation.createNotStarted(EnhancedJmsMessageConverter.class.getName(), EnhancedJmsMessageConverter.REGISTRY).openScope();
-		}
-		return scope;
-	}
-
-	/**
-	 * Gets a context attribute.
-	 */
-	public static Object getContextAttribute(
-			final String name) {
-		Object attribute = null;
-		final Observation.Scope scope = EnhancedJmsMessageConverter.getContext();
-		if (scope != null) {
-			final Observation observation = scope.getCurrentObservation();
-			attribute = observation.getContext().get(name);
-		}
-		return attribute;
-	}
-
-	/**
-	 * Puts a context attribute.
-	 *
-	 * @param name  Name of the attribute.
-	 * @param value Value of the attribute.
-	 */
-	public static void setContextAttribute(
-			final String name,
-			final Object value) {
-		final Observation.Scope scope = EnhancedJmsMessageConverter.getContext();
-		if (scope != null) {
-			final Observation observation = scope.getCurrentObservation();
-			observation.getContext().put(name, value);
-		}
-	}
-
-	/**
-	 * Gets the current async hop from the request.
-	 *
-	 * @return Current async hop.
-	 */
-	private Long getCurrentAsyncHop() {
-		final Long currentAsyncHop = (Long) EnhancedJmsMessageConverter.getContextAttribute(EnhancedJmsMessageConverter.CURRENT_ASYNC_HOP_PARAMETER);
-		return (currentAsyncHop == null ? 1 : currentAsyncHop);
-	}
-
-	/**
-	 * Validates if the maximum number of async hops was exceeded.
-	 */
-	private void validateAsyncHops(
-			final Object payload) {
-		final Long maximumAsyncHops = this.jmsConverterProperties.getMaximumAsyncHops();
-		if ((maximumAsyncHops > 0) && (this.getCurrentAsyncHop() > maximumAsyncHops)) {
-			throw new IntegrationException(
-					new SimpleMessage("jms.async.hops.exceeded", "The maximum number of async hops was exceeded for message '" + payload + "'."));
-		}
-	}
-
-	/**
-	 * Adds parameters to the JMS message.
-	 */
-	private void addParametersToMessage(
-			final Message message) throws JMSException {
-		// Adds current async hop to message.
-		message.setLongProperty(EnhancedJmsMessageConverter.CURRENT_ASYNC_HOP_PARAMETER, this.getCurrentAsyncHop());
-		// Adds thread local properties.
-		for (final String attributeName : this.jmsConverterProperties.getThreadAttributes()) {
-			final Object attributeValue = EnhancedJmsMessageConverter.getContextAttribute(attributeName);
-			if (attributeValue != null) {
-				message.setObjectProperty(attributeName, attributeValue);
-			}
-		}
-
-	}
 
 	/**
 	 * @see org.springframework.jms.support.converter.SimpleMessageConverter#toMessage(java.lang.Object,
@@ -230,9 +135,6 @@ public class EnhancedJmsMessageConverter extends SimpleMessageConverter {
 			final Object payload,
 			final Session session) throws JMSException, MessageConversionException {
 
-		// Validates async hops.
-		this.validateAsyncHops(payload);
-
 		// Tries creating a message with DTO information.
 		Message message = this.toMessageUsingDtoInformation(payload, session);
 
@@ -240,8 +142,6 @@ public class EnhancedJmsMessageConverter extends SimpleMessageConverter {
 		if (message == null) {
 			message = super.toMessage(payload, session);
 		}
-		// Adds parameters to the message.
-		this.addParametersToMessage(message);
 
 		// Returns the message.
 		return message;
@@ -286,52 +186,11 @@ public class EnhancedJmsMessageConverter extends SimpleMessageConverter {
 	}
 
 	/**
-	 * Increments the current async hop from the request.
-	 *
-	 * @return              Current async hop.
-	 * @throws JMSException If the increment cannot be performed.
-	 */
-	@SuppressWarnings("unchecked")
-	private Long incrementCurrentAsyncHopOnRequest(
-			final Message message) throws JMSException {
-		Long currentAsyncHop = (EnumerationUtils.toList(message.getPropertyNames()).contains(EnhancedJmsMessageConverter.CURRENT_ASYNC_HOP_PARAMETER)
-				? message.getLongProperty(EnhancedJmsMessageConverter.CURRENT_ASYNC_HOP_PARAMETER)
-				: null);
-		final String destination = Objects.toString(message.getJMSDestination());
-		final String[] destinationParts = destination.split("[\\[\\]]");
-		final String convertedDestination = (destinationParts.length > 1 ? destinationParts[1] : destination).replaceAll("/", "-");
-		if (!this.jmsConverterProperties.getMaximumAsyncHopsIgnoredFor(convertedDestination)) {
-			currentAsyncHop = (currentAsyncHop == null ? 1 : currentAsyncHop + 1);
-		}
-		EnhancedJmsMessageConverter.setContextAttribute(EnhancedJmsMessageConverter.CURRENT_ASYNC_HOP_PARAMETER, currentAsyncHop);
-		return currentAsyncHop;
-	}
-
-	/**
-	 * Get parameters from the JMS message.
-	 */
-	private void getParametersFromMessage(
-			final Message message) throws JMSException {
-		// Increments the current async hop on the request.
-		this.incrementCurrentAsyncHopOnRequest(message);
-		// Adds thread local properties.
-		for (final String attributeName : this.jmsConverterProperties.getThreadAttributes()) {
-			final Object attributeValue = message.getObjectProperty(attributeName);
-			if (attributeValue != null) {
-				EnhancedJmsMessageConverter.setContextAttribute(attributeName, attributeValue);
-			}
-		}
-	}
-
-	/**
 	 * @see org.springframework.jms.support.converter.SimpleMessageConverter#fromMessage(jakarta.jms.Message)
 	 */
 	@Override
 	public Object fromMessage(
 			final Message message) throws JMSException, MessageConversionException {
-
-		// Gets parameters from the message.
-		this.getParametersFromMessage(message);
 
 		// Tries to convert using preferred classes.
 		Object object = this.fromMessageUsingPreferedClassesInformation(message);

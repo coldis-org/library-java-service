@@ -170,53 +170,53 @@ public class EnhancedMessageConverterTest {
 		this.jmsTemplate.convertAndSend("message/loop", message);
 	}
 
-	/**
-	 * Tests async loops.
-	 *
-	 * @throws Exception If the test fails.
-	 */
-	@Test
-	// @Disabled
-	public void testAsyncLoops() throws Exception {
-		for (int i = 0; i < 17; i++) {
-			EnhancedMessageConverterTest.asyncHops = 0L;
-			this.asyncHopsMessageId = RandomHelper.getPositiveRandomLong(Long.MAX_VALUE);
-			final DtoTestObject testMessage = new DtoTestObject(this.asyncHopsMessageId, "2", "3", 4, new int[] { 5, 6 }, 7);
-			this.jmsTemplate.convertAndSend("message/loop", testMessage);
-			TestHelper.waitUntilValid(() -> EnhancedMessageConverterTest.asyncHops, asyncHops -> asyncHops > this.jmsConverterProperties.getMaximumAsyncHops(), TestHelper.REGULAR_WAIT,
-					TestHelper.SHORT_WAIT);
-			Assertions.assertEquals(this.jmsConverterProperties.getMaximumAsyncHops(), EnhancedMessageConverterTest.asyncHops);
-		}
-	}
-
-	/**
-	 * Tests the JSON JMS message converter.
-	 *
-	 * @throws Exception If the test fails.
-	 */
-	@Test
-	@Disabled
-	public void testSendThreadAttributes() throws Exception {
-		// For each test data.
-		for (final DtoTestObject testData : EnhancedMessageConverterTest.TEST_DATA) {
-			// Generates random attributes.
-			final Long attr1 = RandomHelper.getPositiveRandomLong(Long.MAX_VALUE);
-			final Long attr2 = RandomHelper.getPositiveRandomLong(Long.MAX_VALUE);
-			final Long attr3 = RandomHelper.getPositiveRandomLong(Long.MAX_VALUE);
-			EnhancedJmsMessageConverter.setContextAttribute("testJmsAttr1", attr1);
-			EnhancedJmsMessageConverter.setContextAttribute("testJmsAttr2", attr2);
-			EnhancedJmsMessageConverter.setContextAttribute("testJmsAttr3", attr3);
-
-			this.jmsTemplate.convertAndSend("message/thread", ObjectMapperHelper.convert(this.objectMapper, testData, DtoTestObjectDto.class, true));
-			ThreadMapContextHolder.clear();
-			final Message receivedMessage = this.jmsTemplate.receive("message/thread");
-
-			Assertions.assertEquals(attr1, receivedMessage.getObjectProperty("testJmsAttr1"));
-			Assertions.assertEquals(attr2, receivedMessage.getObjectProperty("testJmsAttr2"));
-			Assertions.assertNull(receivedMessage.getObjectProperty("testJmsAttr3"));
-
-		}
-	}
+//	/**
+//	 * Tests async loops.
+//	 *
+//	 * @throws Exception If the test fails.
+//	 */
+//	@Test
+//	// @Disabled
+//	public void testAsyncLoops() throws Exception {
+//		for (int i = 0; i < 17; i++) {
+//			EnhancedMessageConverterTest.asyncHops = 0L;
+//			this.asyncHopsMessageId = RandomHelper.getPositiveRandomLong(Long.MAX_VALUE);
+//			final DtoTestObject testMessage = new DtoTestObject(this.asyncHopsMessageId, "2", "3", 4, new int[] { 5, 6 }, 7);
+//			this.jmsTemplate.convertAndSend("message/loop", testMessage);
+//			TestHelper.waitUntilValid(() -> EnhancedMessageConverterTest.asyncHops, asyncHops -> asyncHops > this.jmsConverterProperties.getMaximumAsyncHops(), TestHelper.REGULAR_WAIT,
+//					TestHelper.SHORT_WAIT);
+//			Assertions.assertEquals(this.jmsConverterProperties.getMaximumAsyncHops(), EnhancedMessageConverterTest.asyncHops);
+//		}
+//	}
+//
+//	/**
+//	 * Tests the JSON JMS message converter.
+//	 *
+//	 * @throws Exception If the test fails.
+//	 */
+//	@Test
+//	@Disabled
+//	public void testSendThreadAttributes() throws Exception {
+//		// For each test data.
+//		for (final DtoTestObject testData : EnhancedMessageConverterTest.TEST_DATA) {
+//			// Generates random attributes.
+//			final Long attr1 = RandomHelper.getPositiveRandomLong(Long.MAX_VALUE);
+//			final Long attr2 = RandomHelper.getPositiveRandomLong(Long.MAX_VALUE);
+//			final Long attr3 = RandomHelper.getPositiveRandomLong(Long.MAX_VALUE);
+//			EnhancedJmsMessageConverter.setContextAttribute("testJmsAttr1", attr1);
+//			EnhancedJmsMessageConverter.setContextAttribute("testJmsAttr2", attr2);
+//			EnhancedJmsMessageConverter.setContextAttribute("testJmsAttr3", attr3);
+//
+//			this.jmsTemplate.convertAndSend("message/thread", ObjectMapperHelper.convert(this.objectMapper, testData, DtoTestObjectDto.class, true));
+//			ThreadMapContextHolder.clear();
+//			final Message receivedMessage = this.jmsTemplate.receive("message/thread");
+//
+//			Assertions.assertEquals(attr1, receivedMessage.getObjectProperty("testJmsAttr1"));
+//			Assertions.assertEquals(attr2, receivedMessage.getObjectProperty("testJmsAttr2"));
+//			Assertions.assertNull(receivedMessage.getObjectProperty("testJmsAttr3"));
+//
+//		}
+//	}
 
 	/**
 	 * Tests the JSON JMS message converter.

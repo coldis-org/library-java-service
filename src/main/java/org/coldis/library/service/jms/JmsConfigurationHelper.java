@@ -1,7 +1,12 @@
 package org.coldis.library.service.jms;
 
+import java.util.concurrent.Executor;
+
 import org.apache.activemq.artemis.jms.client.ActiveMQConnectionFactory;
+import org.coldis.library.thread.PooledThreadExecutor;
 import org.springframework.beans.factory.ListableBeanFactory;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.autoconfigure.jms.AcknowledgeMode;
 import org.springframework.boot.autoconfigure.jms.JmsPoolConnectionFactoryFactory;
 import org.springframework.boot.autoconfigure.jms.artemis.ArtemisProperties;
@@ -10,15 +15,71 @@ import org.springframework.jms.config.DefaultJmsListenerContainerFactory;
 import org.springframework.jms.core.JmsTemplate;
 import org.springframework.jms.support.converter.MessageConverter;
 import org.springframework.jms.support.destination.DestinationResolver;
+import org.springframework.stereotype.Component;
 import org.springframework.util.backoff.ExponentialBackOff;
 
 import jakarta.jms.ConnectionFactory;
-import jakarta.jms.ExceptionListener;
 
 /**
  * JMS configuration helper.
  */
+@Component
 public class JmsConfigurationHelper {
+
+	/** JMS listener executor. */
+	private PooledThreadExecutor jmsListenerExecutor;
+
+	/** Back-off initial interval. */
+	@Value("${org.coldis.library.service.jms.listener.backoff-initial-interval:5000}")
+	private Long backoffInitialInterval;
+
+	/** Back-off multiplier. */
+	@Value("${org.coldis.library.service.jms.listener.backoff-multiplier:5}")
+	private Double backoffMultiplier;
+
+	/** Back-off max elapsed time. */
+	@Value("${org.coldis.library.service.jms.listener.backoff-max-elapsed-time:36000000}")
+	private Long backoffMaxElapsedTime;
+
+	/** DTO message converter. */
+	@Autowired(required = false)
+	private MessageConverter messageConverter;
+
+	/** JMS destination resolver. */
+	@Autowired(required = false)
+	private DestinationResolver destinationResolver;
+
+	/**
+	 * Gets the JMS listener executor.
+	 *
+	 * @return
+	 *
+	 * @return The JMS listener executor.
+	 */
+	@Autowired
+	public PooledThreadExecutor jmsListenerExecutor(
+			@Value("${org.coldis.library.service.jms.listener.executor.name:jms-listener-thread}")
+			final String name,
+			@Value("${org.coldis.library.service.jms.listener.executor.priority:4}")
+			final Integer priority,
+			@Value("${org.coldis.library.service.jms.listener.executor.use-virtual-threads:true}")
+			final Boolean useVirtualThreads,
+			@Value("${org.coldis.library.service.jms.listener.executor.core-size:1}")
+			final Integer corePoolSize,
+			@Value("${org.coldis.library.service.jms.listener.executor.max-size:}")
+			final Integer maxPoolSize,
+			@Value("${org.coldis.library.service.jms.listener.executor.max-size-cpu-multiplier:15}")
+			final Double maxPoolSizeCpuMultiplier,
+			@Value("${org.coldis.library.service.jms.listener.executor.queue-size:1000}")
+			final Integer queueSize,
+			@Value("${org.coldis.library.service.jms.listener.executor.keep-alive:23}")
+			final Integer keepAliveSeconds) {
+		this.jmsListenerExecutor = (this.jmsListenerExecutor == null
+				? new PooledThreadExecutor(name, Thread.MIN_PRIORITY + 1, false, useVirtualThreads, corePoolSize, maxPoolSize, maxPoolSizeCpuMultiplier,
+						queueSize, keepAliveSeconds)
+				: this.jmsListenerExecutor);
+		return this.jmsListenerExecutor;
+	}
 
 	/**
 	 * Creates the JMS connection factory.
@@ -27,7 +88,7 @@ public class JmsConfigurationHelper {
 	 * @param  properties  JMS properties.
 	 * @return             The JMS connection factory.
 	 */
-	public static ConnectionFactory createJmsConnectionFactory(
+	public ConnectionFactory createJmsConnectionFactory(
 			final ListableBeanFactory beanFactory,
 			final ArtemisProperties properties) {
 		final ActiveMQConnectionFactory connectionFactory = new ExtensibleArtemisConnectionFactoryFactory(beanFactory, properties)
@@ -61,18 +122,20 @@ public class JmsConfigurationHelper {
 	 * @param  backoffMaxInterval     Back-off max interval.
 	 * @return                        The JMS container factory.
 	 */
-	@Deprecated
-	public static DefaultJmsListenerContainerFactory createJmsContainerFactory(
+	public DefaultJmsListenerContainerFactory createJmsContainerFactory(
+			final Executor taskExecutor,
 			final ConnectionFactory connectionFactory,
 			final DestinationResolver destinationResolver,
 			final MessageConverter messageConverter,
-			final ExceptionListener exceptionListener,
 			final Long backoffInitialInterval,
 			final Double backoffMultiplier,
 			final Long backoffMaxElapsedTime) {
 		// Creates a new container factory.
 		final DefaultJmsListenerContainerFactory jmsContainerFactory = new DefaultJmsListenerContainerFactory();
 		// Sets the default configuration.
+		if (taskExecutor != null) {
+			jmsContainerFactory.setTaskExecutor(taskExecutor);
+		}
 		if (destinationResolver != null) {
 			jmsContainerFactory.setDestinationResolver(destinationResolver);
 		}
@@ -88,7 +151,6 @@ public class JmsConfigurationHelper {
 			backOff.setMaxElapsedTime(backoffMaxElapsedTime);
 			jmsContainerFactory.setBackOff(backOff);
 		}
-		jmsContainerFactory.setObservationRegistry(EnhancedJmsMessageConverter.REGISTRY);
 		// Returns the container factory.
 		return jmsContainerFactory;
 	}
@@ -99,20 +161,16 @@ public class JmsConfigurationHelper {
 	 * @param  connectionFactory      Connection factory.
 	 * @param  destinationResolver    Destination resolver.
 	 * @param  messageConverter       Message converter.
+	 * @param  exceptionListener      Error handler.
 	 * @param  backoffInitialInterval Back-off initial interval
 	 * @param  backoffMultiplier      Back-off multiplier.
 	 * @param  backoffMaxInterval     Back-off max interval.
 	 * @return                        The JMS container factory.
 	 */
-	public static DefaultJmsListenerContainerFactory createJmsContainerFactory(
-			final ConnectionFactory connectionFactory,
-			final DestinationResolver destinationResolver,
-			final MessageConverter messageConverter,
-			final Long backoffInitialInterval,
-			final Double backoffMultiplier,
-			final Long backoffMaxElapsedTime) {
-		return JmsConfigurationHelper.createJmsContainerFactory(connectionFactory, destinationResolver, messageConverter, null, backoffInitialInterval,
-				backoffMultiplier, backoffMaxElapsedTime);
+	public DefaultJmsListenerContainerFactory createJmsContainerFactory(
+			final ConnectionFactory connectionFactory) {
+		return this.createJmsContainerFactory(this.jmsListenerExecutor, connectionFactory, this.destinationResolver, this.messageConverter,
+				this.backoffInitialInterval, this.backoffMultiplier, this.backoffMaxElapsedTime);
 	}
 
 	/**
@@ -127,18 +185,17 @@ public class JmsConfigurationHelper {
 	 * @param  backoffMaxElapsedTime  Back-off max interval.
 	 * @return                        The JMS container factory.
 	 */
-	@Deprecated
-	public static DefaultJmsListenerContainerFactory createJmsTopicContainerFactory(
+	public DefaultJmsListenerContainerFactory createJmsTopicContainerFactory(
+			final Executor taskExecutor,
 			final ConnectionFactory connectionFactory,
 			final DestinationResolver destinationResolver,
 			final MessageConverter messageConverter,
-			final ExceptionListener exceptionListener,
 			final Long backoffInitialInterval,
 			final Double backoffMultiplier,
 			final Long backoffMaxElapsedTime) {
 		// Creates a new container factory.
-		final DefaultJmsListenerContainerFactory jmsContainerFactory = JmsConfigurationHelper.createJmsContainerFactory(connectionFactory, destinationResolver,
-				messageConverter, exceptionListener, backoffInitialInterval, backoffMultiplier, backoffMaxElapsedTime);
+		final DefaultJmsListenerContainerFactory jmsContainerFactory = this.createJmsContainerFactory(taskExecutor, connectionFactory, destinationResolver,
+				messageConverter, backoffInitialInterval, backoffMultiplier, backoffMaxElapsedTime);
 		jmsContainerFactory.setSubscriptionDurable(true);
 		jmsContainerFactory.setSubscriptionShared(true);
 		// Returns the container factory.
@@ -151,20 +208,16 @@ public class JmsConfigurationHelper {
 	 * @param  connectionFactory      Connection factory.
 	 * @param  destinationResolver    Destination resolver.
 	 * @param  messageConverter       Message converter.
+	 * @param  exceptionListener      Error handler.
 	 * @param  backoffInitialInterval Back-off initial interval
 	 * @param  backoffMultiplier      Back-off multiplier.
 	 * @param  backoffMaxElapsedTime  Back-off max interval.
 	 * @return                        The JMS container factory.
 	 */
-	public static DefaultJmsListenerContainerFactory createJmsTopicContainerFactory(
-			final ConnectionFactory connectionFactory,
-			final DestinationResolver destinationResolver,
-			final MessageConverter messageConverter,
-			final Long backoffInitialInterval,
-			final Double backoffMultiplier,
-			final Long backoffMaxElapsedTime) {
-		return JmsConfigurationHelper.createJmsTopicContainerFactory(connectionFactory, destinationResolver, messageConverter, null, backoffInitialInterval,
-				backoffMultiplier, backoffMaxElapsedTime);
+	public DefaultJmsListenerContainerFactory createJmsTopicContainerFactory(
+			final ConnectionFactory connectionFactory) {
+		return this.createJmsTopicContainerFactory(this.jmsListenerExecutor, connectionFactory, this.destinationResolver, this.messageConverter,
+				this.backoffInitialInterval, this.backoffMultiplier, this.backoffMaxElapsedTime);
 	}
 
 	/**
@@ -175,7 +228,7 @@ public class JmsConfigurationHelper {
 	 * @param  messageConverter    Message converter.
 	 * @return                     The JMS template.
 	 */
-	public static JmsTemplate createJmsTemplate(
+	public JmsTemplate createJmsTemplate(
 			final ConnectionFactory connectionFactory,
 			final DestinationResolver destinationResolver,
 			final MessageConverter messageConverter) {
@@ -198,20 +251,42 @@ public class JmsConfigurationHelper {
 	/**
 	 * Creates the JMS template.
 	 *
+	 * @param  connectionFactory Connection factory.
+	 * @return                   The JMS template.
+	 */
+	public JmsTemplate createJmsTemplate(
+			final ConnectionFactory connectionFactory) {
+		return this.createJmsTemplate(connectionFactory, this.destinationResolver, this.messageConverter);
+	}
+
+	/**
+	 * Creates the JMS template.
+	 *
 	 * @param  connectionFactory   Connection factory.
 	 * @param  destinationResolver Destination resolver.
 	 * @param  messageConverter    Message converter.
 	 * @return                     The JMS template.
 	 */
-	public static JmsTemplate createJmsTopicTemplate(
+	public JmsTemplate createJmsTopicTemplate(
 			final ConnectionFactory connectionFactory,
 			final DestinationResolver destinationResolver,
 			final MessageConverter messageConverter) {
 		// Creates the JMS template.
-		final JmsTemplate jmsTemplate = JmsConfigurationHelper.createJmsTemplate(connectionFactory, destinationResolver, messageConverter);
+		final JmsTemplate jmsTemplate = this.createJmsTemplate(connectionFactory, destinationResolver, messageConverter);
 		jmsTemplate.setPubSubDomain(true);
 		// Returns the configured JMS template.
 		return jmsTemplate;
+	}
+
+	/**
+	 * Creates the JMS template.
+	 *
+	 * @param  connectionFactory Connection factory.
+	 * @return                   The JMS template.
+	 */
+	public JmsTemplate createJmsTopicTemplate(
+			final ConnectionFactory connectionFactory) {
+		return this.createJmsTopicTemplate(connectionFactory, this.destinationResolver, this.messageConverter);
 	}
 
 }

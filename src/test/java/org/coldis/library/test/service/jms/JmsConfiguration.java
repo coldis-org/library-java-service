@@ -11,8 +11,6 @@ import org.springframework.context.annotation.Import;
 import org.springframework.jms.annotation.EnableJms;
 import org.springframework.jms.config.DefaultJmsListenerContainerFactory;
 import org.springframework.jms.core.JmsTemplate;
-import org.springframework.jms.support.converter.MessageConverter;
-import org.springframework.jms.support.destination.DestinationResolver;
 import org.springframework.stereotype.Component;
 
 import jakarta.jms.ConnectionFactory;
@@ -25,21 +23,13 @@ import jakarta.jms.ConnectionFactory;
 @Import(value = { ExtendedArtemisConfiguration.class })
 public class JmsConfiguration {
 
-	/**
-	 * Message converter.
-	 */
-	@Autowired(required = false)
-	private MessageConverter messageConverter;
+	/** JMS configuration helper. */
+	@Autowired
+	private JmsConfigurationHelper jmsConfigurationHelper;
 
-	/**
-	 * JMS destination resolver.
-	 */
-	@Autowired(required = false)
-	private DestinationResolver destinationResolver;
-
+	/** JMS properties. */
 	@Component
 	public class TestArtemisProperties extends ExtendedArtemisProperties {
-
 	}
 
 	/**
@@ -53,7 +43,7 @@ public class JmsConfiguration {
 	public ConnectionFactory createJmsConnectionFactory(
 			final ListableBeanFactory beanFactory,
 			final ExtendedArtemisProperties properties) {
-		return JmsConfigurationHelper.createJmsConnectionFactory(beanFactory, properties);
+		return this.jmsConfigurationHelper.createJmsConnectionFactory(beanFactory, properties);
 	}
 
 	/**
@@ -65,8 +55,7 @@ public class JmsConfiguration {
 	@Bean(name = "testJmsContainerFactory")
 	public DefaultJmsListenerContainerFactory createJmsContainerFactory(
 			final ConnectionFactory connectionFactory) {
-		return JmsConfigurationHelper.createJmsContainerFactory(connectionFactory, this.destinationResolver, this.messageConverter, 3000L, 5D,
-				1000L * 60L * 60L * 17L);
+		return this.jmsConfigurationHelper.createJmsContainerFactory(connectionFactory);
 	}
 
 	/**
@@ -78,7 +67,7 @@ public class JmsConfiguration {
 	@Bean
 	public JmsTemplate createJmsTemplate(
 			final ConnectionFactory connectionFactory) {
-		return JmsConfigurationHelper.createJmsTemplate(connectionFactory, this.destinationResolver, this.messageConverter);
+		return this.jmsConfigurationHelper.createJmsTemplate(connectionFactory);
 	}
 
 }
