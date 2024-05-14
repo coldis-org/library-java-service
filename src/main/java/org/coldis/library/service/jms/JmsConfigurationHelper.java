@@ -1,5 +1,6 @@
 package org.coldis.library.service.jms;
 
+import java.time.Duration;
 import java.util.concurrent.Executor;
 
 import org.apache.activemq.artemis.jms.client.ActiveMQConnectionFactory;
@@ -28,6 +29,10 @@ public class JmsConfigurationHelper {
 
 	/** JMS listener executor. */
 	private PooledThreadExecutor jmsListenerExecutor;
+
+	/** Back-off initial interval. */
+	@Value("${org.coldis.library.service.jms.listener.max-messages-per-task:100}")
+	private Integer maxMessagesPerTask;
 
 	/** Back-off initial interval. */
 	@Value("${org.coldis.library.service.jms.listener.backoff-initial-interval:5000}")
@@ -64,19 +69,21 @@ public class JmsConfigurationHelper {
 			final Integer priority,
 			@Value("${org.coldis.library.service.jms.listener.executor.use-virtual-threads:true}")
 			final Boolean useVirtualThreads,
-			@Value("${org.coldis.library.service.jms.listener.executor.core-size:1}")
+			@Value("${org.coldis.library.service.jms.listener.executor.core-size:}")
 			final Integer corePoolSize,
+			@Value("${org.coldis.library.service.jms.listener.executor.core-size-cpu-multiplier:5}")
+			final Double corePoolSizeCpuMultiplier,
 			@Value("${org.coldis.library.service.jms.listener.executor.max-size:}")
 			final Integer maxPoolSize,
-			@Value("${org.coldis.library.service.jms.listener.executor.max-size-cpu-multiplier:15}")
+			@Value("${org.coldis.library.service.jms.listener.executor.max-size-cpu-multiplier:20}")
 			final Double maxPoolSizeCpuMultiplier,
 			@Value("${org.coldis.library.service.jms.listener.executor.queue-size:1000}")
 			final Integer queueSize,
-			@Value("${org.coldis.library.service.jms.listener.executor.keep-alive:23}")
+			@Value("${org.coldis.library.service.jms.listener.executor.keep-alive-seconds:30}")
 			final Integer keepAliveSeconds) {
 		this.jmsListenerExecutor = (this.jmsListenerExecutor == null
-				? new PooledThreadExecutor(name, Thread.MIN_PRIORITY + 1, false, useVirtualThreads, corePoolSize, maxPoolSize, maxPoolSizeCpuMultiplier,
-						queueSize, keepAliveSeconds)
+				? new PooledThreadExecutor(name, priority, false, useVirtualThreads, corePoolSize, corePoolSizeCpuMultiplier, maxPoolSize,
+						maxPoolSizeCpuMultiplier, queueSize, Duration.ofSeconds(keepAliveSeconds))
 				: this.jmsListenerExecutor);
 		return this.jmsListenerExecutor;
 	}
@@ -127,6 +134,7 @@ public class JmsConfigurationHelper {
 			final ConnectionFactory connectionFactory,
 			final DestinationResolver destinationResolver,
 			final MessageConverter messageConverter,
+			final Integer maxMessagesPerTask,
 			final Long backoffInitialInterval,
 			final Double backoffMultiplier,
 			final Long backoffMaxElapsedTime) {
@@ -135,6 +143,7 @@ public class JmsConfigurationHelper {
 		// Sets the default configuration.
 		if (taskExecutor != null) {
 			jmsContainerFactory.setTaskExecutor(taskExecutor);
+			jmsContainerFactory.setMaxMessagesPerTask(maxMessagesPerTask);
 		}
 		if (destinationResolver != null) {
 			jmsContainerFactory.setDestinationResolver(destinationResolver);
@@ -170,7 +179,7 @@ public class JmsConfigurationHelper {
 	public DefaultJmsListenerContainerFactory createJmsContainerFactory(
 			final ConnectionFactory connectionFactory) {
 		return this.createJmsContainerFactory(this.jmsListenerExecutor, connectionFactory, this.destinationResolver, this.messageConverter,
-				this.backoffInitialInterval, this.backoffMultiplier, this.backoffMaxElapsedTime);
+				this.maxMessagesPerTask, this.backoffInitialInterval, this.backoffMultiplier, this.backoffMaxElapsedTime);
 	}
 
 	/**
@@ -190,12 +199,13 @@ public class JmsConfigurationHelper {
 			final ConnectionFactory connectionFactory,
 			final DestinationResolver destinationResolver,
 			final MessageConverter messageConverter,
+			final Integer maxMessagesPerTask,
 			final Long backoffInitialInterval,
 			final Double backoffMultiplier,
 			final Long backoffMaxElapsedTime) {
 		// Creates a new container factory.
 		final DefaultJmsListenerContainerFactory jmsContainerFactory = this.createJmsContainerFactory(taskExecutor, connectionFactory, destinationResolver,
-				messageConverter, backoffInitialInterval, backoffMultiplier, backoffMaxElapsedTime);
+				messageConverter, maxMessagesPerTask, backoffInitialInterval, backoffMultiplier, backoffMaxElapsedTime);
 		jmsContainerFactory.setSubscriptionDurable(true);
 		jmsContainerFactory.setSubscriptionShared(true);
 		// Returns the container factory.
@@ -217,7 +227,7 @@ public class JmsConfigurationHelper {
 	public DefaultJmsListenerContainerFactory createJmsTopicContainerFactory(
 			final ConnectionFactory connectionFactory) {
 		return this.createJmsTopicContainerFactory(this.jmsListenerExecutor, connectionFactory, this.destinationResolver, this.messageConverter,
-				this.backoffInitialInterval, this.backoffMultiplier, this.backoffMaxElapsedTime);
+				this.maxMessagesPerTask, this.backoffInitialInterval, this.backoffMultiplier, this.backoffMaxElapsedTime);
 	}
 
 	/**
