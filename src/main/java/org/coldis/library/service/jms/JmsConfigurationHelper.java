@@ -31,7 +31,7 @@ public class JmsConfigurationHelper {
 	private PooledThreadExecutor jmsListenerExecutor;
 
 	/** Back-off initial interval. */
-	@Value("${org.coldis.library.service.jms.listener.max-messages-per-task:100}")
+	@Value("${org.coldis.library.service.jms.listener.max-messages-per-task:300}")
 	private Integer maxMessagesPerTask;
 
 	/** Back-off initial interval. */
@@ -77,7 +77,7 @@ public class JmsConfigurationHelper {
 			final Integer maxPoolSize,
 			@Value("${org.coldis.library.service.jms.listener.executor.max-size-cpu-multiplier:20}")
 			final Double maxPoolSizeCpuMultiplier,
-			@Value("${org.coldis.library.service.jms.listener.executor.queue-size:1000}")
+			@Value("${org.coldis.library.service.jms.listener.executor.queue-size:30000}")
 			final Integer queueSize,
 			@Value("${org.coldis.library.service.jms.listener.executor.keep-alive-seconds:30}")
 			final Integer keepAliveSeconds) {
