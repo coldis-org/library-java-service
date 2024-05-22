@@ -2,6 +2,7 @@ package org.coldis.library.test.service.exception;
 
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
+import java.util.Arrays;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
@@ -136,7 +137,7 @@ MediaType.APPLICATION_JSON_VALUE);
 			}
 		}
 		// If the parameter is not a collection nor an array.
-		else {
+		else if (code != null) {
 			// Adds the URI parameter to the map.
 			uriParameters.put("code", code);
 			path.append("code={code}&");
@@ -162,7 +163,7 @@ MediaType.APPLICATION_JSON_VALUE);
 			}
 		}
 		// If the parameter is not a collection nor an array.
-		else {
+		else if (parameters != null) {
 			// Adds the URI parameter to the map.
 			uriParameters.put("parameters", parameters);
 			path.append("parameters={parameters}&");
@@ -222,7 +223,7 @@ MediaType.APPLICATION_JSON_VALUE);
 			}
 		}
 		// If the parameter is not a collection nor an array.
-		else {
+		else if (code != null) {
 			// Adds the URI parameter to the map.
 			uriParameters.put("code", code);
 			path.append("code={code}&");
@@ -248,7 +249,7 @@ MediaType.APPLICATION_JSON_VALUE);
 			}
 		}
 		// If the parameter is not a collection nor an array.
-		else {
+		else if (parameters != null) {
 			// Adds the URI parameter to the map.
 			uriParameters.put("parameters", parameters);
 			path.append("parameters={parameters}&");
