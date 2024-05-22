@@ -43,6 +43,10 @@ public class JmsConfigurationHelper {
 	private Double backoffMultiplier;
 
 	/** Back-off max elapsed time. */
+	@Value("${org.coldis.library.service.jms.listener.cache-level:3}")
+	private Integer cacheLevel;
+
+	/** Back-off max elapsed time. */
 	@Value("${org.coldis.library.service.jms.listener.backoff-max-elapsed-time:36000000}")
 	private Long backoffMaxElapsedTime;
 
@@ -134,6 +138,7 @@ public class JmsConfigurationHelper {
 			final ConnectionFactory connectionFactory,
 			final DestinationResolver destinationResolver,
 			final MessageConverter messageConverter,
+			final Integer cacheLevel,
 			final Integer maxMessagesPerTask,
 			final Long backoffInitialInterval,
 			final Double backoffMultiplier,
@@ -150,6 +155,9 @@ public class JmsConfigurationHelper {
 		}
 		if (messageConverter != null) {
 			jmsContainerFactory.setMessageConverter(messageConverter);
+		}
+		if (cacheLevel != null) {
+			jmsContainerFactory.setCacheLevel(cacheLevel);
 		}
 		jmsContainerFactory.setConnectionFactory(connectionFactory);
 		jmsContainerFactory.setSessionTransacted(true);
@@ -178,7 +186,7 @@ public class JmsConfigurationHelper {
 	 */
 	public DefaultJmsListenerContainerFactory createJmsContainerFactory(
 			final ConnectionFactory connectionFactory) {
-		return this.createJmsContainerFactory(this.jmsListenerExecutor, connectionFactory, this.destinationResolver, this.messageConverter,
+		return this.createJmsContainerFactory(this.jmsListenerExecutor, connectionFactory, this.destinationResolver, this.messageConverter, this.cacheLevel,
 				this.maxMessagesPerTask, this.backoffInitialInterval, this.backoffMultiplier, this.backoffMaxElapsedTime);
 	}
 
@@ -199,13 +207,14 @@ public class JmsConfigurationHelper {
 			final ConnectionFactory connectionFactory,
 			final DestinationResolver destinationResolver,
 			final MessageConverter messageConverter,
+			final Integer cacheLevel,
 			final Integer maxMessagesPerTask,
 			final Long backoffInitialInterval,
 			final Double backoffMultiplier,
 			final Long backoffMaxElapsedTime) {
 		// Creates a new container factory.
 		final DefaultJmsListenerContainerFactory jmsContainerFactory = this.createJmsContainerFactory(taskExecutor, connectionFactory, destinationResolver,
-				messageConverter, maxMessagesPerTask, backoffInitialInterval, backoffMultiplier, backoffMaxElapsedTime);
+				messageConverter, cacheLevel, maxMessagesPerTask, backoffInitialInterval, backoffMultiplier, backoffMaxElapsedTime);
 		jmsContainerFactory.setSubscriptionDurable(true);
 		jmsContainerFactory.setSubscriptionShared(true);
 		// Returns the container factory.
@@ -227,7 +236,7 @@ public class JmsConfigurationHelper {
 	public DefaultJmsListenerContainerFactory createJmsTopicContainerFactory(
 			final ConnectionFactory connectionFactory) {
 		return this.createJmsTopicContainerFactory(this.jmsListenerExecutor, connectionFactory, this.destinationResolver, this.messageConverter,
-				this.maxMessagesPerTask, this.backoffInitialInterval, this.backoffMultiplier, this.backoffMaxElapsedTime);
+				this.cacheLevel, this.maxMessagesPerTask, this.backoffInitialInterval, this.backoffMultiplier, this.backoffMaxElapsedTime);
 	}
 
 	/**
