@@ -31,7 +31,7 @@ public class JmsConfigurationHelper {
 	private PooledThreadExecutor jmsListenerExecutor;
 
 	/** Back-off initial interval. */
-	@Value("${org.coldis.library.service.jms.listener.max-messages-per-task:500}")
+	@Value("${org.coldis.library.service.jms.listener.max-messages-per-task:5}")
 	private Integer maxMessagesPerTask;
 
 	/** Back-off initial interval. */
@@ -58,6 +58,7 @@ public class JmsConfigurationHelper {
 	@Autowired(required = false)
 	private DestinationResolver destinationResolver;
 
+	
 	/**
 	 * Gets the JMS listener executor.
 	 *
@@ -71,7 +72,7 @@ public class JmsConfigurationHelper {
 			final String name,
 			@Value("${org.coldis.library.service.jms.listener.executor.priority:4}")
 			final Integer priority,
-			@Value("${org.coldis.library.service.jms.listener.executor.use-virtual-threads:true}")
+			@Value("${org.coldis.library.service.jms.listener.executor.use-virtual-threads:false}")
 			final Boolean useVirtualThreads,
 			@Value("${org.coldis.library.service.jms.listener.executor.core-size:}")
 			final Integer corePoolSize,
