@@ -19,6 +19,8 @@ public class ExtendedArtemisProperties extends ArtemisProperties {
 	private Boolean cacheDestinations;
 
 	private Boolean cacheLargeMessagesClient;
+	
+	private Integer consumerWindowSize;
 
 	private Long clientFailureCheckPeriod;
 
@@ -84,7 +86,26 @@ public class ExtendedArtemisProperties extends ArtemisProperties {
 			final Boolean cacheLargeMessagesClient) {
 		this.cacheLargeMessagesClient = cacheLargeMessagesClient;
 	}
+	
+	/**
+	 * Gets the consumerWindowSize.
+	 *
+	 * @return The consumerWindowSize.
+	 */
+	public Integer getConsumerWindowSize() {
+		return this.consumerWindowSize;
+	}
 
+	/**
+	 * Sets the consumerWindowSize.
+	 *
+	 * @param consumerWindowSize New consumerWindowSize.
+	 */
+	public void setConsumerWindowSize(
+            final Integer consumerWindowSize) {
+		this.consumerWindowSize = consumerWindowSize;
+	}
+	
 	/**
 	 * Gets the clientFailureCheckPeriod.
 	 *

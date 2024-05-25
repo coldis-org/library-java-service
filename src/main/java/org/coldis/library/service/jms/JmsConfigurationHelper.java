@@ -179,6 +179,8 @@ public class JmsConfigurationHelper {
 				getter,
 				sourceValue,
 				targetValue) -> sourceValue != null);
+		connectionFactory.setConsumerWindowSize(
+				actualProperties.getConsumerWindowSize() == null ? connectionFactory.getConsumerWindowSize() : actualProperties.getConsumerWindowSize());
 		connectionFactory
 				.setUseGlobalPools(actualProperties.getUseGlobalPools() == null ? connectionFactory.isUseGlobalPools() : actualProperties.getUseGlobalPools());
 		connectionFactory.setCacheDestinations(
