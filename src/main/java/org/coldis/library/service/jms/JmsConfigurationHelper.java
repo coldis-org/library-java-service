@@ -2,11 +2,16 @@ package org.coldis.library.service.jms;
 
 import java.time.Duration;
 import java.util.concurrent.Executor;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.ScheduledExecutorService;
 
+import org.apache.activemq.artemis.api.core.client.ActiveMQClient;
 import org.apache.activemq.artemis.jms.client.ActiveMQConnectionFactory;
-import org.coldis.library.thread.PooledThreadExecutor;
+import org.coldis.library.helper.ObjectHelper;
+import org.coldis.library.thread.DynamicPooledThreadExecutor;
 import org.springframework.beans.factory.ListableBeanFactory;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.autoconfigure.jms.AcknowledgeMode;
 import org.springframework.boot.autoconfigure.jms.JmsPoolConnectionFactoryFactory;
@@ -27,8 +32,14 @@ import jakarta.jms.ConnectionFactory;
 @Component
 public class JmsConfigurationHelper {
 
+	/** JMS global thread pool. */
+	private ExecutorService globalThreadPool;
+
+	/** JMS global scheduled thread pool. */
+	private ScheduledExecutorService globalScheduledThreadPool;
+
 	/** JMS listener executor. */
-	private PooledThreadExecutor jmsListenerExecutor;
+	private ExecutorService jmsListenerExecutor;
 
 	/** Back-off initial interval. */
 	@Value("${org.coldis.library.service.jms.listener.max-messages-per-task:5}")
@@ -50,6 +61,13 @@ public class JmsConfigurationHelper {
 	@Value("${org.coldis.library.service.jms.listener.backoff-max-elapsed-time:36000000}")
 	private Long backoffMaxElapsedTime;
 
+	/**
+	 * Default Artemis properties.
+	 */
+	@Autowired
+	@Qualifier("defaultArtemisProperties")
+	private ExtendedArtemisProperties defaultProperties;
+
 	/** DTO message converter. */
 	@Autowired(required = false)
 	private MessageConverter messageConverter;
@@ -58,7 +76,6 @@ public class JmsConfigurationHelper {
 	@Autowired(required = false)
 	private DestinationResolver destinationResolver;
 
-	
 	/**
 	 * Gets the JMS listener executor.
 	 *
@@ -67,13 +84,62 @@ public class JmsConfigurationHelper {
 	 * @return The JMS listener executor.
 	 */
 	@Autowired
-	public PooledThreadExecutor jmsListenerExecutor(
+	public void setJmsGlobalThreadPools(
+			@Value("${org.coldis.library.service.jms.global.executor.name:jms-global-thread}")
+			final String name,
+			@Value("${org.coldis.library.service.jms.global.executor.priority:5}")
+			final Integer priority,
+			@Value("${org.coldis.library.service.jms.global.executor.use-virtual-threads:false}")
+			final Boolean virtual,
+			@Value("${org.coldis.library.service.jms.global.executor.core-size:}")
+			final Integer corePoolSize,
+			@Value("${org.coldis.library.service.jms.global.executor.core-size-cpu-multiplier:10}")
+			final Double corePoolSizeCpuMultiplier,
+			@Value("${org.coldis.library.service.jms.global.executor.max-size:}")
+			final Integer maxPoolSize,
+			@Value("${org.coldis.library.service.jms.global.executor.max-size-cpu-multiplier:50}")
+			final Double maxPoolSizeCpuMultiplier,
+			@Value("${org.coldis.library.service.jms.global.executor.queue-size:100000}")
+			final Integer queueSize,
+			@Value("${org.coldis.library.service.jms.global.executor.keep-alive-seconds:30}")
+			final Integer keepAliveSeconds,
+			@Value("${org.coldis.library.service.jms.global.scheduled.executor.name:jms-global-thread}")
+			final String scheduledName,
+			@Value("${org.coldis.library.service.jms.global.scheduled.executor.priority:5}")
+			final Integer scheduledPriority,
+			@Value("${org.coldis.library.service.jms.global.scheduled.executor.use-virtual-threads:false}")
+			final Boolean scheduledVirtual,
+			@Value("${org.coldis.library.service.jms.global.scheduled.executor.core-size:}")
+			final Integer scheduledCorePoolSize,
+			@Value("${org.coldis.library.service.jms.global.scheduled.executor.core-size-cpu-multiplier:7}")
+			final Double scheduledCorePoolSizeCpuMultiplier) {
+		this.globalThreadPool = (this.globalThreadPool == null
+				? new DynamicPooledThreadExecutor(name, priority, false, virtual, false, corePoolSize, corePoolSizeCpuMultiplier, maxPoolSize,
+						maxPoolSizeCpuMultiplier, queueSize, Duration.ofSeconds(keepAliveSeconds))
+				: this.globalThreadPool);
+		this.globalScheduledThreadPool = (this.globalScheduledThreadPool == null
+				? new DynamicPooledThreadExecutor(scheduledName, scheduledPriority, false, scheduledVirtual, true, scheduledCorePoolSize,
+						scheduledCorePoolSizeCpuMultiplier, scheduledCorePoolSize, scheduledCorePoolSizeCpuMultiplier, null, null)
+				: this.globalScheduledThreadPool);
+		ActiveMQClient.injectPools(this.globalThreadPool, this.globalScheduledThreadPool);
+
+	}
+
+	/**
+	 * Gets the JMS listener executor.
+	 *
+	 * @return
+	 *
+	 * @return The JMS listener executor.
+	 */
+	@Autowired
+	public void setJmsListenerExecutor(
 			@Value("${org.coldis.library.service.jms.listener.executor.name:jms-listener-thread}")
 			final String name,
 			@Value("${org.coldis.library.service.jms.listener.executor.priority:4}")
 			final Integer priority,
-			@Value("${org.coldis.library.service.jms.listener.executor.use-virtual-threads:false}")
-			final Boolean useVirtualThreads,
+			@Value("${org.coldis.library.service.jms.listener.executor.virtual:false}")
+			final Boolean virtual,
 			@Value("${org.coldis.library.service.jms.listener.executor.core-size:}")
 			final Integer corePoolSize,
 			@Value("${org.coldis.library.service.jms.listener.executor.core-size-cpu-multiplier:10}")
@@ -87,10 +153,9 @@ public class JmsConfigurationHelper {
 			@Value("${org.coldis.library.service.jms.listener.executor.keep-alive-seconds:30}")
 			final Integer keepAliveSeconds) {
 		this.jmsListenerExecutor = (this.jmsListenerExecutor == null
-				? new PooledThreadExecutor(name, priority, false, useVirtualThreads, corePoolSize, corePoolSizeCpuMultiplier, maxPoolSize,
+				? new DynamicPooledThreadExecutor(name, priority, false, virtual, false, corePoolSize, corePoolSizeCpuMultiplier, maxPoolSize,
 						maxPoolSizeCpuMultiplier, queueSize, Duration.ofSeconds(keepAliveSeconds))
 				: this.jmsListenerExecutor);
-		return this.jmsListenerExecutor;
 	}
 
 	/**
@@ -105,19 +170,28 @@ public class JmsConfigurationHelper {
 			final ArtemisProperties properties) {
 		final ActiveMQConnectionFactory connectionFactory = new ExtensibleArtemisConnectionFactoryFactory(beanFactory, properties)
 				.createConnectionFactory(ActiveMQConnectionFactory.class);
-		// If extended properties are used, also sets extended parameters.
-		if (properties instanceof ExtendedArtemisProperties) {
-			final ExtendedArtemisProperties extendedProperties = (ExtendedArtemisProperties) properties;
-			connectionFactory
-					.setClientFailureCheckPeriod(extendedProperties.getClientFailureCheckPeriod() == null ? connectionFactory.getClientFailureCheckPeriod()
-							: extendedProperties.getClientFailureCheckPeriod());
-			connectionFactory.setConnectionTTL(
-					extendedProperties.getConnectionTTL() == null ? connectionFactory.getConnectionTTL() : extendedProperties.getConnectionTTL());
-			connectionFactory
-					.setCallTimeout(extendedProperties.getCallTimeout() == null ? connectionFactory.getCallTimeout() : extendedProperties.getCallTimeout());
-			connectionFactory.setCallFailoverTimeout(extendedProperties.getCallFailoverTimeout() == null ? connectionFactory.getCallFailoverTimeout()
-					: extendedProperties.getCallFailoverTimeout());
-		}
+		final ExtendedArtemisProperties actualProperties = new ExtendedArtemisProperties();
+		ObjectHelper.copyAttributes(this.defaultProperties, actualProperties, true, true, null, (
+				getter,
+				sourceValue,
+				targetValue) -> sourceValue != null);
+		ObjectHelper.copyAttributes(properties, actualProperties, true, true, null, (
+				getter,
+				sourceValue,
+				targetValue) -> sourceValue != null);
+		connectionFactory
+				.setUseGlobalPools(actualProperties.getUseGlobalPools() == null ? connectionFactory.isUseGlobalPools() : actualProperties.getUseGlobalPools());
+		connectionFactory.setCacheDestinations(
+				actualProperties.getCacheDestinations() == null ? connectionFactory.isCacheDestinations() : actualProperties.getCacheDestinations());
+		connectionFactory.setCacheLargeMessagesClient(actualProperties.getCacheLargeMessagesClient() == null ? connectionFactory.isCacheLargeMessagesClient()
+				: actualProperties.getCacheLargeMessagesClient());
+		connectionFactory.setClientFailureCheckPeriod(actualProperties.getClientFailureCheckPeriod() == null ? connectionFactory.getClientFailureCheckPeriod()
+				: actualProperties.getClientFailureCheckPeriod());
+		connectionFactory
+				.setConnectionTTL(actualProperties.getConnectionTTL() == null ? connectionFactory.getConnectionTTL() : actualProperties.getConnectionTTL());
+		connectionFactory.setCallTimeout(actualProperties.getCallTimeout() == null ? connectionFactory.getCallTimeout() : actualProperties.getCallTimeout());
+		connectionFactory.setCallFailoverTimeout(
+				actualProperties.getCallFailoverTimeout() == null ? connectionFactory.getCallFailoverTimeout() : actualProperties.getCallFailoverTimeout());
 		// Returns the pooled connection factory;
 		return new JmsPoolConnectionFactoryFactory(properties.getPool()).createPooledConnectionFactory(connectionFactory);
 	}

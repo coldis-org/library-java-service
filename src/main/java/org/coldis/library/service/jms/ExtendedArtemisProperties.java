@@ -1,13 +1,24 @@
 package org.coldis.library.service.jms;
 
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.boot.autoconfigure.jms.artemis.ArtemisProperties;
 import org.springframework.boot.context.properties.ConfigurationProperties;
+import org.springframework.context.annotation.Configuration;
+import org.springframework.stereotype.Component;
 
 /**
  * Artemis properties.
  */
+@Component
+@Qualifier("defaultArtemisProperties")
 @ConfigurationProperties(prefix = "spring.artemis")
 public class ExtendedArtemisProperties extends ArtemisProperties {
+
+	private Boolean useGlobalPools;
+
+	private Boolean cacheDestinations;
+
+	private Boolean cacheLargeMessagesClient;
 
 	private Long clientFailureCheckPeriod;
 
@@ -16,6 +27,63 @@ public class ExtendedArtemisProperties extends ArtemisProperties {
 	private Long callTimeout;
 
 	private Long callFailoverTimeout;
+
+	/**
+	 * Gets the useGlobalPools.
+	 *
+	 * @return The useGlobalPools.
+	 */
+	public Boolean getUseGlobalPools() {
+		return this.useGlobalPools;
+	}
+
+	/**
+	 * Sets the useGlobalPools.
+	 *
+	 * @param useGlobalPools New useGlobalPools.
+	 */
+	public void setUseGlobalPools(
+			final Boolean useGlobalPools) {
+		this.useGlobalPools = useGlobalPools;
+	}
+
+	/**
+	 * Gets the cacheDestinations.
+	 *
+	 * @return The cacheDestinations.
+	 */
+	public Boolean getCacheDestinations() {
+		return this.cacheDestinations;
+	}
+
+	/**
+	 * Sets the cacheDestinations.
+	 *
+	 * @param cacheDestinations New cacheDestinations.
+	 */
+	public void setCacheDestinations(
+			final Boolean cacheDestinations) {
+		this.cacheDestinations = cacheDestinations;
+	}
+
+	/**
+	 * Gets the cacheLargeMessagesClient.
+	 *
+	 * @return The cacheLargeMessagesClient.
+	 */
+	public Boolean getCacheLargeMessagesClient() {
+		return this.cacheLargeMessagesClient;
+	}
+
+	/**
+	 * Sets the cacheLargeMessagesClient.
+	 *
+	 * @param cacheLargeMessagesClient New cacheLargeMessagesClient.
+	 */
+	public void setCacheLargeMessagesClient(
+			final Boolean cacheLargeMessagesClient) {
+		this.cacheLargeMessagesClient = cacheLargeMessagesClient;
+	}
 
 	/**
 	 * Gets the clientFailureCheckPeriod.

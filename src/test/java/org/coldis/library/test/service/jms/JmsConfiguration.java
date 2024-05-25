@@ -9,6 +9,7 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.context.annotation.Import;
+import org.springframework.context.annotation.Primary;
 import org.springframework.jms.annotation.EnableJms;
 import org.springframework.jms.config.DefaultJmsListenerContainerFactory;
 import org.springframework.jms.core.JmsTemplate;
@@ -27,11 +28,6 @@ public class JmsConfiguration {
 	/** JMS configuration helper. */
 	@Autowired
 	private JmsConfigurationHelper jmsConfigurationHelper;
-
-	/** JMS properties. */
-	@Component
-	public class TestArtemisProperties extends ExtendedArtemisProperties {
-	}
 
 	/**
 	 * Creates the JMS connection factory.
