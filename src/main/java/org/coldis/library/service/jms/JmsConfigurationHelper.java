@@ -8,7 +8,7 @@ import java.util.concurrent.ScheduledExecutorService;
 import org.apache.activemq.artemis.api.core.client.ActiveMQClient;
 import org.apache.activemq.artemis.jms.client.ActiveMQConnectionFactory;
 import org.coldis.library.helper.ObjectHelper;
-import org.coldis.library.thread.DynamicPooledThreadExecutor;
+import org.coldis.library.thread.DynamicThreadPoolFactory;
 import org.springframework.beans.factory.ListableBeanFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Qualifier;
@@ -91,6 +91,10 @@ public class JmsConfigurationHelper {
 			final Integer priority,
 			@Value("${org.coldis.library.service.jms.global.executor.use-virtual-threads:false}")
 			final Boolean virtual,
+			@Value("${org.coldis.library.service.jms.global.executor.parallelism:}")
+			final Integer parallelism,
+			@Value("${org.coldis.library.service.jms.global.executor.parallelism-cpu-multiplier:10}")
+			final Double parallelismCpuMultiplier,
 			@Value("${org.coldis.library.service.jms.global.executor.core-size:}")
 			final Integer corePoolSize,
 			@Value("${org.coldis.library.service.jms.global.executor.core-size-cpu-multiplier:10}")
@@ -99,9 +103,7 @@ public class JmsConfigurationHelper {
 			final Integer maxPoolSize,
 			@Value("${org.coldis.library.service.jms.global.executor.max-size-cpu-multiplier:50}")
 			final Double maxPoolSizeCpuMultiplier,
-			@Value("${org.coldis.library.service.jms.global.executor.queue-size:100000}")
-			final Integer queueSize,
-			@Value("${org.coldis.library.service.jms.global.executor.keep-alive-seconds:30}")
+			@Value("${org.coldis.library.service.jms.global.executor.keep-alive-seconds:60}")
 			final Integer keepAliveSeconds,
 			@Value("${org.coldis.library.service.jms.global.scheduled.executor.name:jms-global-thread}")
 			final String scheduledName,
@@ -114,12 +116,15 @@ public class JmsConfigurationHelper {
 			@Value("${org.coldis.library.service.jms.global.scheduled.executor.core-size-cpu-multiplier:7}")
 			final Double scheduledCorePoolSizeCpuMultiplier) {
 		this.globalThreadPool = (this.globalThreadPool == null
-				? new DynamicPooledThreadExecutor(name, priority, false, virtual, false, corePoolSize, corePoolSizeCpuMultiplier, maxPoolSize,
-						maxPoolSizeCpuMultiplier, queueSize, Duration.ofSeconds(keepAliveSeconds))
+				? (ExecutorService) new DynamicThreadPoolFactory().withName(name).withPriority(priority).withVirtual(virtual).withParallelism(parallelism)
+						.withParallelismCpuMultiplier(parallelismCpuMultiplier).withCorePoolSize(corePoolSize)
+						.withCorePoolSizeCpuMultiplier(corePoolSizeCpuMultiplier).withMaxPoolSize(maxPoolSize)
+						.withMaxPoolSizeCpuMultiplier(maxPoolSizeCpuMultiplier).withKeepAlive(Duration.ofSeconds(keepAliveSeconds)).build()
 				: this.globalThreadPool);
 		this.globalScheduledThreadPool = (this.globalScheduledThreadPool == null
-				? new DynamicPooledThreadExecutor(scheduledName, scheduledPriority, false, scheduledVirtual, true, scheduledCorePoolSize,
-						scheduledCorePoolSizeCpuMultiplier, scheduledCorePoolSize, scheduledCorePoolSizeCpuMultiplier, null, null)
+				? (ScheduledExecutorService) new DynamicThreadPoolFactory().withName(scheduledName).withPriority(scheduledPriority)
+						.withVirtual(scheduledVirtual).withCorePoolSize(scheduledCorePoolSize).withCorePoolSizeCpuMultiplier(scheduledCorePoolSizeCpuMultiplier)
+						.build()
 				: this.globalScheduledThreadPool);
 		ActiveMQClient.injectPools(this.globalThreadPool, this.globalScheduledThreadPool);
 
@@ -140,6 +145,10 @@ public class JmsConfigurationHelper {
 			final Integer priority,
 			@Value("${org.coldis.library.service.jms.listener.executor.virtual:false}")
 			final Boolean virtual,
+			@Value("${org.coldis.library.service.jms.listener.executor.parallelism:}")
+			final Integer parallelism,
+			@Value("${org.coldis.library.service.jms.listener.executor.parallelism-cpu-multiplier:10}")
+			final Double parallelismCpuMultiplier,
 			@Value("${org.coldis.library.service.jms.listener.executor.core-size:}")
 			final Integer corePoolSize,
 			@Value("${org.coldis.library.service.jms.listener.executor.core-size-cpu-multiplier:10}")
@@ -150,11 +159,13 @@ public class JmsConfigurationHelper {
 			final Double maxPoolSizeCpuMultiplier,
 			@Value("${org.coldis.library.service.jms.listener.executor.queue-size:100000}")
 			final Integer queueSize,
-			@Value("${org.coldis.library.service.jms.listener.executor.keep-alive-seconds:30}")
+			@Value("${org.coldis.library.service.jms.listener.executor.keep-alive-seconds:60}")
 			final Integer keepAliveSeconds) {
 		this.jmsListenerExecutor = (this.jmsListenerExecutor == null
-				? new DynamicPooledThreadExecutor(name, priority, false, virtual, false, corePoolSize, corePoolSizeCpuMultiplier, maxPoolSize,
-						maxPoolSizeCpuMultiplier, queueSize, Duration.ofSeconds(keepAliveSeconds))
+				? (ExecutorService) new DynamicThreadPoolFactory().withName(name).withPriority(priority).withVirtual(virtual).withParallelism(parallelism)
+						.withParallelismCpuMultiplier(parallelismCpuMultiplier).withCorePoolSize(corePoolSize)
+						.withCorePoolSizeCpuMultiplier(corePoolSizeCpuMultiplier).withMaxPoolSize(maxPoolSize)
+						.withMaxPoolSizeCpuMultiplier(maxPoolSizeCpuMultiplier).withKeepAlive(Duration.ofSeconds(keepAliveSeconds)).build()
 				: this.jmsListenerExecutor);
 	}
 
