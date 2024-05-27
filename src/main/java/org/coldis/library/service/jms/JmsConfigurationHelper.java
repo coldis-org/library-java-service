@@ -198,6 +198,12 @@ public class JmsConfigurationHelper {
 				actualProperties.getCacheDestinations() == null ? connectionFactory.isCacheDestinations() : actualProperties.getCacheDestinations());
 		connectionFactory.setCacheLargeMessagesClient(actualProperties.getCacheLargeMessagesClient() == null ? connectionFactory.isCacheLargeMessagesClient()
 				: actualProperties.getCacheLargeMessagesClient());
+		connectionFactory.setBlockOnDurableSend(
+				actualProperties.getBlockOnDurableSend() == null ? connectionFactory.isBlockOnDurableSend() : actualProperties.getBlockOnDurableSend());
+		connectionFactory.setBlockOnNonDurableSend(actualProperties.getBlockOnNonDurableSend() == null ? connectionFactory.isBlockOnNonDurableSend()
+				: actualProperties.getBlockOnNonDurableSend());
+		connectionFactory.setConsumerMaxRate(
+				actualProperties.getConsumerMaxRate() == null ? connectionFactory.getConsumerMaxRate() : actualProperties.getConsumerMaxRate());
 		connectionFactory.setClientFailureCheckPeriod(actualProperties.getClientFailureCheckPeriod() == null ? connectionFactory.getClientFailureCheckPeriod()
 				: actualProperties.getClientFailureCheckPeriod());
 		connectionFactory

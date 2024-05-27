@@ -3,7 +3,6 @@ package org.coldis.library.service.jms;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.boot.autoconfigure.jms.artemis.ArtemisProperties;
 import org.springframework.boot.context.properties.ConfigurationProperties;
-import org.springframework.context.annotation.Configuration;
 import org.springframework.stereotype.Component;
 
 /**
@@ -19,8 +18,14 @@ public class ExtendedArtemisProperties extends ArtemisProperties {
 	private Boolean cacheDestinations;
 
 	private Boolean cacheLargeMessagesClient;
-	
+
 	private Integer consumerWindowSize;
+
+	private Integer consumerMaxRate;
+
+	private Boolean blockOnDurableSend;
+
+	private Boolean blockOnNonDurableSend;
 
 	private Long clientFailureCheckPeriod;
 
@@ -86,7 +91,7 @@ public class ExtendedArtemisProperties extends ArtemisProperties {
 			final Boolean cacheLargeMessagesClient) {
 		this.cacheLargeMessagesClient = cacheLargeMessagesClient;
 	}
-	
+
 	/**
 	 * Gets the consumerWindowSize.
 	 *
@@ -102,10 +107,67 @@ public class ExtendedArtemisProperties extends ArtemisProperties {
 	 * @param consumerWindowSize New consumerWindowSize.
 	 */
 	public void setConsumerWindowSize(
-            final Integer consumerWindowSize) {
+			final Integer consumerWindowSize) {
 		this.consumerWindowSize = consumerWindowSize;
 	}
-	
+
+	/**
+	 * Gets the consumerMaxRate.
+	 *
+	 * @return The consumerMaxRate.
+	 */
+	public Integer getConsumerMaxRate() {
+		return this.consumerMaxRate;
+	}
+
+	/**
+	 * Sets the consumerMaxRate.
+	 *
+	 * @param consumerMaxRate New consumerMaxRate.
+	 */
+	public void setConsumerMaxRate(
+			final Integer consumerMaxRate) {
+		this.consumerMaxRate = consumerMaxRate;
+	}
+
+	/**
+	 * Gets the blockOnDurableSend.
+	 *
+	 * @return The blockOnDurableSend.
+	 */
+	public Boolean getBlockOnDurableSend() {
+		return this.blockOnDurableSend;
+	}
+
+	/**
+	 * Sets the blockOnDurableSend.
+	 *
+	 * @param blockOnDurableSend New blockOnDurableSend.
+	 */
+	public void setBlockOnDurableSend(
+			final Boolean blockOnDurableSend) {
+		this.blockOnDurableSend = blockOnDurableSend;
+	}
+
+	/**
+	 * Gets the blockOnNonDurableSend.
+	 *
+	 * @return The blockOnNonDurableSend.
+	 */
+	public Boolean getBlockOnNonDurableSend() {
+		return this.blockOnNonDurableSend;
+	}
+
+	/**
+	 * Sets the blockOnNonDurableSend.
+	 *
+	 * @param blockOnNonDurableSend New blockOnNonDurableSend.
+	 */
+	public void setBlockOnNonDurableSend(
+			final Boolean blockOnNonDurableSend) {
+		this.blockOnNonDurableSend = blockOnNonDurableSend;
+	}
+
 	/**
 	 * Gets the clientFailureCheckPeriod.
 	 *
