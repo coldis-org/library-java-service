@@ -23,27 +23,27 @@ public @interface RateLimit {
 	/**
 	 * Period (in seconds) for the limit.
 	 */
-	int period() default 60;
+	String period() default "60";
 
 	/**
 	 * Backoff period is the period by default.
 	 */
-	int backoffPeriod() default -1;
+	String backoffPeriod() default "-1";
 
 	/**
 	 * Limit for the period.
 	 */
-	long limit();
+	String limit();
 
 	/**
 	 * If the limit is local to the JVM or centralized.
 	 */
-	boolean local() default true;
+	String local() default "true";
 
 	/**
 	 * Relative error margin. Only applies to central limit.
 	 */
-	long errorMargin() default 10;
+	String errorMargin() default "10";
 
 	/**
 	 * If the exception type should be changed.

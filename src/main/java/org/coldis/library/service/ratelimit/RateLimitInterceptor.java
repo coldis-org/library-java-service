@@ -28,13 +28,18 @@ import org.coldis.library.exception.BusinessException;
 import org.coldis.library.model.SimpleMessage;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.BeansException;
+import org.springframework.context.ApplicationContext;
+import org.springframework.context.ApplicationContextAware;
+import org.springframework.context.EmbeddedValueResolverAware;
 import org.springframework.scheduling.annotation.Scheduled;
+import org.springframework.util.StringValueResolver;
 
 /**
  * Rate limit interceptor.
  */
 @Aspect
-public class RateLimitInterceptor {
+public class RateLimitInterceptor implements ApplicationContextAware, EmbeddedValueResolverAware {
 
 	/**
 	 * Random.
@@ -50,6 +55,17 @@ public class RateLimitInterceptor {
 	 * Local executions.
 	 */
 	public static Map<String, Map<String, RateLimitStats>> EXECUTIONS = new HashMap<>();
+
+	public static StringValueResolver VALUE_RESOLVER;
+
+	@Override
+	public void setEmbeddedValueResolver(final StringValueResolver resolver) {
+		VALUE_RESOLVER = resolver;
+	}
+
+	private long resolveLongValue(final String value) {
+		return Long.parseLong(Objects.requireNonNull(RateLimitInterceptor.VALUE_RESOLVER.resolveStringValue(value)));
+	}
 
 	/**
 	 * Method point-cut.
@@ -152,9 +168,9 @@ public class RateLimitInterceptor {
 		// Adds the execution and check if the limit has been reached.
 		synchronized (executions) {
 			// Updates the constraints.
-			executions.setLimit(limit.limit());
-			executions.setPeriod(Duration.ofSeconds(limit.period()));
-			executions.setBackoffPeriod(Duration.ofSeconds(limit.backoffPeriod()));
+			executions.setLimit(this.resolveLongValue(limit.limit()));
+			executions.setPeriod(Duration.ofSeconds(this.resolveLongValue(limit.period())));
+			executions.setBackoffPeriod(Duration.ofSeconds(this.resolveLongValue(limit.backoffPeriod())));
 
 			// Checks the limit.
 			try {
@@ -272,7 +288,7 @@ public class RateLimitInterceptor {
 							? (targetObject.getClass().getSimpleName().toLowerCase() + "-" + method.getName().toLowerCase() + "-" + limit.period())
 							: limit.name());
 					// Checks the local limit.
-					if (limit.local()) {
+					if (Objects.equals(RateLimitInterceptor.VALUE_RESOLVER.resolveStringValue(limit.local()), "true")) {
 						this.checkLocalLimit(name, key, limit);
 					}
 					// Checks the central limit. FIXME
@@ -288,4 +304,7 @@ public class RateLimitInterceptor {
 
 	}
 
+	@Override
+	public void setApplicationContext(ApplicationContext applicationContext) throws BeansException {
+	}
 }

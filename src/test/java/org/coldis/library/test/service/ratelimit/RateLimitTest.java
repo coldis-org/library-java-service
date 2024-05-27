@@ -19,8 +19,11 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.context.SpringBootTest.WebEnvironment;
+import org.springframework.util.StringValueResolver;
 import org.testcontainers.containers.GenericContainer;
 
 /**
@@ -50,12 +53,18 @@ public class RateLimitTest {
 	 */
 	private static final Logger LOGGER = LoggerFactory.getLogger(RateLimitTest.class);
 
+	@Value("${rate.limit.configurable-limit}")
+	private long configuredLimit;
+
+	@Value("${rate.limit.configurable-period}")
+	private long configuredPeriod;
+
 	/**
 	 * Rate limit 1.
 	 */
 	@RateLimit(
-			limit = 100,
-			period = 1,
+			limit = "100",
+			period = "1",
 			errorType = BusinessException.class,
 			randomErrorMessages = { "Error 1", "Error 2" }
 	)
@@ -67,10 +76,10 @@ public class RateLimitTest {
 	 */
 	@RateLimits(
 			limits = { @RateLimit(
-					limit = 100,
-					period = 1
-			), @RateLimit(limit = 200,
-					period = 3,
+					limit = "100",
+					period = "1"
+			), @RateLimit(limit = "200",
+					period = "3",
 					errorType = Exception.class,
 					randomErrorMessages = { "Error 3", "Error 4" }
 			) }
@@ -82,8 +91,8 @@ public class RateLimitTest {
 	 * Rate limit 1.
 	 */
 	@RateLimit(
-			limit = 100,
-			period = 1,
+			limit = "100",
+			period = "1",
 			errorType = IntegrationException.class,
 			randomErrorMessages = { "Error 1", "Error 6" }
 	)
@@ -97,10 +106,10 @@ public class RateLimitTest {
 	 */
 	@RateLimits(
 			limits = { @RateLimit(
-					limit = 100,
-					period = 1
-			), @RateLimit(limit = 200,
-					period = 3,
+					limit = "100",
+					period = "1"
+			), @RateLimit(limit = "200",
+					period = "3",
 					errorType = BusinessException.class,
 					randomErrorMessages = { "Error 7", "Error 8" }
 			) }
@@ -109,6 +118,17 @@ public class RateLimitTest {
 			@RateLimitKey
 			final String test,
 			final String arg) {
+	}
+
+
+	/**
+	 * Rate limit with configured parameters.
+	 */
+	@RateLimit(
+			limit = "${rate.limit.configurable-limit}",
+			period = "${rate.limit.configurable-period}"
+	)
+	private void localRateLimitWithConfiguredParameters() {
 	}
 
 	/**
@@ -215,6 +235,37 @@ public class RateLimitTest {
 				this.localRateLimitWithKey2(key, Objects.toString(random.nextInt()));
 			}
 		}
+
+	}
+
+	/**
+	 * Tests the configured parameters.
+	 *
+	 * @throws Exception If the test fails.
+	 */
+	@Test
+	public void testLocalRateLimitWithConfigurableParameters() throws Exception {
+		// Runs the configured calls for the limited methods.
+		LOGGER.info("Started calling");
+		for (int count = 1; count <= configuredLimit; count++) {
+			this.localRateLimitWithConfiguredParameters();
+			RateLimitTest.LOGGER.debug(Integer.toString(count));
+			RateLimitTest.LOGGER.debug(RateLimitInterceptor.EXECUTIONS.values().stream()
+					.map(stringRateLimitStatsMap -> stringRateLimitStatsMap.getOrDefault("", new RateLimitStats()).getExecutions().size()).toList().toString());
+		}
+		LOGGER.info("Ended calling calling");
+
+		// The next call should pass the limits.
+		Assertions.assertThrows(Exception.class, this::localRateLimitWithConfiguredParameters);
+
+		// Waits the period and try again.
+		Thread.sleep(configuredPeriod * 1000);
+		for (int count = 1; count <= configuredLimit; count++) {
+			this.localRateLimitWithConfiguredParameters();
+		}
+
+		// The next call should pass the limits.
+		Assertions.assertThrows(Exception.class, this::localRateLimitWithConfiguredParameters);
 
 	}
 
