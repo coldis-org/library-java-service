@@ -13,8 +13,10 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Qualifier;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnClass;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
+import org.springframework.context.ApplicationContext;
 import org.springframework.context.annotation.Primary;
 import org.springframework.jms.support.converter.MessageConversionException;
 import org.springframework.jms.support.converter.SimpleMessageConverter;
@@ -36,7 +38,7 @@ import jakarta.jms.TextMessage;
 @Qualifier("enhancedJmsMessageConverter")
 @ConditionalOnClass(value = Message.class)
 @ConditionalOnProperty(
-		name = "org.coldis.library.service.jms.message-converter-enhanced-enabled",
+		name = "org.coldis.library.service.jms.message-converter-enhanced.enabled",
 		havingValue = "true",
 		matchIfMissing = true
 )
@@ -61,8 +63,7 @@ public class EnhancedJmsMessageConverter extends SimpleMessageConverter {
 	/**
 	 * Object mapper.
 	 */
-	@Autowired
-	private ObjectMapper objectMapper;
+	private final ObjectMapper objectMapper;
 
 	/**
 	 * DTO JMS message converter.
@@ -75,6 +76,17 @@ public class EnhancedJmsMessageConverter extends SimpleMessageConverter {
 	 */
 	@Autowired
 	private TypableJmsMessageConverter typableJmsMessageConverter;
+
+	/**
+	 * Constructor.
+	 */
+	@Autowired
+	public EnhancedJmsMessageConverter(
+			final ApplicationContext applicationContext,
+			@Value("${org.coldis.library.service.jms.message-converter-enhanced.object-mapper:thinJsonMapper}")
+			final String objectMapperBeanName) {
+		this.objectMapper = applicationContext.getBean(objectMapperBeanName, ObjectMapper.class);
+	}
 
 	/**
 	 * @see org.springframework.jms.support.converter.SimpleMessageConverter#toMessage(java.lang.Object,

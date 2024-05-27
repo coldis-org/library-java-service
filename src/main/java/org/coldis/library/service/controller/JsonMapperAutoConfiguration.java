@@ -11,6 +11,7 @@ import org.springframework.context.annotation.Configuration;
 import org.springframework.context.annotation.Primary;
 import org.springframework.http.converter.json.Jackson2ObjectMapperBuilder;
 
+import com.fasterxml.jackson.annotation.JsonInclude.Include;
 import com.fasterxml.jackson.databind.DeserializationFeature;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.SerializationFeature;
@@ -34,16 +35,32 @@ public class JsonMapperAutoConfiguration {
 	 * @param  builder JSON object mapper builder.
 	 * @return         The JSON object mapper.
 	 */
+	@Bean
 	@Primary
 	@Qualifier(value = "jsonMapper")
-	@Bean(name = { "objectMapper", "jsonMapper" })
-	public ObjectMapper createJsonMapper(
+	public ObjectMapper jsonMapper(
 			final Jackson2ObjectMapperBuilder builder) {
 		ObjectMapper objectMapper = builder.build();
 		objectMapper.disable(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES);
+		objectMapper.disable(DeserializationFeature.FAIL_ON_IGNORED_PROPERTIES);
 		objectMapper.disable(SerializationFeature.FAIL_ON_EMPTY_BEANS);
 		objectMapper.registerModule(ObjectMapperHelper.getDateTimeModule());
 		objectMapper = ObjectMapperHelper.addSubtypesFromPackage(objectMapper, ArrayUtils.add(this.jsonTypePackages, ServiceConfiguration.BASE_PACKAGE));
+		return objectMapper;
+	}
+
+	/**
+	 * Creates the JSON object mapper.
+	 *
+	 * @param  builder JSON object mapper builder.
+	 * @return         The JSON object mapper.
+	 */
+	@Bean
+	@Qualifier(value = "thinJsonMapper")
+	public ObjectMapper thinJsonMapper(
+			final Jackson2ObjectMapperBuilder builder) {
+		final ObjectMapper objectMapper = jsonMapper(builder);
+		objectMapper.setDefaultPropertyInclusion(Include.NON_NULL);
 		return objectMapper;
 	}
 

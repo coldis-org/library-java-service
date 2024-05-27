@@ -22,7 +22,6 @@ public class MessageConverterAutoConfiguration implements WebMvcConfigurer {
 	 * JSON mapper.
 	 */
 	@Autowired(required = false)
-	@Qualifier(value = "jsonMapper")
 	private ObjectMapper jsonMapper;
 
 	/**
