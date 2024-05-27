@@ -122,7 +122,7 @@ public class JmsConfigurationHelper {
 						.withMaxPoolSizeCpuMultiplier(maxPoolSizeCpuMultiplier).withKeepAlive(Duration.ofSeconds(keepAliveSeconds)).build()
 				: this.globalThreadPool);
 		this.globalScheduledThreadPool = (this.globalScheduledThreadPool == null
-				? (ScheduledExecutorService) new DynamicThreadPoolFactory().withName(scheduledName).withPriority(scheduledPriority)
+				? (ScheduledExecutorService) new DynamicThreadPoolFactory().withName(scheduledName).withScheduled(true).withPriority(scheduledPriority)
 						.withVirtual(scheduledVirtual).withCorePoolSize(scheduledCorePoolSize).withCorePoolSizeCpuMultiplier(scheduledCorePoolSizeCpuMultiplier)
 						.build()
 				: this.globalScheduledThreadPool);
