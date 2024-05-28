@@ -97,11 +97,11 @@ public class JmsConfigurationHelper {
 			final Double parallelismCpuMultiplier,
 			@Value("${org.coldis.library.service.jms.global.executor.core-size:}")
 			final Integer corePoolSize,
-			@Value("${org.coldis.library.service.jms.global.executor.core-size-cpu-multiplier:10}")
+			@Value("${org.coldis.library.service.jms.global.executor.core-size-cpu-multiplier:30}")
 			final Double corePoolSizeCpuMultiplier,
 			@Value("${org.coldis.library.service.jms.global.executor.max-size:}")
 			final Integer maxPoolSize,
-			@Value("${org.coldis.library.service.jms.global.executor.max-size-cpu-multiplier:50}")
+			@Value("${org.coldis.library.service.jms.global.executor.max-size-cpu-multiplier:200}")
 			final Double maxPoolSizeCpuMultiplier,
 			@Value("${org.coldis.library.service.jms.global.executor.keep-alive-seconds:60}")
 			final Integer keepAliveSeconds,
