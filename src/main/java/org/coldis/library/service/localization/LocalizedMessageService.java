@@ -1,7 +1,5 @@
 package org.coldis.library.service.localization;
 
-import java.util.Locale;
-
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.MessageSource;
 import org.springframework.context.i18n.LocaleContextHolder;
@@ -12,6 +10,11 @@ import org.springframework.stereotype.Service;
  */
 @Service
 public class LocalizedMessageService {
+
+	/**
+	 * Logger.
+	 */
+	private static final org.slf4j.Logger LOGGER = org.slf4j.LoggerFactory.getLogger(LocalizedMessageService.class);
 
 	/**
 	 * Message source.
@@ -29,8 +32,15 @@ public class LocalizedMessageService {
 	public String getMessage(
 			final String code,
 			final Object... arguments) {
-		final Locale locale = LocaleContextHolder.getLocale();
-		return this.messageSource.getMessage(code, arguments, locale);
+		String message = code;
+		try {
+			message = this.messageSource.getMessage(code, arguments, LocaleContextHolder.getLocale());
+		}
+		// Logs error if message not found.
+		catch (final Exception exception) {
+			LocalizedMessageService.LOGGER.error("Message not found for code: " + code);
+		}
+		return message;
 	}
 
 }
