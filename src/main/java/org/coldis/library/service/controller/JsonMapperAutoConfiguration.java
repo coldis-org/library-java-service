@@ -30,15 +30,12 @@ public class JsonMapperAutoConfiguration {
 	private String[] jsonTypePackages;
 
 	/**
-	 * Creates the JSON object mapper.
+	 * Creates the generic object mapper.
 	 *
 	 * @param  builder JSON object mapper builder.
-	 * @return         The JSON object mapper.
+	 * @return         The generic object mapper.
 	 */
-	@Bean
-	@Primary
-	@Qualifier(value = "jsonMapper")
-	public ObjectMapper jsonMapper(
+	public ObjectMapper genericMapper(
 			final Jackson2ObjectMapperBuilder builder) {
 		ObjectMapper objectMapper = builder.build();
 		objectMapper.disable(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES);
@@ -56,10 +53,24 @@ public class JsonMapperAutoConfiguration {
 	 * @return         The JSON object mapper.
 	 */
 	@Bean
+	@Primary
+	@Qualifier(value = "jsonMapper")
+	public ObjectMapper jsonMapper(
+			final Jackson2ObjectMapperBuilder builder) {
+		return this.genericMapper(builder);
+	}
+
+	/**
+	 * Creates the JSON object mapper.
+	 *
+	 * @param  builder JSON object mapper builder.
+	 * @return         The JSON object mapper.
+	 */
+	@Bean
 	@Qualifier(value = "thinJsonMapper")
 	public ObjectMapper thinJsonMapper(
 			final Jackson2ObjectMapperBuilder builder) {
-		final ObjectMapper objectMapper = jsonMapper(builder);
+		final ObjectMapper objectMapper = this.genericMapper(builder);
 		objectMapper.setDefaultPropertyInclusion(Include.NON_NULL);
 		return objectMapper;
 	}
