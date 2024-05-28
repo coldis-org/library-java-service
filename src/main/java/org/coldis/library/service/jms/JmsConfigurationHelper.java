@@ -170,17 +170,13 @@ public class JmsConfigurationHelper {
 	}
 
 	/**
-	 * Creates the JMS connection factory.
+	 * Merges the default properties with the actual properties.
 	 *
-	 * @param  beanFactory Bean factory.
-	 * @param  properties  JMS properties.
-	 * @return             The JMS connection factory.
+	 * @param  properties Properties.
+	 * @return            The merged properties.
 	 */
-	public ConnectionFactory createJmsConnectionFactory(
-			final ListableBeanFactory beanFactory,
+	private ExtendedArtemisProperties mergeProperties(
 			final ArtemisProperties properties) {
-		final ActiveMQConnectionFactory connectionFactory = new ExtensibleArtemisConnectionFactoryFactory(beanFactory, properties)
-				.createConnectionFactory(ActiveMQConnectionFactory.class);
 		final ExtendedArtemisProperties actualProperties = new ExtendedArtemisProperties();
 		ObjectHelper.copyAttributes(this.defaultProperties, actualProperties, true, true, null, (
 				getter,
@@ -190,6 +186,15 @@ public class JmsConfigurationHelper {
 				getter,
 				sourceValue,
 				targetValue) -> sourceValue != null);
+		return actualProperties;
+	}
+
+	/**
+	 * Sets the connection extended properties.
+	 */
+	private void setConnectionExtendedProperties(
+			final ExtendedArtemisProperties actualProperties,
+			final ActiveMQConnectionFactory connectionFactory) {
 		connectionFactory.setConsumerWindowSize(
 				actualProperties.getConsumerWindowSize() == null ? connectionFactory.getConsumerWindowSize() : actualProperties.getConsumerWindowSize());
 		connectionFactory
@@ -211,8 +216,24 @@ public class JmsConfigurationHelper {
 		connectionFactory.setCallTimeout(actualProperties.getCallTimeout() == null ? connectionFactory.getCallTimeout() : actualProperties.getCallTimeout());
 		connectionFactory.setCallFailoverTimeout(
 				actualProperties.getCallFailoverTimeout() == null ? connectionFactory.getCallFailoverTimeout() : actualProperties.getCallFailoverTimeout());
+	}
+
+	/**
+	 * Creates the JMS connection factory.
+	 *
+	 * @param  beanFactory Bean factory.
+	 * @param  properties  JMS properties.
+	 * @return             The JMS connection factory.
+	 */
+	public ConnectionFactory createJmsConnectionFactory(
+			final ListableBeanFactory beanFactory,
+			final ArtemisProperties properties) {
+		final ExtendedArtemisProperties actualProperties = this.mergeProperties(properties);
+		final ActiveMQConnectionFactory connectionFactory = new ExtensibleArtemisConnectionFactoryFactory(beanFactory, actualProperties)
+				.createConnectionFactory(ActiveMQConnectionFactory.class);
+		this.setConnectionExtendedProperties(actualProperties, connectionFactory);
 		// Returns the pooled connection factory;
-		return new JmsPoolConnectionFactoryFactory(properties.getPool()).createPooledConnectionFactory(connectionFactory);
+		return new JmsPoolConnectionFactoryFactory(actualProperties.getPool()).createPooledConnectionFactory(connectionFactory);
 	}
 
 	/**
