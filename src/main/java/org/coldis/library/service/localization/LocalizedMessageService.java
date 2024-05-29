@@ -12,11 +12,6 @@ import org.springframework.stereotype.Service;
 public class LocalizedMessageService {
 
 	/**
-	 * Logger.
-	 */
-	private static final org.slf4j.Logger LOGGER = org.slf4j.LoggerFactory.getLogger(LocalizedMessageService.class);
-
-	/**
 	 * Message source.
 	 */
 	@Autowired
@@ -32,14 +27,7 @@ public class LocalizedMessageService {
 	public String getMessage(
 			final String code,
 			final Object... arguments) {
-		String message = code;
-		try {
-			message = this.messageSource.getMessage(code, arguments, LocaleContextHolder.getLocale());
-		}
-		// Logs error if message not found.
-		catch (final Exception exception) {
-			LocalizedMessageService.LOGGER.error("Message not found for code: " + code);
-		}
+		final String message = this.messageSource.getMessage(code, arguments, LocaleContextHolder.getLocale());
 		return message;
 	}
 

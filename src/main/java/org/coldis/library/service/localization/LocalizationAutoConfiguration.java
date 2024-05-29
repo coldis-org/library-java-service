@@ -20,9 +20,9 @@ public class LocalizationAutoConfiguration {
 	 *
 	 * @return The locale resolver.
 	 */
+	@Bean
 	@Primary
-	@Bean(name = "localeResolver")
-	public LocaleResolver createLocaleResolver() {
+	public LocaleResolver localeResolver() {
 		// Creates the locale resolver.
 		final SessionLocaleResolver sessionLocaleResolver = new SessionLocaleResolver();
 		// Default locale is US.
@@ -36,14 +36,16 @@ public class LocalizationAutoConfiguration {
 	 *
 	 * @return The message source.
 	 */
+	@Bean
 	@Primary
-	@Bean(name = "messageSource")
-	public ReloadableResourceBundleMessageSource createMessageSource() {
+	public ReloadableResourceBundleMessageSource messageSource() {
 		// Creates the message source.
 		final ReloadableResourceBundleMessageSource messageSource = new ReloadableResourceBundleMessageSource();
 		// Sets the base path and expiration (30 minutes).
 		messageSource.setBasename("classpath:locale/messages");
 		messageSource.setCacheSeconds(1800);
+		messageSource.setUseCodeAsDefaultMessage(true);
+		messageSource.setFallbackToSystemLocale(true);
 		// Returns the configured message source.
 		return messageSource;
 	}

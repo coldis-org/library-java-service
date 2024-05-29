@@ -1,6 +1,7 @@
 package org.coldis.library.service.controller;
 
 import java.util.List;
+import java.util.Objects;
 import java.util.stream.Collectors;
 
 import org.apache.commons.lang3.ArrayUtils;
@@ -12,7 +13,6 @@ import org.coldis.library.service.localization.LocalizedMessageService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.context.NoSuchMessageException;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.ControllerAdvice;
@@ -48,16 +48,9 @@ public class ControllerExceptionHandler {
 	protected SimpleMessage enrichMessage(
 			final SimpleMessage message) {
 		// The default message is the original one.
-		String actualMessage = message.getContent();
-		// Tries to get the message for the code and arguments.
-		try {
-			actualMessage = this.messageService.getMessage(message.getCode(), message.getParameters());
-		}
-		// If the message could not be found.
-		catch (final NoSuchMessageException exception) {
-			// Ignores it.
-			ControllerExceptionHandler.LOGGER.debug("Message could not be enriched for code: '" + message.getCode() + "'.", exception);
-		}
+		String actualMessage = this.messageService.getMessage(message.getCode(), message.getParameters());
+		actualMessage = (Objects.equals(message.getCode(), actualMessage) && StringUtils.isNotEmpty(message.getContent()) ? message.getContent()
+				: actualMessage);
 		// Returns the enriched message
 		message.setContent(actualMessage);
 		return message;
