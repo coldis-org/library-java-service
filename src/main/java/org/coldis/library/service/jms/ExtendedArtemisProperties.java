@@ -1,6 +1,7 @@
 package org.coldis.library.service.jms;
 
 import org.springframework.beans.factory.annotation.Qualifier;
+import org.springframework.boot.autoconfigure.jms.artemis.ArtemisConnectionDetails;
 import org.springframework.boot.autoconfigure.jms.artemis.ArtemisProperties;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 import org.springframework.stereotype.Component;
@@ -11,7 +12,7 @@ import org.springframework.stereotype.Component;
 @Component
 @Qualifier("defaultArtemisProperties")
 @ConfigurationProperties(prefix = "spring.artemis")
-public class ExtendedArtemisProperties extends ArtemisProperties {
+public class ExtendedArtemisProperties extends ArtemisProperties implements ArtemisConnectionDetails {
 
 	private Boolean useGlobalPools;
 

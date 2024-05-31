@@ -1,6 +1,7 @@
 package org.springframework.boot.autoconfigure.jms.artemis;
 
 import org.apache.activemq.artemis.jms.client.ActiveMQConnectionFactory;
+import org.coldis.library.service.jms.ExtendedArtemisProperties;
 import org.springframework.beans.factory.ListableBeanFactory;
 
 /**
@@ -14,8 +15,8 @@ public class ExtensibleArtemisConnectionFactoryFactory extends ArtemisConnection
 	 * @param beanFactory Bean factory.
 	 * @param properties  Properties.
 	 */
-	public ExtensibleArtemisConnectionFactoryFactory(final ListableBeanFactory beanFactory, final ArtemisProperties properties) {
-		super(beanFactory, properties);
+	public ExtensibleArtemisConnectionFactoryFactory(final ListableBeanFactory beanFactory, final ExtendedArtemisProperties properties) {
+		super(beanFactory, properties, properties);
 	}
 
 	/**
