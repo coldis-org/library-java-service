@@ -92,11 +92,11 @@ public class JmsConfigurationHelper {
 			final String name,
 			@Value("${org.coldis.library.service.jms.global.executor.priority:5}")
 			final Integer priority,
-			@Value("${org.coldis.library.service.jms.global.executor.use-virtual-threads:false}")
+			@Value("${org.coldis.library.service.jms.global.executor.use-virtual-threads:true}")
 			final Boolean virtual,
 			@Value("${org.coldis.library.service.jms.global.executor.parallelism:}")
 			final Integer parallelism,
-			@Value("${org.coldis.library.service.jms.global.executor.parallelism-cpu-multiplier:70}")
+			@Value("${org.coldis.library.service.jms.global.executor.parallelism-cpu-multiplier:}")
 			final Double parallelismCpuMultiplier,
 			@Value("${org.coldis.library.service.jms.global.executor.min-runnable:}")
 			final Integer minRunnable,
@@ -104,11 +104,11 @@ public class JmsConfigurationHelper {
 			final Double minRunnableCpuMultiplier,
 			@Value("${org.coldis.library.service.jms.global.executor.core-size:}")
 			final Integer corePoolSize,
-			@Value("${org.coldis.library.service.jms.global.executor.core-size-cpu-multiplier:70}")
+			@Value("${org.coldis.library.service.jms.global.executor.core-size-cpu-multiplier:5}")
 			final Double corePoolSizeCpuMultiplier,
 			@Value("${org.coldis.library.service.jms.global.executor.max-size:}")
 			final Integer maxPoolSize,
-			@Value("${org.coldis.library.service.jms.global.executor.max-size-cpu-multiplier:300}")
+			@Value("${org.coldis.library.service.jms.global.executor.max-size-cpu-multiplier:}")
 			final Double maxPoolSizeCpuMultiplier,
 			@Value("${org.coldis.library.service.jms.global.executor.keep-alive-seconds:60}")
 			final Integer keepAliveSeconds,
@@ -116,7 +116,7 @@ public class JmsConfigurationHelper {
 			final String scheduledName,
 			@Value("${org.coldis.library.service.jms.global.scheduled.executor.priority:5}")
 			final Integer scheduledPriority,
-			@Value("${org.coldis.library.service.jms.global.scheduled.executor.use-virtual-threads:false}")
+			@Value("${org.coldis.library.service.jms.global.scheduled.executor.use-virtual-threads:true}")
 			final Boolean scheduledVirtual,
 			@Value("${org.coldis.library.service.jms.global.scheduled.executor.core-size:}")
 			final Integer scheduledCorePoolSize,
@@ -126,11 +126,11 @@ public class JmsConfigurationHelper {
 			final String flowControlName,
 			@Value("${org.coldis.library.service.jms.global.flow-control.executor.priority:5}")
 			final Integer flowControlPriority,
-			@Value("${org.coldis.library.service.jms.global.flow-control.executor.use-virtual-threads:false}")
+			@Value("${org.coldis.library.service.jms.global.flow-control.executor.use-virtual-threads:true}")
 			final Boolean flowControlVirtual,
 			@Value("${org.coldis.library.service.jms.global.flow-control.executor.parallelism:}")
 			final Integer flowControlParallelism,
-			@Value("${org.coldis.library.service.jms.global.flow-control.executor.parallelism-cpu-multiplier:10}")
+			@Value("${org.coldis.library.service.jms.global.flow-control.executor.parallelism-cpu-multiplier:}")
 			final Double flowControlParallelismCpuMultiplier,
 			@Value("${org.coldis.library.service.jms.global.flow-control.executor.min-runnable:}")
 			final Integer flowControlMinRunnable,
@@ -138,11 +138,11 @@ public class JmsConfigurationHelper {
 			final Double flowControlMinRunnableCpuMultiplier,
 			@Value("${org.coldis.library.service.jms.global.flow-control.executor.core-size:}")
 			final Integer flowControlCorePoolSize,
-			@Value("${org.coldis.library.service.jms.global.flow-control.executor.core-size-cpu-multiplier:10}")
+			@Value("${org.coldis.library.service.jms.global.flow-control.executor.core-size-cpu-multiplier:5}")
 			final Double flowControlCorePoolSizeCpuMultiplier,
 			@Value("${org.coldis.library.service.jms.global.flow-control.executor.max-size:}")
 			final Integer flowControlMaxPoolSize,
-			@Value("${org.coldis.library.service.jms.global.flow-control.executor.max-size-cpu-multiplier:100}")
+			@Value("${org.coldis.library.service.jms.global.flow-control.executor.max-size-cpu-multiplier:}")
 			final Double flowControlMaxPoolSizeCpuMultiplier,
 			@Value("${org.coldis.library.service.jms.global.flow-control.executor.keep-alive-seconds:60}")
 			final Integer flowControlKeepAliveSeconds
@@ -167,7 +167,6 @@ public class JmsConfigurationHelper {
 						.withKeepAlive(Duration.ofSeconds(flowControlKeepAliveSeconds)).build()
 				: this.globalFlowControlThreadPool);
 		ActiveMQClient.injectPools(this.globalThreadPool, this.globalScheduledThreadPool, this.globalFlowControlThreadPool);
-
 	}
 
 	/**
@@ -183,11 +182,11 @@ public class JmsConfigurationHelper {
 			final String name,
 			@Value("${org.coldis.library.service.jms.listener.executor.priority:4}")
 			final Integer priority,
-			@Value("${org.coldis.library.service.jms.listener.executor.virtual:false}")
+			@Value("${org.coldis.library.service.jms.listener.executor.virtual:true}")
 			final Boolean virtual,
 			@Value("${org.coldis.library.service.jms.listener.executor.parallelism:}")
 			final Integer parallelism,
-			@Value("${org.coldis.library.service.jms.listener.executor.parallelism-cpu-multiplier:50}")
+			@Value("${org.coldis.library.service.jms.listener.executor.parallelism-cpu-multiplier:}")
 			final Double parallelismCpuMultiplier,
 			@Value("${org.coldis.library.service.jms.listener.executor.min-runnable:}")
 			final Integer minRunnable,
@@ -195,14 +194,12 @@ public class JmsConfigurationHelper {
 			final Double minRunnableCpuMultiplier,
 			@Value("${org.coldis.library.service.jms.listener.executor.core-size:}")
 			final Integer corePoolSize,
-			@Value("${org.coldis.library.service.jms.listener.executor.core-size-cpu-multiplier:50}")
+			@Value("${org.coldis.library.service.jms.listener.executor.core-size-cpu-multiplier:5}")
 			final Double corePoolSizeCpuMultiplier,
 			@Value("${org.coldis.library.service.jms.listener.executor.max-size:}")
 			final Integer maxPoolSize,
-			@Value("${org.coldis.library.service.jms.listener.executor.max-size-cpu-multiplier:200}")
+			@Value("${org.coldis.library.service.jms.listener.executor.max-size-cpu-multiplier:}")
 			final Double maxPoolSizeCpuMultiplier,
-			@Value("${org.coldis.library.service.jms.listener.executor.queue-size:100000}")
-			final Integer queueSize,
 			@Value("${org.coldis.library.service.jms.listener.executor.keep-alive-seconds:60}")
 			final Integer keepAliveSeconds) {
 		this.jmsListenerExecutor = (this.jmsListenerExecutor == null ? (ExecutorService) new DynamicThreadPoolFactory().withName(name).withPriority(priority)
@@ -246,6 +243,10 @@ public class JmsConfigurationHelper {
 				actualProperties.getCacheDestinations() == null ? connectionFactory.isCacheDestinations() : actualProperties.getCacheDestinations());
 		connectionFactory.setCacheLargeMessagesClient(actualProperties.getCacheLargeMessagesClient() == null ? connectionFactory.isCacheLargeMessagesClient()
 				: actualProperties.getCacheLargeMessagesClient());
+		connectionFactory.setCompressLargeMessage(
+				actualProperties.getCompressLargeMessage() == null ? connectionFactory.isCompressLargeMessage() : actualProperties.getCompressLargeMessage());
+		connectionFactory.setCompressionLevel(
+				actualProperties.getCompressionLevel() == null ? connectionFactory.getCompressionLevel() : actualProperties.getCompressionLevel());
 		connectionFactory.setBlockOnDurableSend(
 				actualProperties.getBlockOnDurableSend() == null ? connectionFactory.isBlockOnDurableSend() : actualProperties.getBlockOnDurableSend());
 		connectionFactory.setBlockOnNonDurableSend(actualProperties.getBlockOnNonDurableSend() == null ? connectionFactory.isBlockOnNonDurableSend()

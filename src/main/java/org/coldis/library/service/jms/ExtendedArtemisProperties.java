@@ -20,6 +20,10 @@ public class ExtendedArtemisProperties extends ArtemisProperties implements Arte
 
 	private Boolean cacheLargeMessagesClient;
 
+	private Boolean compressLargeMessage;
+
+	private Integer compressionLevel;
+
 	private Integer consumerWindowSize;
 
 	private Integer consumerMaxRate;
@@ -35,7 +39,7 @@ public class ExtendedArtemisProperties extends ArtemisProperties implements Arte
 	private Long callTimeout;
 
 	private Long callFailoverTimeout;
-	
+
 	private Integer reconnectAttempts;
 
 	/**
@@ -93,6 +97,44 @@ public class ExtendedArtemisProperties extends ArtemisProperties implements Arte
 	public void setCacheLargeMessagesClient(
 			final Boolean cacheLargeMessagesClient) {
 		this.cacheLargeMessagesClient = cacheLargeMessagesClient;
+	}
+
+	/**
+	 * Gets the compressLargeMessages.
+	 *
+	 * @return The compressLargeMessages.
+	 */
+	public Boolean getCompressLargeMessage() {
+		return this.compressLargeMessage;
+	}
+
+	/**
+	 * Sets the compressLargeMessages.
+	 *
+	 * @param compressLargeMessages New compressLargeMessages.
+	 */
+	public void setCompressLargeMessage(
+			final Boolean compressLargeMessage) {
+		this.compressLargeMessage = compressLargeMessage;
+	}
+
+	/**
+	 * Gets the compressionLevel.
+	 *
+	 * @return The compressionLevel.
+	 */
+	public Integer getCompressionLevel() {
+		return this.compressionLevel;
+	}
+
+	/**
+	 * Sets the compressionLevel.
+	 *
+	 * @param compressionLevel New compressionLevel.
+	 */
+	public void setCompressionLevel(
+			final Integer compressionLevel) {
+		this.compressionLevel = compressionLevel;
 	}
 
 	/**
@@ -246,7 +288,7 @@ public class ExtendedArtemisProperties extends ArtemisProperties implements Arte
 			final Long callFailoverTimeout) {
 		this.callFailoverTimeout = callFailoverTimeout;
 	}
-	
+
 	/**
 	 * Gets the reconnectAttempts.
 	 *
@@ -262,7 +304,7 @@ public class ExtendedArtemisProperties extends ArtemisProperties implements Arte
 	 * @param reconnectAttempts New reconnectAttempts.
 	 */
 	public void setReconnectAttempts(
-            final Integer reconnectAttempts) {
+			final Integer reconnectAttempts) {
 		this.reconnectAttempts = reconnectAttempts;
 	}
 }
