@@ -259,6 +259,8 @@ public class JmsConfigurationHelper {
 		connectionFactory.setCallTimeout(actualProperties.getCallTimeout() == null ? connectionFactory.getCallTimeout() : actualProperties.getCallTimeout());
 		connectionFactory.setCallFailoverTimeout(
 				actualProperties.getCallFailoverTimeout() == null ? connectionFactory.getCallFailoverTimeout() : actualProperties.getCallFailoverTimeout());
+		connectionFactory.setReconnectAttempts(
+				actualProperties.getReconnectAttempts() == null ? connectionFactory.getReconnectAttempts() : actualProperties.getReconnectAttempts());
 	}
 
 	/**

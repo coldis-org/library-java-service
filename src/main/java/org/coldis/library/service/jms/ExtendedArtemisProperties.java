@@ -35,6 +35,8 @@ public class ExtendedArtemisProperties extends ArtemisProperties implements Arte
 	private Long callTimeout;
 
 	private Long callFailoverTimeout;
+	
+	private Integer reconnectAttempts;
 
 	/**
 	 * Gets the useGlobalPools.
@@ -244,5 +246,23 @@ public class ExtendedArtemisProperties extends ArtemisProperties implements Arte
 			final Long callFailoverTimeout) {
 		this.callFailoverTimeout = callFailoverTimeout;
 	}
+	
+	/**
+	 * Gets the reconnectAttempts.
+	 *
+	 * @return The reconnectAttempts.
+	 */
+	public Integer getReconnectAttempts() {
+		return this.reconnectAttempts;
+	}
 
+	/**
+	 * Sets the reconnectAttempts.
+	 *
+	 * @param reconnectAttempts New reconnectAttempts.
+	 */
+	public void setReconnectAttempts(
+            final Integer reconnectAttempts) {
+		this.reconnectAttempts = reconnectAttempts;
+	}
 }
