@@ -43,9 +43,6 @@ public class JmsConfigurationHelper {
 
 	/** JMS listener executor. */
 	private ExecutorService jmsListenerExecutor;
-	
-	
-	
 
 	/** Back-off initial interval. */
 	@Value("${org.coldis.library.service.jms.listener.max-messages-per-task:}")
@@ -312,6 +309,8 @@ public class JmsConfigurationHelper {
 		// Sets the default configuration.
 		if (taskExecutor != null) {
 			jmsContainerFactory.setTaskExecutor(taskExecutor);
+		}
+		if (maxMessagesPerTask != null) {
 			jmsContainerFactory.setMaxMessagesPerTask(maxMessagesPerTask);
 		}
 		if (destinationResolver != null) {
