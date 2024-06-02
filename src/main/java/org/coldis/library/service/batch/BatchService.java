@@ -372,7 +372,7 @@ public class BatchService {
 		// If the executor should be restarted, resets it.
 		@SuppressWarnings("unchecked")
 		final BatchExecutor<Type> batchExecutorValue = (BatchExecutor<Type>) batchExecutor.getValue();
-		if (restart || batchExecutorValue.isExpired()) {
+		if (restart || batchExecutorValue.isExpired() || batchExecutorValue.isFinished()) {
 			batchExecutorValue.reset();
 		}
 
