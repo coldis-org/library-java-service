@@ -45,7 +45,8 @@ public class JmsConfigurationHelper {
 	private ExecutorService jmsListenerExecutor;
 
 	/** Back-off initial interval. */
-	@Value("${org.coldis.library.service.jms.listener.max-messages-per-task:}")
+
+	@Value("${org.coldis.library.service.jms.listener.max-messages-per-task:1}")
 	private Integer maxMessagesPerTask;
 
 	/** Back-off initial interval. */
@@ -112,7 +113,7 @@ public class JmsConfigurationHelper {
 			final Double maxPoolSizeCpuMultiplier,
 			@Value("${org.coldis.library.service.jms.global.executor.keep-alive-seconds:60}")
 			final Integer keepAliveSeconds,
-			@Value("${org.coldis.library.service.jms.global.scheduled.executor.name:jms-global-thread}")
+			@Value("${org.coldis.library.service.jms.global.scheduled.executor.name:jms-global-scheduled-thread}")
 			final String scheduledName,
 			@Value("${org.coldis.library.service.jms.global.scheduled.executor.priority:5}")
 			final Integer scheduledPriority,
@@ -120,9 +121,9 @@ public class JmsConfigurationHelper {
 			final Boolean scheduledVirtual,
 			@Value("${org.coldis.library.service.jms.global.scheduled.executor.core-size:}")
 			final Integer scheduledCorePoolSize,
-			@Value("${org.coldis.library.service.jms.global.scheduled.executor.core-size-cpu-multiplier:5}")
+			@Value("${org.coldis.library.service.jms.global.scheduled.executor.core-size-cpu-multiplier:1}")
 			final Double scheduledCorePoolSizeCpuMultiplier,
-			@Value("${org.coldis.library.service.jms.global.executor.name:jms-global-thread}")
+			@Value("${org.coldis.library.service.jms.global.executor.name:jms-global-flow-control-thread}")
 			final String flowControlName,
 			@Value("${org.coldis.library.service.jms.global.flow-control.executor.priority:5}")
 			final Integer flowControlPriority,
@@ -138,7 +139,7 @@ public class JmsConfigurationHelper {
 			final Double flowControlMinRunnableCpuMultiplier,
 			@Value("${org.coldis.library.service.jms.global.flow-control.executor.core-size:}")
 			final Integer flowControlCorePoolSize,
-			@Value("${org.coldis.library.service.jms.global.flow-control.executor.core-size-cpu-multiplier:5}")
+			@Value("${org.coldis.library.service.jms.global.flow-control.executor.core-size-cpu-multiplier:2}")
 			final Double flowControlCorePoolSizeCpuMultiplier,
 			@Value("${org.coldis.library.service.jms.global.flow-control.executor.max-size:}")
 			final Integer flowControlMaxPoolSize,
@@ -237,6 +238,14 @@ public class JmsConfigurationHelper {
 			final ActiveMQConnectionFactory connectionFactory) {
 		connectionFactory.setConsumerWindowSize(
 				actualProperties.getConsumerWindowSize() == null ? connectionFactory.getConsumerWindowSize() : actualProperties.getConsumerWindowSize());
+		connectionFactory.setConsumerMaxRate(
+				actualProperties.getConsumerMaxRate() == null ? connectionFactory.getConsumerMaxRate() : actualProperties.getConsumerMaxRate());
+		connectionFactory.setProducerWindowSize(
+				actualProperties.getProducerWindowSize() == null ? connectionFactory.getProducerWindowSize() : actualProperties.getProducerWindowSize());
+		connectionFactory.setProducerMaxRate(
+				actualProperties.getProducerMaxRate() == null ? connectionFactory.getProducerMaxRate() : actualProperties.getProducerMaxRate());
+		connectionFactory.setConfirmationWindowSize(actualProperties.getConfirmationWindowSize() == null ? connectionFactory.getConfirmationWindowSize()
+				: actualProperties.getConfirmationWindowSize());
 		connectionFactory
 				.setUseGlobalPools(actualProperties.getUseGlobalPools() == null ? connectionFactory.isUseGlobalPools() : actualProperties.getUseGlobalPools());
 		connectionFactory.setCacheDestinations(
@@ -251,8 +260,6 @@ public class JmsConfigurationHelper {
 				actualProperties.getBlockOnDurableSend() == null ? connectionFactory.isBlockOnDurableSend() : actualProperties.getBlockOnDurableSend());
 		connectionFactory.setBlockOnNonDurableSend(actualProperties.getBlockOnNonDurableSend() == null ? connectionFactory.isBlockOnNonDurableSend()
 				: actualProperties.getBlockOnNonDurableSend());
-		connectionFactory.setConsumerMaxRate(
-				actualProperties.getConsumerMaxRate() == null ? connectionFactory.getConsumerMaxRate() : actualProperties.getConsumerMaxRate());
 		connectionFactory.setClientFailureCheckPeriod(actualProperties.getClientFailureCheckPeriod() == null ? connectionFactory.getClientFailureCheckPeriod()
 				: actualProperties.getClientFailureCheckPeriod());
 		connectionFactory

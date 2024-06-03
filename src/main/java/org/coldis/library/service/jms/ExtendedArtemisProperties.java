@@ -28,6 +28,12 @@ public class ExtendedArtemisProperties extends ArtemisProperties implements Arte
 
 	private Integer consumerMaxRate;
 
+	private Integer producerWindowSize;
+
+	private Integer producerMaxRate;
+
+	private Integer confirmationWindowSize;
+
 	private Boolean blockOnDurableSend;
 
 	private Boolean blockOnNonDurableSend;
@@ -173,6 +179,63 @@ public class ExtendedArtemisProperties extends ArtemisProperties implements Arte
 	public void setConsumerMaxRate(
 			final Integer consumerMaxRate) {
 		this.consumerMaxRate = consumerMaxRate;
+	}
+
+	/**
+	 * Gets the producerWindowSize.
+	 *
+	 * @return The producerWindowSize.
+	 */
+	public Integer getProducerWindowSize() {
+		return this.producerWindowSize;
+	}
+
+	/**
+	 * Sets the producerWindowSize.
+	 *
+	 * @param producerWindowSize New producerWindowSize.
+	 */
+	public void setProducerWindowSize(
+			final Integer producerWindowSize) {
+		this.producerWindowSize = producerWindowSize;
+	}
+
+	/**
+	 * Gets the producerMaxRate.
+	 *
+	 * @return The producerMaxRate.
+	 */
+	public Integer getProducerMaxRate() {
+		return this.producerMaxRate;
+	}
+
+	/**
+	 * Sets the producerMaxRate.
+	 *
+	 * @param producerMaxRate New producerMaxRate.
+	 */
+	public void setProducerMaxRate(
+			final Integer producerMaxRate) {
+		this.producerMaxRate = producerMaxRate;
+	}
+
+	/**
+	 * Gets the confirmationWindowSize.
+	 *
+	 * @return The confirmationWindowSize.
+	 */
+	public Integer getConfirmationWindowSize() {
+		return this.confirmationWindowSize;
+	}
+
+	/**
+	 * Sets the confirmationWindowSize.
+	 *
+	 * @param confirmationWindowSize New confirmationWindowSize.
+	 */
+	public void setConfirmationWindowSize(
+			final Integer confirmationWindowSize) {
+		this.confirmationWindowSize = confirmationWindowSize;
 	}
 
 	/**
