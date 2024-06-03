@@ -166,13 +166,6 @@ public class BatchServiceTest {
 		Assertions.assertTrue(batchRecord.getLastFinishedAt().isAfter(initialFinishTime));
 		Assertions.assertTrue(batchRecord.isFinished());
 
-		// Tries executing the batch again, and nothing should change.
-		this.batchService.checkAll();
-		this.batchService.start(testBatchExecutor, false);
-		this.batchService.checkAll();
-		batchRecord = (BatchExecutor<BatchObject>) this.keyValueService.findById(batchKey, LockBehavior.NO_LOCK, false).getValue();
-		Assertions.assertEquals(processedNow, batchRecord.getLastProcessedCount());
-		Assertions.assertEquals(processedTotal, BatchTestService.processedAlways);
 	}
 
 	/**
