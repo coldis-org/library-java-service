@@ -121,7 +121,7 @@ public class JmsConfigurationHelper {
 			final Boolean scheduledVirtual,
 			@Value("${org.coldis.library.service.jms.global.scheduled.executor.core-size:}")
 			final Integer scheduledCorePoolSize,
-			@Value("${org.coldis.library.service.jms.global.scheduled.executor.core-size-cpu-multiplier:1}")
+			@Value("${org.coldis.library.service.jms.global.scheduled.executor.core-size-cpu-multiplier:2}")
 			final Double scheduledCorePoolSizeCpuMultiplier,
 			@Value("${org.coldis.library.service.jms.global.executor.name:jms-global-flow-control-thread}")
 			final String flowControlName,
