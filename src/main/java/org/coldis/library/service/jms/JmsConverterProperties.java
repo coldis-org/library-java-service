@@ -62,7 +62,7 @@ public class JmsConverterProperties {
 	 * @return The maximumAsyncHops.
 	 */
 	public Long getMaximumAsyncHops() {
-		this.maximumAsyncHops = (this.maximumAsyncHops == null ? 53L : this.maximumAsyncHops);
+		this.maximumAsyncHops = (this.maximumAsyncHops == null ? 100L : this.maximumAsyncHops);
 		return this.maximumAsyncHops;
 	}
 	

@@ -209,7 +209,8 @@ public class JmsConfigurationHelper {
 				.withMaxPoolSize(maxPoolSize).withMaxPoolSizeCpuMultiplier(maxPoolSizeCpuMultiplier).withKeepAlive(Duration.ofSeconds(keepAliveSeconds)).build()
 				: this.jmsListenerExecutor);
 	}
-
+	
+	
 	/**
 	 * Merges the default properties with the actual properties.
 	 *
