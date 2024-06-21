@@ -22,12 +22,12 @@ import jakarta.jms.Session;
  */
 @Configuration(proxyBeanMethods = false)
 @Role(BeanDefinition.ROLE_INFRASTRUCTURE)
-public class JmsBootstrapEnhancedConfiguration implements BeanDefinitionRegistryPostProcessor {
+public class EnhancedJmsBootstrapConfiguration implements BeanDefinitionRegistryPostProcessor {
 
 	/**
 	 * Context-aware messaging message listener adapter.
 	 */
-	public final class ContextAwareMessagingMessageListenerAdapter extends MessagingMessageListenerAdapter {
+	public final class ThreadContextAwareMessagingMessageListenerAdapter extends MessagingMessageListenerAdapter {
 
 		/**
 		 * @see org.springframework.jms.listener.adapter.MessagingMessageListenerAdapter#onMessage(jakarta.jms.Message,
@@ -78,7 +78,7 @@ public class JmsBootstrapEnhancedConfiguration implements BeanDefinitionRegistry
 					 */
 					@Override
 					protected MessagingMessageListenerAdapter createMessageListenerInstance() {
-						return new ContextAwareMessagingMessageListenerAdapter();
+						return new ThreadContextAwareMessagingMessageListenerAdapter();
 					}
 				};
 			}
