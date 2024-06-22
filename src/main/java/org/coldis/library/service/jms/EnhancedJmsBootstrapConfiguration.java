@@ -27,7 +27,7 @@ public class EnhancedJmsBootstrapConfiguration implements BeanDefinitionRegistry
 	/**
 	 * Context-aware messaging message listener adapter.
 	 */
-	public final class ThreadContextAwareMessagingMessageListenerAdapter extends MessagingMessageListenerAdapter {
+	public final class ContextAwareMessagingMessageListenerAdapter extends MessagingMessageListenerAdapter {
 
 		/**
 		 * @see org.springframework.jms.listener.adapter.MessagingMessageListenerAdapter#onMessage(jakarta.jms.Message,
@@ -78,7 +78,7 @@ public class EnhancedJmsBootstrapConfiguration implements BeanDefinitionRegistry
 					 */
 					@Override
 					protected MessagingMessageListenerAdapter createMessageListenerInstance() {
-						return new ThreadContextAwareMessagingMessageListenerAdapter();
+						return new ContextAwareMessagingMessageListenerAdapter();
 					}
 				};
 			}

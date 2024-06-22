@@ -114,6 +114,9 @@ public class BatchExecutor<Type> implements Typable {
 	 */
 	private LocalDateTime lastStartedAt;
 
+	/** Last batch finished at. */
+	private LocalDateTime lastStepFinishedAt;
+
 	/**
 	 * Last finished at.
 	 */
@@ -528,6 +531,26 @@ public class BatchExecutor<Type> implements Typable {
 	}
 
 	/**
+	 * Gets the lastStepFinishedAt.
+	 *
+	 * @return The lastStepFinishedAt.
+	 */
+	@JsonView({ ModelView.Persistent.class, ModelView.Public.class })
+	public LocalDateTime getLastStepFinishedAt() {
+		return this.lastStepFinishedAt;
+	}
+
+	/**
+	 * Sets the lastStepFinishedAt.
+	 *
+	 * @param lastStepFinishedAt New lastStepFinishedAt.
+	 */
+	public void setLastStepFinishedAt(
+			final LocalDateTime lastStepFinishedAt) {
+		this.lastStepFinishedAt = lastStepFinishedAt;
+	}
+
+	/**
 	 * Gets the lastFinishedAt.
 	 *
 	 * @return The lastFinishedAt.
@@ -598,6 +621,16 @@ public class BatchExecutor<Type> implements Typable {
 	}
 
 	/**
+	 * Gets the next batch start time.
+	 *
+	 */
+	@JsonView({ ModelView.Persistent.class, ModelView.Public.class })
+	public LocalDateTime getNextBatchStartingAt() {
+		return (this.getLastStepFinishedAt() == null ? (this.isExpired() || this.isFinished() ? null : DateTimeHelper.getCurrentLocalDateTime())
+				: this.getLastStepFinishedAt().plus(this.getDelayBetweenRuns()));
+	}
+
+	/**
 	 * Gets the lastProcessedCount.
 	 *
 	 * @return The lastProcessedCount.
@@ -642,6 +675,7 @@ public class BatchExecutor<Type> implements Typable {
 	 */
 	public void reset() {
 		this.setLastStartedAt(null);
+		this.setLastStepFinishedAt(null);
 		this.setLastCancelledAt(null);
 		this.setLastProcessed(null);
 		this.setLastProcessedCount(null);
@@ -664,8 +698,8 @@ public class BatchExecutor<Type> implements Typable {
 	@Override
 	public int hashCode() {
 		return Objects.hash(this.actionBeanName, this.actionDelegateMethods, this.arguments, this.cleansWithin, this.delayBetweenRuns, this.finishWithin,
-				this.itemTypeName, this.keySuffix, this.lastCancelledAt, this.lastFinishedAt, this.lastProcessed, this.lastProcessedCount, this.lastStartedAt,
-				this.messagesTemplates, this.size, this.slackChannels);
+				this.itemTypeName, this.keySuffix, this.lastStepFinishedAt, this.lastCancelledAt, this.lastFinishedAt, this.lastProcessed,
+				this.lastProcessedCount, this.lastStartedAt, this.messagesTemplates, this.size, this.slackChannels);
 	}
 
 	/**
@@ -685,10 +719,11 @@ public class BatchExecutor<Type> implements Typable {
 				&& Objects.equals(this.arguments, other.arguments) && Objects.equals(this.cleansWithin, other.cleansWithin)
 				&& Objects.equals(this.delayBetweenRuns, other.delayBetweenRuns) && Objects.equals(this.finishWithin, other.finishWithin)
 				&& Objects.equals(this.itemTypeName, other.itemTypeName) && Objects.equals(this.keySuffix, other.keySuffix)
-				&& Objects.equals(this.lastCancelledAt, other.lastCancelledAt) && Objects.equals(this.lastFinishedAt, other.lastFinishedAt)
-				&& Objects.equals(this.lastProcessed, other.lastProcessed) && Objects.equals(this.lastProcessedCount, other.lastProcessedCount)
-				&& Objects.equals(this.lastStartedAt, other.lastStartedAt) && Objects.equals(this.messagesTemplates, other.messagesTemplates)
-				&& Objects.equals(this.size, other.size) && Objects.equals(this.slackChannels, other.slackChannels);
+				&& Objects.equals(this.lastStepFinishedAt, other.lastStepFinishedAt) && Objects.equals(this.lastCancelledAt, other.lastCancelledAt)
+				&& Objects.equals(this.lastFinishedAt, other.lastFinishedAt) && Objects.equals(this.lastProcessed, other.lastProcessed)
+				&& Objects.equals(this.lastProcessedCount, other.lastProcessedCount) && Objects.equals(this.lastStartedAt, other.lastStartedAt)
+				&& Objects.equals(this.messagesTemplates, other.messagesTemplates) && Objects.equals(this.size, other.size)
+				&& Objects.equals(this.slackChannels, other.slackChannels);
 	}
 
 	/**

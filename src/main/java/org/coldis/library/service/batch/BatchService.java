@@ -1,6 +1,7 @@
 package org.coldis.library.service.batch;
 
 import java.time.Duration;
+import java.time.LocalDateTime;
 import java.time.temporal.ChronoUnit;
 import java.util.List;
 import java.util.Map;
@@ -278,6 +279,7 @@ public class BatchService {
 
 					// Runs the batch until the next id does not change.
 					final Type nextLastProcessed = this.executeStep(batchExecutorValue);
+					batchExecutorValue.setLastStepFinishedAt(DateTimeHelper.getCurrentLocalDateTime());
 					batchExecutorValue.setLastProcessed(nextLastProcessed);
 					previousLastProcessed = currentLastProcessed;
 					currentLastProcessed = nextLastProcessed;
@@ -289,7 +291,7 @@ public class BatchService {
 						batchExecutorValue.setLastFinishedAt(DateTimeHelper.getCurrentLocalDateTime());
 					}
 					else {
-						this.queueResumeAsync(keySuffix, batchExecutorValue.getDelayBetweenRuns());
+						this.queueResumeAsync(keySuffix, batchExecutorValue.getNextBatchStartingAt());
 					}
 
 					// Saves the executor.
@@ -302,7 +304,7 @@ public class BatchService {
 					BatchService.LOGGER.debug("Error processing batch '" + key + "'.", throwable);
 					if (!(throwable instanceof BusinessException)
 							|| (!((BusinessException) throwable).getCode().equals(BatchService.BATCH_EXPIRED_MESSAGE_CODE))) {
-						this.queueResumeAsync(keySuffix, batchExecutorValue.getDelayBetweenRuns());
+						this.queueResumeAsync(keySuffix, batchExecutorValue.getNextBatchStartingAt().plus(batchExecutorValue.getDelayBetweenRuns()));
 					}
 					throw throwable;
 				}
@@ -334,9 +336,11 @@ public class BatchService {
 	 */
 	public <Type> void queueResumeAsync(
 			final String keySuffix,
-			final Duration fixedDelay) throws BusinessException {
+			final LocalDateTime scheduledFor) throws BusinessException {
+		final Duration delay = Duration.ofMillis((scheduledFor == null) || scheduledFor.isBefore(DateTimeHelper.getCurrentLocalDateTime()) ? 0L
+				: ChronoUnit.MILLIS.between(DateTimeHelper.getCurrentLocalDateTime(), scheduledFor));
 		this.jmsTemplateHelper.send(this.jmsTemplate,
-				new JmsMessage<>().withDestination(BatchService.RESUME_QUEUE).withFixedDelay(fixedDelay).withLastValueKey(keySuffix).withMessage(keySuffix));
+				new JmsMessage<>().withDestination(BatchService.RESUME_QUEUE).withFixedDelay(delay).withLastValueKey(keySuffix).withMessage(keySuffix));
 	}
 
 	/**
@@ -378,7 +382,7 @@ public class BatchService {
 
 		// Saves and resumes the batch.
 		this.keyValueService.getRepository().save(batchExecutor);
-		this.queueResumeAsync(batchExecutorValue.getKeySuffix(), Duration.ofMillis(0));
+		this.queueResumeAsync(batchExecutorValue.getKeySuffix(), DateTimeHelper.getCurrentLocalDateTime());
 	}
 
 	/**
@@ -458,8 +462,8 @@ public class BatchService {
 					this.queueDeleteAsync(batchExecutor.getKey(), true);
 				}
 				// Makes sure non-expired are still running.
-				else if (!batchExecutorValue.isFinished() && !batchExecutorValue.isExpired()) {
-					this.queueResumeAsync(batchExecutorValue.getKeySuffix(), batchExecutorValue.getDelayBetweenRuns());
+				else if (batchExecutorValue.getNextBatchStartingAt() != null) {
+					this.queueResumeAsync(batchExecutorValue.getKeySuffix(), batchExecutorValue.getNextBatchStartingAt());
 				}
 			}
 		}
