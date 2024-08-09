@@ -8,7 +8,7 @@ import java.util.Objects;
 import org.apache.commons.collections4.CollectionUtils;
 import org.apache.commons.collections4.EnumerationUtils;
 import org.apache.commons.lang3.StringUtils;
-import org.apache.fury.Fury;
+import org.apache.fury.BaseFury;
 import org.coldis.library.dto.DtoOrigin;
 import org.coldis.library.dto.DtoType;
 import org.coldis.library.dto.DtoTypeMetadata;
@@ -80,7 +80,7 @@ public class EnhancedJmsMessageConverter extends SimpleMessageConverter {
 	 */
 	@Autowired
 	@Qualifier(value = "javaOptimizedSerializer")
-	private Fury optimizedSerializer;
+	private BaseFury optimizedSerializer;
 
 	/**
 	 * DTO JMS message converter.

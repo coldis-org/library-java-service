@@ -1,5 +1,6 @@
 package org.coldis.library.service.controller;
 
+import org.apache.fury.BaseFury;
 import org.apache.fury.Fury;
 import org.apache.fury.config.Language;
 import org.coldis.library.serialization.OptimizedSerializationHelper;
@@ -30,8 +31,12 @@ public class OptmizedSerializationAutoConfiguration {
 	 */
 	@Bean
 	@Qualifier(value = "javaOptimizedSerializer")
-	public Fury javaOptimizedSerializer() {
-		final Fury serializer = OptimizedSerializationHelper.createSerializer(Language.JAVA, this.typePackages);
+	public BaseFury javaOptimizedSerializer(
+			@Value("${org.coldis.configuration.service.optimized-serializer.java.min-pool-size:3}")
+			final Integer minPoolSize,
+			@Value("${org.coldis.configuration.service.optimized-serializer.java.max-pool-size:30}")
+			final Integer maxPoolSize) {
+		final BaseFury serializer = OptimizedSerializationHelper.createSerializer(true, minPoolSize, maxPoolSize, Language.JAVA, this.typePackages);
 		return serializer;
 	}
 
