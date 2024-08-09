@@ -198,9 +198,8 @@ public class EnhancedJmsMessageConverter extends SimpleMessageConverter {
 				final List<String> preferedClassesNames = this.getPreferedClassesFromPayload(payload);
 				if (CollectionUtils.isNotEmpty(preferedClassesNames)) {
 					try {
-						final byte[] actualPayload = this.objectMapper.writeValueAsBytes(payload);
 						message = session.createBytesMessage();
-						((BytesMessage) message).writeBytes(actualPayload);
+						((BytesMessage) message).writeBytes(this.objectMapper.writeValueAsBytes(payload));
 						// Adds the preferred types to the message.
 						final String preferedClassesNamesAttribute = preferedClassesNames.stream().reduce((
 								name1,
@@ -278,11 +277,12 @@ public class EnhancedJmsMessageConverter extends SimpleMessageConverter {
 			final Message message) throws JMSException, MessageConversionException {
 		// Object.
 		Object object = null;
-		final TextMessage textMessage = message instanceof TextMessage ? (TextMessage) message : null;
-		final BytesMessage bytesMessage = message instanceof BytesMessage ? (BytesMessage) message : null;
+		final TextMessage textMessage = (message instanceof TextMessage ? (TextMessage) message : null);
+		final BytesMessage bytesMessage = (message instanceof BytesMessage ? (BytesMessage) message : null);
 
 		// If it is an optimized serializer message.
-		if (message.getBooleanProperty(EnhancedJmsMessageConverter.OPTIMIZED_SERIALIZER_PARAMETER)) {
+		final boolean optimizedSerializerUsed = message.getBooleanProperty(EnhancedJmsMessageConverter.OPTIMIZED_SERIALIZER_PARAMETER);
+		if (optimizedSerializerUsed && (bytesMessage != null)) {
 			final byte[] messageBytes = new byte[(int) bytesMessage.getBodyLength()];
 			bytesMessage.readBytes(messageBytes);
 			object = this.optimizedSerializer.deserialize(messageBytes);
