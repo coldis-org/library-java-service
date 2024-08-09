@@ -11,7 +11,9 @@ import org.springframework.context.annotation.Configuration;
 import org.springframework.context.annotation.Primary;
 import org.springframework.http.converter.json.Jackson2ObjectMapperBuilder;
 
+import com.fasterxml.jackson.annotation.JsonFormat.Feature;
 import com.fasterxml.jackson.annotation.JsonInclude.Include;
+import com.fasterxml.jackson.core.PrettyPrinter;
 import com.fasterxml.jackson.databind.DeserializationFeature;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.SerializationFeature;
@@ -72,6 +74,7 @@ public class JsonMapperAutoConfiguration {
 			final Jackson2ObjectMapperBuilder builder) {
 		final ObjectMapper objectMapper = this.genericMapper(builder);
 		objectMapper.setDefaultPropertyInclusion(Include.NON_NULL);
+		objectMapper.configure(SerializationFeature.INDENT_OUTPUT, false);
 		return objectMapper;
 	}
 

@@ -12,7 +12,6 @@ import org.coldis.library.dto.DtoType;
 import org.coldis.library.dto.DtoTypeMetadata;
 import org.coldis.library.exception.IntegrationException;
 import org.coldis.library.model.SimpleMessage;
-import org.coldis.library.serialization.ObjectMapperHelper;
 import org.coldis.library.thread.ThreadMapContextHolder;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -29,6 +28,7 @@ import org.springframework.util.ClassUtils;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
 import io.micrometer.observation.ObservationRegistry;
+import jakarta.jms.BytesMessage;
 import jakarta.jms.JMSException;
 import jakarta.jms.Message;
 import jakarta.jms.Session;
@@ -78,6 +78,7 @@ public class EnhancedJmsMessageConverter extends SimpleMessageConverter {
 	 * Object mapper.
 	 */
 	@Autowired
+	@Qualifier("thinJsonMapper")
 	private ObjectMapper objectMapper;
 
 	/**
@@ -159,8 +160,9 @@ public class EnhancedJmsMessageConverter extends SimpleMessageConverter {
 			// reacheable.
 			if (CollectionUtils.isNotEmpty(preferedClassesNames)) {
 				try {
-					final String actualPayload = ObjectMapperHelper.serialize(this.objectMapper, payload, null, false);
-					message = session.createTextMessage(actualPayload);
+					final byte[] actualPayload = this.objectMapper.writeValueAsBytes(payload);
+					message = session.createBytesMessage();
+					((BytesMessage) message).writeBytes(actualPayload);
 					// Adds the preferred types to the message.
 					final String preferedClassesNamesAttribute = preferedClassesNames.stream().reduce((
 							name1,
@@ -200,7 +202,7 @@ public class EnhancedJmsMessageConverter extends SimpleMessageConverter {
 		if (message == null) {
 			message = super.toMessage(payload, session);
 		}
-		
+
 		// Adds parameters to the message.
 		this.addParametersToMessage(message);
 
@@ -217,7 +219,10 @@ public class EnhancedJmsMessageConverter extends SimpleMessageConverter {
 		// Object.
 		Object object = null;
 
-		if ((message instanceof TextMessage) && StringUtils.isNotBlank(((TextMessage) message).getText())) {
+		final TextMessage textMessage = message instanceof TextMessage ? (TextMessage) message : null;
+		final BytesMessage bytesMessage = message instanceof BytesMessage ? (BytesMessage) message : null;
+
+		if ((textMessage != null) || (bytesMessage != null)) {
 			try {
 
 				// Gets the preferred classes for conversion.
@@ -231,7 +236,14 @@ public class EnhancedJmsMessageConverter extends SimpleMessageConverter {
 
 				// Converts the message to the preferred class if available.
 				if (preferedClass != null) {
-					object = ObjectMapperHelper.deserialize(this.objectMapper, ((TextMessage) message).getText(), preferedClass, false);
+					if (textMessage != null) {
+						object = this.objectMapper.readValue(textMessage.getText(), preferedClass);
+					}
+					else {
+						final byte[] messageBytes = new byte[(int) bytesMessage.getBodyLength()];
+						bytesMessage.readBytes(messageBytes);
+						object = this.objectMapper.readValue(messageBytes, preferedClass);
+					}
 				}
 
 			}
@@ -275,7 +287,7 @@ public class EnhancedJmsMessageConverter extends SimpleMessageConverter {
 			final Message message) throws JMSException {
 		// Increments the current async hop on the request.
 		this.incrementCurrentAsyncHopOnRequest(message);
-		
+
 		// Adds thread local properties.
 		for (final String attributeName : this.jmsConverterProperties.getThreadAttributes()) {
 			final Object attributeValue = message.getObjectProperty(attributeName);
