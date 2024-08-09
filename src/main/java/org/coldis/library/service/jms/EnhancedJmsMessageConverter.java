@@ -2,6 +2,7 @@ package org.coldis.library.service.jms;
 
 import java.util.Arrays;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
 
 import org.apache.commons.collections4.CollectionUtils;
@@ -143,6 +144,40 @@ public class EnhancedJmsMessageConverter extends SimpleMessageConverter {
 	}
 
 	/**
+	 * Checks if the message is simple.
+	 */
+	private boolean isSimpleMessage(
+			final Object payload) {
+		return (payload instanceof Message) || (payload instanceof String) || (payload instanceof byte[]) || (payload instanceof Map<?, ?>);
+	}
+
+	/**
+	 * Serializes the message.
+	 *
+	 * @param  payload Payload.
+	 * @param  session Session.
+	 * @return         Serialized message.
+	 */
+	private Message toSerializedMessage(
+			final Object payload,
+			final Session session) {
+		Message message = null;
+		try {
+			final byte[] actualPayload = this.optimizedSerializer.serialize(payload);
+			message = session.createBytesMessage();
+			((BytesMessage) message).writeBytes(actualPayload);
+			message.setBooleanProperty(EnhancedJmsMessageConverter.OPTIMIZED_SERIALIZER_PARAMETER, true);
+		}
+		// If the object cannot be serialized.
+		catch (final Exception exception) {
+			// Logs it.
+			EnhancedJmsMessageConverter.LOGGER.error("Object could not be serialized: ", exception.getLocalizedMessage());
+			EnhancedJmsMessageConverter.LOGGER.debug("Object could not be serialized.", exception);
+		}
+		return message;
+	}
+
+	/**
 	 * Gets the preferred classes from the payload.
 	 *
 	 * @param  payload Payload.
@@ -163,56 +198,65 @@ public class EnhancedJmsMessageConverter extends SimpleMessageConverter {
 	}
 
 	/**
+	 * Converts the message to JSON.
+	 *
+	 * @param payload Payload.
+	 * @param session Session.
+	 */
+	private Message toJsonMessage(
+			final Object payload,
+			final Session session) {
+		Message message = null;
+		// Serializes the payload with JSON serializer if preferred classes are
+		// reacheable.
+		final List<String> preferedClassesNames = this.getPreferedClassesFromPayload(payload);
+		if (CollectionUtils.isNotEmpty(preferedClassesNames)) {
+			try {
+				message = session.createBytesMessage();
+				((BytesMessage) message).writeBytes(this.objectMapper.writeValueAsBytes(payload));
+				// Adds the preferred types to the message.
+				final String preferedClassesNamesAttribute = preferedClassesNames.stream().reduce((
+						name1,
+						name2) -> StringUtils.joinWith(",", name1, name2)).get();
+				message.setStringProperty(EnhancedJmsMessageConverter.PREFERED_TYPE_PARAMETER, preferedClassesNamesAttribute);
+			}
+			// If the object cannot be converted from JSON.
+			catch (final Exception exception) {
+				// Logs it.
+				EnhancedJmsMessageConverter.LOGGER.error("Object could not be serialized to JSON: ", exception.getLocalizedMessage());
+				EnhancedJmsMessageConverter.LOGGER.debug("Object could not be serialized to JSON.", exception);
+			}
+		}
+		return message;
+	}
+
+	/**
 	 * @see org.springframework.jms.support.converter.SimpleMessageConverter#toMessage(java.lang.Object,
 	 *      jakarta.jms.Session)
 	 */
-	private Message toMessageUsingDtoInformation(
+	private Message toDynamicMessage(
 			final Object payload,
-			final Session session) {
+			final Session session) throws MessageConversionException, JMSException {
 		// Message.
 		Message message = null;
 
 		if (payload != null) {
 
-			// If optimized serializer is enabled.
-			if (this.useOptimizedSerializer) {
-				try {
-					final byte[] actualPayload = this.optimizedSerializer.serialize(payload);
-					message = session.createBytesMessage();
-					((BytesMessage) message).writeBytes(actualPayload);
-					message.setBooleanProperty(EnhancedJmsMessageConverter.OPTIMIZED_SERIALIZER_PARAMETER, true);
+			// Sends a non-simple message.
+			if (!this.isSimpleMessage(payload)) {
+				// If optimized serializer is enabled.
+				if (this.useOptimizedSerializer) {
+					message = this.toSerializedMessage(payload, session);
 				}
-				// If the object cannot be serialized.
-				catch (final Exception exception) {
-					// Logs it.
-					EnhancedJmsMessageConverter.LOGGER.error("Object could not be serialized: ", exception.getLocalizedMessage());
-					EnhancedJmsMessageConverter.LOGGER.debug("Object could not be serialized.", exception);
+				// If optimized serializer is not enabled.
+				if (message == null) {
+					message = this.toJsonMessage(payload, session);
 				}
 			}
 
-			// If optimized serializer is not enabled.
-			else {
-
-				// Serializes the payload with JSON serializer if preferred classes are
-				// reacheable.
-				final List<String> preferedClassesNames = this.getPreferedClassesFromPayload(payload);
-				if (CollectionUtils.isNotEmpty(preferedClassesNames)) {
-					try {
-						message = session.createBytesMessage();
-						((BytesMessage) message).writeBytes(this.objectMapper.writeValueAsBytes(payload));
-						// Adds the preferred types to the message.
-						final String preferedClassesNamesAttribute = preferedClassesNames.stream().reduce((
-								name1,
-								name2) -> StringUtils.joinWith(",", name1, name2)).get();
-						message.setStringProperty(EnhancedJmsMessageConverter.PREFERED_TYPE_PARAMETER, preferedClassesNamesAttribute);
-					}
-					// If the object cannot be converted from JSON.
-					catch (final Exception exception) {
-						// Logs it.
-						EnhancedJmsMessageConverter.LOGGER.error("Object could not be serialized to JSON: ", exception.getLocalizedMessage());
-						EnhancedJmsMessageConverter.LOGGER.debug("Object could not be serialized to JSON.", exception);
-					}
-				}
+			// Generates a simple message.
+			if (message == null) {
+				message = super.toMessage(payload, session);
 			}
 		}
 
@@ -234,12 +278,7 @@ public class EnhancedJmsMessageConverter extends SimpleMessageConverter {
 		this.validateAsyncHops(payload);
 
 		// Tries creating a message with DTO information.
-		Message message = this.toMessageUsingDtoInformation(payload, session);
-
-		// Tries using the simple message converter if no message has been prepared.
-		if (message == null) {
-			message = super.toMessage(payload, session);
-		}
+		final Message message = this.toDynamicMessage(payload, session);
 
 		// Adds parameters to the message.
 		this.addParametersToMessage(message);
@@ -247,6 +286,21 @@ public class EnhancedJmsMessageConverter extends SimpleMessageConverter {
 		// Returns the message.
 		return message;
 
+	}
+
+	/**
+	 * Converts the message to JSON.
+	 *
+	 * @param  message Message.
+	 * @return         Object.
+	 */
+	private Object fromSerializedMessage(
+			final BytesMessage bytesMessage) throws JMSException {
+		Object object;
+		final byte[] messageBytes = new byte[(int) bytesMessage.getBodyLength()];
+		bytesMessage.readBytes(messageBytes);
+		object = this.optimizedSerializer.deserialize(messageBytes);
+		return object;
 	}
 
 	/**
@@ -271,47 +325,67 @@ public class EnhancedJmsMessageConverter extends SimpleMessageConverter {
 	}
 
 	/**
+	 * Converts the message to JSON.
+	 *
+	 * @param  message Message.
+	 * @return         Object.
+	 */
+	private Object fromJsonMessage(
+			final Message message) throws LinkageError {
+		Object object = null;
+		try {
+			// Converts the message to the preferred class if available.
+			final Class<?> preferedClass = this.getPreferedClassFromMessage(message);
+			if (preferedClass != null) {
+				if (message instanceof final TextMessage textMessage) {
+					object = this.objectMapper.readValue(textMessage.getText(), preferedClass);
+				}
+				else if (message instanceof final BytesMessage bytesMessage) {
+					final byte[] messageBytes = new byte[(int) bytesMessage.getBodyLength()];
+					bytesMessage.readBytes(messageBytes);
+					object = this.objectMapper.readValue(messageBytes, preferedClass);
+				}
+			}
+
+		}
+		// Logs errors.
+		catch (final Exception exception) {
+			EnhancedJmsMessageConverter.LOGGER.error("Object could not be converted from JSON: ", exception.getLocalizedMessage());
+			EnhancedJmsMessageConverter.LOGGER.debug("Object could not be converted from JSON.", exception);
+		}
+		return object;
+	}
+
+	/**
 	 * @see org.springframework.jms.support.converter.SimpleMessageConverter#fromMessage(jakarta.jms.Message)
 	 */
-	public Object fromMessageUsingPreferedClassesInformation(
+	public Object fromDynamicMessage(
 			final Message message) throws JMSException, MessageConversionException {
 		// Object.
 		Object object = null;
-		final TextMessage textMessage = (message instanceof TextMessage ? (TextMessage) message : null);
-		final BytesMessage bytesMessage = (message instanceof BytesMessage ? (BytesMessage) message : null);
 
 		// If it is an optimized serializer message.
 		final boolean optimizedSerializerUsed = (message.propertyExists(EnhancedJmsMessageConverter.OPTIMIZED_SERIALIZER_PARAMETER)
 				&& message.getBooleanProperty(EnhancedJmsMessageConverter.OPTIMIZED_SERIALIZER_PARAMETER));
-		if (optimizedSerializerUsed && (bytesMessage != null)) {
-			final byte[] messageBytes = new byte[(int) bytesMessage.getBodyLength()];
-			bytesMessage.readBytes(messageBytes);
-			object = this.optimizedSerializer.deserialize(messageBytes);
+		if (optimizedSerializerUsed && message instanceof final BytesMessage bytesMessage) {
+			object = this.fromSerializedMessage(bytesMessage);
+		}
+		// If the message has a prefered type.
+		else if (message.propertyExists(EnhancedJmsMessageConverter.PREFERED_TYPE_PARAMETER)) {
+			object = this.fromJsonMessage(message);
 		}
 
-		// If the message is a text or bytes message.
-		else if ((textMessage != null) || (bytesMessage != null)) {
-			try {
+		// Tries converting the message using deprecated converters.
+		if (object == null) {
+			object = this.typableJmsMessageConverter.fromMessageUsingCurrentConverter(message);
+		}
+		if (object == null) {
+			object = this.dtoJmsMessageConverter.fromMessageUsingCurrentConverter(message);
+		}
 
-				// Converts the message to the preferred class if available.
-				final Class<?> preferedClass = this.getPreferedClassFromMessage(message);
-				if (preferedClass != null) {
-					if (textMessage != null) {
-						object = this.objectMapper.readValue(textMessage.getText(), preferedClass);
-					}
-					else {
-						final byte[] messageBytes = new byte[(int) bytesMessage.getBodyLength()];
-						bytesMessage.readBytes(messageBytes);
-						object = this.objectMapper.readValue(messageBytes, preferedClass);
-					}
-				}
-
-			}
-			// Logs errors.
-			catch (final Exception exception) {
-				EnhancedJmsMessageConverter.LOGGER.error("Object could not be converted from JSON: ", exception.getLocalizedMessage());
-				EnhancedJmsMessageConverter.LOGGER.debug("Object could not be converted from JSON.", exception);
-			}
+		// Tries using simple converter.
+		if (object == null) {
+			object = super.fromMessage(message);
 		}
 
 		// Returns the object.
@@ -368,20 +442,7 @@ public class EnhancedJmsMessageConverter extends SimpleMessageConverter {
 		this.getParametersFromMessage(message);
 
 		// Tries to convert using preferred classes.
-		Object object = this.fromMessageUsingPreferedClassesInformation(message);
-
-		// Tries converting the message using deprecated converters.
-		if (object == null) {
-			object = this.typableJmsMessageConverter.fromMessageUsingCurrentConverter(message);
-		}
-		if (object == null) {
-			object = this.dtoJmsMessageConverter.fromMessageUsingCurrentConverter(message);
-		}
-
-		// Tries using simple converter.
-		if (object == null) {
-			object = super.fromMessage(message);
-		}
+		final Object object = this.fromDynamicMessage(message);
 
 		// Returns the object.
 		return object;

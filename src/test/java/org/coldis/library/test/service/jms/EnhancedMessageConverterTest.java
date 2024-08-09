@@ -123,6 +123,7 @@ public class EnhancedMessageConverterTest {
 	 */
 	@BeforeEach
 	public void setUp() {
+		EnhancedMessageConverterTest.currentTestMessage = null;
 		EnhancedMessageConverterTest.asyncHops = 0L;
 		this.jmsTemplate.setMessageConverter(this.enhancedJmsMessageConverter);
 		this.jmsConverterProperties.setMaximumAsyncHops(103L);
