@@ -14,10 +14,10 @@ import org.coldis.library.test.TestHelper;
 import org.coldis.library.thread.ThreadMapContextHolder;
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.BeforeEach;
-import org.junit.jupiter.api.Disabled;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.context.SpringBootTest.WebEnvironment;
 import org.springframework.jms.annotation.EnableJms;
@@ -112,6 +112,13 @@ public class EnhancedMessageConverterTest {
 	private EnhancedJmsMessageConverter enhancedJmsMessageConverter;
 
 	/**
+	 * Enhanced JMS message converter.
+	 */
+	@Autowired
+	@Qualifier("internalEnhancedJmsMessageConverter")
+	private EnhancedJmsMessageConverter internalEnhancedJmsMessageConverter;
+
+	/**
 	 * Sets up tests.
 	 */
 	@BeforeEach
@@ -183,8 +190,8 @@ public class EnhancedMessageConverterTest {
 			this.asyncHopsMessageId = RandomHelper.getPositiveRandomLong(Long.MAX_VALUE);
 			final DtoTestObject testMessage = new DtoTestObject(this.asyncHopsMessageId, "2", "3", 4, new int[] { 5, 6 }, 7);
 			this.jmsTemplate.convertAndSend("message/loop", testMessage);
-			TestHelper.waitUntilValid(() -> EnhancedMessageConverterTest.asyncHops, asyncHops -> asyncHops > this.jmsConverterProperties.getMaximumAsyncHops(), TestHelper.REGULAR_WAIT,
-					TestHelper.SHORT_WAIT);
+			TestHelper.waitUntilValid(() -> EnhancedMessageConverterTest.asyncHops, asyncHops -> asyncHops > this.jmsConverterProperties.getMaximumAsyncHops(),
+					TestHelper.REGULAR_WAIT, TestHelper.SHORT_WAIT);
 			Assertions.assertEquals(this.jmsConverterProperties.getMaximumAsyncHops(), EnhancedMessageConverterTest.asyncHops);
 		}
 	}
@@ -195,7 +202,7 @@ public class EnhancedMessageConverterTest {
 	 * @throws Exception If the test fails.
 	 */
 	@Test
-	@Disabled
+	// @Disabled
 	public void testSendThreadAttributes() throws Exception {
 		// For each test data.
 		for (final DtoTestObject testData : EnhancedMessageConverterTest.TEST_DATA) {
@@ -225,6 +232,25 @@ public class EnhancedMessageConverterTest {
 	 */
 	@Test
 	public void testSendObjectReceiveObject() throws Exception {
+		// For each test data.
+		for (final DtoTestObject testData : EnhancedMessageConverterTest.TEST_DATA) {
+			// Sends the test data as a JMS message.
+			this.jmsTemplate.convertAndSend("message/original", testData);
+			// Asserts that the message is correctly converted.
+			Assertions.assertTrue(TestHelper.waitUntilValid(() -> EnhancedMessageConverterTest.currentTestMessage,
+					message -> (message != null) && message.equals(testData), TestHelper.LONG_WAIT, TestHelper.SHORT_WAIT));
+		}
+
+	}
+
+	/**
+	 * Tests the JSON JMS message converter.
+	 *
+	 * @throws Exception If the test fails.
+	 */
+	@Test
+	public void testSendOptimizedObjectReceiveObject() throws Exception {
+		this.jmsTemplate.setMessageConverter(this.internalEnhancedJmsMessageConverter);
 		// For each test data.
 		for (final DtoTestObject testData : EnhancedMessageConverterTest.TEST_DATA) {
 			// Sends the test data as a JMS message.
@@ -316,6 +342,25 @@ public class EnhancedMessageConverterTest {
 	@Test
 	public void testSendDtoReceiveDto() throws Exception {
 		this.jmsConverterProperties.setOriginalTypePrecedence(false);
+		// For each test data.
+		for (final DtoTestObject testData : EnhancedMessageConverterTest.TEST_DATA) {
+			this.jmsTemplate.convertAndSend("message/dto", ObjectMapperHelper.convert(this.objectMapper, testData, DtoTestObjectDto.class, true));
+			// Asserts that the message is correctly converted.
+			Assertions.assertTrue(TestHelper.waitUntilValid(() -> EnhancedMessageConverterTest.currentTestMessage,
+					message -> (message != null) && message.equals(ObjectMapperHelper.convert(this.objectMapper, testData, DtoTestObjectDto.class, true)),
+					TestHelper.LONG_WAIT, TestHelper.SHORT_WAIT));
+		}
+	}
+
+	/**
+	 * Tests the JSON JMS message converter.
+	 *
+	 * @throws Exception If the test fails.
+	 */
+	@Test
+	public void testSendOptimizedDtoReceiveDto() throws Exception {
+		this.jmsConverterProperties.setOriginalTypePrecedence(false);
+		this.jmsTemplate.setMessageConverter(this.internalEnhancedJmsMessageConverter);
 		// For each test data.
 		for (final DtoTestObject testData : EnhancedMessageConverterTest.TEST_DATA) {
 			this.jmsTemplate.convertAndSend("message/dto", ObjectMapperHelper.convert(this.objectMapper, testData, DtoTestObjectDto.class, true));

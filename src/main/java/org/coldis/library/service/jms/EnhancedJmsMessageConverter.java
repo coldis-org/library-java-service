@@ -7,6 +7,7 @@ import java.util.Objects;
 import org.apache.commons.collections4.CollectionUtils;
 import org.apache.commons.collections4.EnumerationUtils;
 import org.apache.commons.lang3.StringUtils;
+import org.apache.fury.Fury;
 import org.coldis.library.dto.DtoOrigin;
 import org.coldis.library.dto.DtoType;
 import org.coldis.library.dto.DtoTypeMetadata;
@@ -17,12 +18,8 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Qualifier;
-import org.springframework.boot.autoconfigure.condition.ConditionalOnClass;
-import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
-import org.springframework.context.annotation.Primary;
 import org.springframework.jms.support.converter.MessageConversionException;
 import org.springframework.jms.support.converter.SimpleMessageConverter;
-import org.springframework.stereotype.Component;
 import org.springframework.util.ClassUtils;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -37,15 +34,6 @@ import jakarta.jms.TextMessage;
 /**
  * Enhanced message converter.
  */
-@Primary
-@Component
-@Qualifier("enhancedJmsMessageConverter")
-@ConditionalOnClass(value = Message.class)
-@ConditionalOnProperty(
-		name = "org.coldis.library.service.jms.message-converter-enhanced-enabled",
-		havingValue = "true",
-		matchIfMissing = true
-)
 public class EnhancedJmsMessageConverter extends SimpleMessageConverter {
 
 	/**
@@ -69,6 +57,11 @@ public class EnhancedJmsMessageConverter extends SimpleMessageConverter {
 	private static final String PREFERED_TYPE_PARAMETER = "preferedType";
 
 	/**
+	 * Optimized serializer parameter.
+	 */
+	private static final String OPTIMIZED_SERIALIZER_PARAMETER = "optSer";
+
+	/**
 	 * JMS converter properties.
 	 */
 	@Autowired
@@ -82,6 +75,13 @@ public class EnhancedJmsMessageConverter extends SimpleMessageConverter {
 	private ObjectMapper objectMapper;
 
 	/**
+	 * Optimized serializer.
+	 */
+	@Autowired
+	@Qualifier(value = "javaOptimizedSerializer")
+	private Fury optimizedSerializer;
+
+	/**
 	 * DTO JMS message converter.
 	 */
 	@Autowired
@@ -92,6 +92,17 @@ public class EnhancedJmsMessageConverter extends SimpleMessageConverter {
 	 */
 	@Autowired
 	private TypableJmsMessageConverter typableJmsMessageConverter;
+
+	/**
+	 * Use optimized serializer.
+	 */
+	private Boolean useOptimizedSerializer = false;
+
+	/** Constructor. */
+	public EnhancedJmsMessageConverter(final Boolean useOptimizedSerializer) {
+		super();
+		this.useOptimizedSerializer = useOptimizedSerializer;
+	}
 
 	/**
 	 * Gets the current async hop from the request.
@@ -129,7 +140,26 @@ public class EnhancedJmsMessageConverter extends SimpleMessageConverter {
 				message.setObjectProperty(attributeName, attributeValue);
 			}
 		}
+	}
 
+	/**
+	 * Gets the preferred classes from the payload.
+	 *
+	 * @param  payload Payload.
+	 * @return         Preferred classes.
+	 */
+	private List<String> getPreferedClassesFromPayload(
+			final Object payload) {
+		final DtoType dtoTypeAnnotation = Arrays.stream(payload.getClass().getAnnotationsByType(DtoType.class))
+				.filter(dto -> "java".equals(dto.fileExtension())).findFirst().orElse(null);
+		final DtoOrigin dtoOriginAnnotation = payload.getClass().getAnnotation(DtoOrigin.class);
+		List<String> preferedClassesNames = (dtoTypeAnnotation != null
+				? (List.of(payload.getClass().getName().toString(),
+						new DtoTypeMetadata(payload.getClass().getName().toString(), dtoTypeAnnotation).getQualifiedName()))
+				: dtoOriginAnnotation != null ? (List.of(dtoOriginAnnotation.originalClassName(), payload.getClass().getName().toString())) : null);
+		preferedClassesNames = ((preferedClassesNames == null) || this.jmsConverterProperties.getOriginalTypePrecedence() ? preferedClassesNames
+				: preferedClassesNames.reversed());
+		return preferedClassesNames;
 	}
 
 	/**
@@ -143,37 +173,46 @@ public class EnhancedJmsMessageConverter extends SimpleMessageConverter {
 		Message message = null;
 
 		if (payload != null) {
-			// Pass thread attributes to
 
-			// Tries to get preferred classes for conversion using DTO annotations. Original
-			// class is always preferred over DTO class.
-			final DtoType dtoTypeAnnotation = Arrays.stream(payload.getClass().getAnnotationsByType(DtoType.class))
-					.filter(dto -> "java".equals(dto.fileExtension())).findFirst().orElse(null);
-			final DtoOrigin dtoOriginAnnotation = payload.getClass().getAnnotation(DtoOrigin.class);
-			List<String> preferedClassesNames = (dtoTypeAnnotation != null
-					? (List.of(payload.getClass().getName().toString(),
-							new DtoTypeMetadata(payload.getClass().getName().toString(), dtoTypeAnnotation).getQualifiedName()))
-					: dtoOriginAnnotation != null ? (List.of(dtoOriginAnnotation.originalClassName(), payload.getClass().getName().toString())) : null);
-			preferedClassesNames = ((preferedClassesNames == null) || this.jmsConverterProperties.getOriginalTypePrecedence() ? preferedClassesNames
-					: preferedClassesNames.reversed());
-			// Serializes the payload with JSON serializer if preferred classes are
-			// reacheable.
-			if (CollectionUtils.isNotEmpty(preferedClassesNames)) {
+			// If optimized serializer is enabled.
+			if (this.useOptimizedSerializer) {
 				try {
-					final byte[] actualPayload = this.objectMapper.writeValueAsBytes(payload);
+					final byte[] actualPayload = this.optimizedSerializer.serialize(payload);
 					message = session.createBytesMessage();
 					((BytesMessage) message).writeBytes(actualPayload);
-					// Adds the preferred types to the message.
-					final String preferedClassesNamesAttribute = preferedClassesNames.stream().reduce((
-							name1,
-							name2) -> StringUtils.joinWith(",", name1, name2)).get();
-					message.setStringProperty(EnhancedJmsMessageConverter.PREFERED_TYPE_PARAMETER, preferedClassesNamesAttribute);
+					message.setBooleanProperty(EnhancedJmsMessageConverter.OPTIMIZED_SERIALIZER_PARAMETER, true);
 				}
-				// If the object cannot be converted from JSON.
+				// If the object cannot be serialized.
 				catch (final Exception exception) {
 					// Logs it.
-					EnhancedJmsMessageConverter.LOGGER.error("Object could not be serialized to JSON: ", exception.getLocalizedMessage());
-					EnhancedJmsMessageConverter.LOGGER.debug("Object could not be serialized to JSON.", exception);
+					EnhancedJmsMessageConverter.LOGGER.error("Object could not be serialized: ", exception.getLocalizedMessage());
+					EnhancedJmsMessageConverter.LOGGER.debug("Object could not be serialized.", exception);
+				}
+			}
+
+			// If optimized serializer is not enabled.
+			else {
+
+				// Serializes the payload with JSON serializer if preferred classes are
+				// reacheable.
+				final List<String> preferedClassesNames = this.getPreferedClassesFromPayload(payload);
+				if (CollectionUtils.isNotEmpty(preferedClassesNames)) {
+					try {
+						final byte[] actualPayload = this.objectMapper.writeValueAsBytes(payload);
+						message = session.createBytesMessage();
+						((BytesMessage) message).writeBytes(actualPayload);
+						// Adds the preferred types to the message.
+						final String preferedClassesNamesAttribute = preferedClassesNames.stream().reduce((
+								name1,
+								name2) -> StringUtils.joinWith(",", name1, name2)).get();
+						message.setStringProperty(EnhancedJmsMessageConverter.PREFERED_TYPE_PARAMETER, preferedClassesNamesAttribute);
+					}
+					// If the object cannot be converted from JSON.
+					catch (final Exception exception) {
+						// Logs it.
+						EnhancedJmsMessageConverter.LOGGER.error("Object could not be serialized to JSON: ", exception.getLocalizedMessage());
+						EnhancedJmsMessageConverter.LOGGER.debug("Object could not be serialized to JSON.", exception);
+					}
 				}
 			}
 		}
@@ -212,29 +251,49 @@ public class EnhancedJmsMessageConverter extends SimpleMessageConverter {
 	}
 
 	/**
+	 * Gets the preferred class from the message.
+	 *
+	 * @param  message                Message.
+	 * @return                        Preferred class.
+	 * @throws JMSException           If the preferred class cannot be obtained.
+	 * @throws ClassNotFoundException If the preferred class cannot be found.
+	 * @throws LinkageError           If the preferred class cannot be loaded.
+	 */
+	private Class<?> getPreferedClassFromMessage(
+			final Message message) throws JMSException, ClassNotFoundException, LinkageError {
+		final String preferedClassesNamesAttribute = message.getStringProperty(EnhancedJmsMessageConverter.PREFERED_TYPE_PARAMETER);
+		final List<String> preferedClassesNames = (StringUtils.isBlank(preferedClassesNamesAttribute) ? List.of()
+				: List.of(preferedClassesNamesAttribute.split(",")));
+		final List<String> availablePreferedClasses = preferedClassesNames.stream()
+				.filter(className -> ClassUtils.isPresent(className, message.getClass().getClassLoader())).toList();
+		final Class<?> preferedClass = (CollectionUtils.isEmpty(availablePreferedClasses) ? null
+				: ClassUtils.forName(availablePreferedClasses.getFirst(), message.getClass().getClassLoader()));
+		return preferedClass;
+	}
+
+	/**
 	 * @see org.springframework.jms.support.converter.SimpleMessageConverter#fromMessage(jakarta.jms.Message)
 	 */
 	public Object fromMessageUsingPreferedClassesInformation(
 			final Message message) throws JMSException, MessageConversionException {
 		// Object.
 		Object object = null;
-
 		final TextMessage textMessage = message instanceof TextMessage ? (TextMessage) message : null;
 		final BytesMessage bytesMessage = message instanceof BytesMessage ? (BytesMessage) message : null;
 
-		if ((textMessage != null) || (bytesMessage != null)) {
+		// If it is an optimized serializer message.
+		if (message.getBooleanProperty(EnhancedJmsMessageConverter.OPTIMIZED_SERIALIZER_PARAMETER)) {
+			final byte[] messageBytes = new byte[(int) bytesMessage.getBodyLength()];
+			bytesMessage.readBytes(messageBytes);
+			object = this.optimizedSerializer.deserialize(messageBytes);
+		}
+
+		// If the message is a text or bytes message.
+		else if ((textMessage != null) || (bytesMessage != null)) {
 			try {
 
-				// Gets the preferred classes for conversion.
-				final String preferedClassesNamesAttribute = message.getStringProperty(EnhancedJmsMessageConverter.PREFERED_TYPE_PARAMETER);
-				final List<String> preferedClassesNames = (StringUtils.isBlank(preferedClassesNamesAttribute) ? List.of()
-						: List.of(preferedClassesNamesAttribute.split(",")));
-				final List<String> availablePreferedClasses = preferedClassesNames.stream()
-						.filter(className -> ClassUtils.isPresent(className, message.getClass().getClassLoader())).toList();
-				final Class<?> preferedClass = (CollectionUtils.isEmpty(availablePreferedClasses) ? null
-						: ClassUtils.forName(availablePreferedClasses.getFirst(), message.getClass().getClassLoader()));
-
 				// Converts the message to the preferred class if available.
+				final Class<?> preferedClass = this.getPreferedClassFromMessage(message);
 				if (preferedClass != null) {
 					if (textMessage != null) {
 						object = this.objectMapper.readValue(textMessage.getText(), preferedClass);
