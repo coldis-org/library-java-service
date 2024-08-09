@@ -281,7 +281,8 @@ public class EnhancedJmsMessageConverter extends SimpleMessageConverter {
 		final BytesMessage bytesMessage = (message instanceof BytesMessage ? (BytesMessage) message : null);
 
 		// If it is an optimized serializer message.
-		final boolean optimizedSerializerUsed = message.getBooleanProperty(EnhancedJmsMessageConverter.OPTIMIZED_SERIALIZER_PARAMETER);
+		final boolean optimizedSerializerUsed = (message.propertyExists(EnhancedJmsMessageConverter.OPTIMIZED_SERIALIZER_PARAMETER)
+				&& message.getBooleanProperty(EnhancedJmsMessageConverter.OPTIMIZED_SERIALIZER_PARAMETER));
 		if (optimizedSerializerUsed && (bytesMessage != null)) {
 			final byte[] messageBytes = new byte[(int) bytesMessage.getBodyLength()];
 			bytesMessage.readBytes(messageBytes);
