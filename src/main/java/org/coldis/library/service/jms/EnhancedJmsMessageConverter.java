@@ -404,11 +404,16 @@ public class EnhancedJmsMessageConverter extends SimpleMessageConverter {
 		Long currentAsyncHop = (EnumerationUtils.toList(message.getPropertyNames()).contains(EnhancedJmsMessageConverter.CURRENT_ASYNC_HOP_PARAMETER)
 				? message.getLongProperty(EnhancedJmsMessageConverter.CURRENT_ASYNC_HOP_PARAMETER)
 				: null);
+		// Resets the hops if queue is ignored.
 		final String destination = Objects.toString(message.getJMSDestination());
 		final String[] destinationParts = destination.split("[\\[\\]]");
 		final String convertedDestination = (destinationParts.length > 1 ? destinationParts[1] : destination).replaceAll("/", "-");
-		if (!this.jmsConverterProperties.getMaximumAsyncHopsIgnoredFor(convertedDestination)) {
-			currentAsyncHop = (currentAsyncHop == null ? 1 : currentAsyncHop + 1);
+		if (this.jmsConverterProperties.getMaximumAsyncHopsIgnoredFor(convertedDestination)) {
+			currentAsyncHop = 0L;
+		}
+		// Increments the hops if not.
+		else {
+			currentAsyncHop = (currentAsyncHop == null ? 1L : currentAsyncHop + 1);
 		}
 		ThreadMapContextHolder.setAttribute(EnhancedJmsMessageConverter.CURRENT_ASYNC_HOP_PARAMETER, currentAsyncHop);
 		return currentAsyncHop;
