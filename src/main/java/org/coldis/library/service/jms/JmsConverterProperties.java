@@ -17,9 +17,6 @@ import org.springframework.stereotype.Component;
 )
 public class JmsConverterProperties {
 
-	/** Thread attributes. */
-	private List<String> threadAttributes;
-
 	/**
 	 * Maximum async hops.
 	 */
@@ -37,26 +34,6 @@ public class JmsConverterProperties {
 	private Boolean originalTypePrecedence;
 
 	/**
-	 * Gets the threadAttributes.
-	 *
-	 * @return The threadAttributes.
-	 */
-	public List<String> getThreadAttributes() {
-		this.threadAttributes = (this.threadAttributes == null ? new ArrayList<>() : this.threadAttributes);
-		return this.threadAttributes;
-	}
-
-	/**
-	 * Sets the threadAttributes.
-	 *
-	 * @param threadAttributes New threadAttributes.
-	 */
-	public void setThreadAttributes(
-			final List<String> threadAttributes) {
-		this.threadAttributes = threadAttributes;
-	}
-
-	/**
 	 * Gets the maximumAsyncHops.
 	 *
 	 * @return The maximumAsyncHops.
@@ -65,7 +42,7 @@ public class JmsConverterProperties {
 		this.maximumAsyncHops = (this.maximumAsyncHops == null ? 100L : this.maximumAsyncHops);
 		return this.maximumAsyncHops;
 	}
-	
+
 	/**
 	 * Sets the maximumAsyncHops.
 	 *

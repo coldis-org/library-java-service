@@ -5,6 +5,7 @@ import java.util.Objects;
 
 import org.coldis.library.helper.RandomHelper;
 import org.coldis.library.serialization.ObjectMapperHelper;
+import org.coldis.library.service.helper.MultiLayerSessionHelper;
 import org.coldis.library.service.jms.DtoJmsMessageConverter;
 import org.coldis.library.service.jms.EnhancedJmsMessageConverter;
 import org.coldis.library.service.jms.JmsConverterProperties;
@@ -92,6 +93,16 @@ public class EnhancedMessageConverterTest {
 	 */
 	@Autowired
 	private JmsTemplate jmsTemplate;
+
+	/**
+	 * Multi-layer session helper.
+	 */
+	@Autowired
+	private MultiLayerSessionHelper multiLayerSessionHelper;
+
+	/** Test service. */
+	@Autowired
+	private EnhancedMessageConverterTestServiceClient testServiceClient;
 
 	/**
 	 * Typed JMS message converter.
@@ -204,24 +215,63 @@ public class EnhancedMessageConverterTest {
 	 */
 	@Test
 	// @Disabled
-	public void testSendThreadAttributes() throws Exception {
+	public void testSendSessionAttributes() throws Exception {
+
 		// For each test data.
 		for (final DtoTestObject testData : EnhancedMessageConverterTest.TEST_DATA) {
 			// Generates random attributes.
 			final Long attr1 = RandomHelper.getPositiveRandomLong(Long.MAX_VALUE);
 			final Long attr2 = RandomHelper.getPositiveRandomLong(Long.MAX_VALUE);
 			final Long attr3 = RandomHelper.getPositiveRandomLong(Long.MAX_VALUE);
-			ThreadMapContextHolder.setAttribute("testJmsAttr1", attr1);
-			ThreadMapContextHolder.setAttribute("testJmsAttr2", attr2);
-			ThreadMapContextHolder.setAttribute("testJmsAttr3", attr3);
+			final Long attr4 = RandomHelper.getPositiveRandomLong(Long.MAX_VALUE);
+			final Long attr5 = RandomHelper.getPositiveRandomLong(Long.MAX_VALUE);
+			final Long attr6 = RandomHelper.getPositiveRandomLong(Long.MAX_VALUE);
+			final Long attrN = RandomHelper.getPositiveRandomLong(Long.MAX_VALUE);
 
-			this.jmsTemplate.convertAndSend("message/thread", ObjectMapperHelper.convert(this.objectMapper, testData, DtoTestObjectDto.class, true));
+			this.testServiceClient.sendMessage("message/thread", ObjectMapperHelper.convert(this.objectMapper, testData, DtoTestObjectDto.class, true), attr1,
+					attr2, attr3, attr4, attr5, attr6, attrN);
 			ThreadMapContextHolder.clear();
 			final Message receivedMessage = this.jmsTemplate.receive("message/thread");
+			final Object receivedMessageObject = this.jmsTemplate.getMessageConverter().fromMessage(receivedMessage);
 
-			Assertions.assertEquals(attr1, receivedMessage.getObjectProperty("testJmsAttr1"));
-			Assertions.assertEquals(attr2, receivedMessage.getObjectProperty("testJmsAttr2"));
-			Assertions.assertNull(receivedMessage.getObjectProperty("testJmsAttr3"));
+			// Validates properties.
+			Assertions.assertEquals(Objects.toString(attr1),
+					Objects.toString(receivedMessage.getObjectProperty(EnhancedJmsMessageConverter.SESSION_ATTRIBUTE_PREFIX + "testJmsAttr1")));
+			Assertions.assertEquals(Objects.toString(attr2),
+					Objects.toString(receivedMessage.getObjectProperty(EnhancedJmsMessageConverter.SESSION_ATTRIBUTE_PREFIX + "testJmsAttr2")));
+			Assertions.assertEquals(Objects.toString(attr3),
+					Objects.toString(receivedMessage.getObjectProperty(EnhancedJmsMessageConverter.SESSION_ATTRIBUTE_PREFIX + "testJmsAttr3")));
+			Assertions.assertEquals(Objects.toString(attr4),
+					Objects.toString(receivedMessage.getObjectProperty(EnhancedJmsMessageConverter.SESSION_ATTRIBUTE_PREFIX + "testJmsAttr4")));
+			// Assertions.assertEquals(Objects.toString(attr5),Objects.toString(
+			// receivedMessage.getObjectProperty(EnhancedJmsMessageConverter.SESSION_ATTRIBUTE_PREFIX
+			// + "testJmsAttr5")));
+			Assertions.assertEquals(Objects.toString(attr6),
+					Objects.toString(receivedMessage.getObjectProperty(EnhancedJmsMessageConverter.SESSION_ATTRIBUTE_PREFIX + "testJmsAttr6")));
+			Assertions.assertNull(receivedMessage.getObjectProperty("testJmsAttrN"));
+			Assertions.assertNull(receivedMessage.getObjectProperty("sessionAttrN"));
+
+			// Validates thread attributes.
+			Assertions.assertEquals(Objects.toString(attr1), Objects.toString(ThreadMapContextHolder.getAttribute("testJmsAttr1")));
+			Assertions.assertEquals(Objects.toString(attr2), Objects.toString(ThreadMapContextHolder.getAttribute("testJmsAttr2")));
+			Assertions.assertEquals(Objects.toString(attr3), Objects.toString(ThreadMapContextHolder.getAttribute("testJmsAttr3")));
+			Assertions.assertEquals(Objects.toString(attr4), Objects.toString(ThreadMapContextHolder.getAttribute("testJmsAttr4")));
+			// Assertions.assertEquals(Objects.toString(attr5),
+			// Objects.toString(ThreadMapContextHolder.getAttribute("testJmsAttr5")));
+			Assertions.assertEquals(Objects.toString(attr6), Objects.toString(ThreadMapContextHolder.getAttribute("testJmsAttr6")));
+			Assertions.assertNull(ThreadMapContextHolder.getAttribute("testJmsAttrN"));
+			Assertions.assertNull(ThreadMapContextHolder.getAttribute("sessionAttrN"));
+
+			// Validates multi-layer attributes.
+			Assertions.assertEquals(Objects.toString(attr1), Objects.toString(this.multiLayerSessionHelper.getAttribute("testJmsAttr1")));
+			Assertions.assertEquals(Objects.toString(attr2), Objects.toString(this.multiLayerSessionHelper.getAttribute("testJmsAttr2")));
+			Assertions.assertEquals(Objects.toString(attr3), Objects.toString(this.multiLayerSessionHelper.getAttribute("testJmsAttr3")));
+			Assertions.assertEquals(Objects.toString(attr4), Objects.toString(this.multiLayerSessionHelper.getAttribute("testJmsAttr4")));
+			// Assertions.assertEquals(Objects.toString(attr5),Objects.toString(
+			// this.multiLayerSessionHelper.getAttribute("testJmsAttr5")));
+			Assertions.assertEquals(Objects.toString(attr6), Objects.toString(this.multiLayerSessionHelper.getAttribute("testJmsAttr6")));
+			Assertions.assertNull(this.multiLayerSessionHelper.getAttribute("testJmsAttrN"));
+			Assertions.assertNull(this.multiLayerSessionHelper.getAttribute("sessionAttrN"));
 
 		}
 	}

@@ -1,6 +1,9 @@
 package org.coldis.library.service.jms;
 
+import java.util.Set;
+
 import org.springframework.beans.factory.annotation.Qualifier;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnClass;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.context.annotation.Bean;
@@ -29,8 +32,10 @@ public class JmsConverterAutoConfiguration {
 			havingValue = "true",
 			matchIfMissing = true
 	)
-	public EnhancedJmsMessageConverter enhancedJmsMessageConverter() {
-		return new EnhancedJmsMessageConverter(false);
+	public EnhancedJmsMessageConverter enhancedJmsMessageConverter(
+			@Value("#{'${org.coldis.library.service.jms.session-attributes:}'.split(',')}")
+			final Set<String> sessionAttributes) {
+		return new EnhancedJmsMessageConverter(false, sessionAttributes);
 	}
 
 	/**
@@ -46,8 +51,10 @@ public class JmsConverterAutoConfiguration {
 			havingValue = "true",
 			matchIfMissing = true
 	)
-	public EnhancedJmsMessageConverter internalEnhancedJmsMessageConverter() {
-		return new EnhancedJmsMessageConverter(true);
+	public EnhancedJmsMessageConverter internalEnhancedJmsMessageConverter(
+			@Value("#{'${org.coldis.library.service.jms.session-attributes:}'.split(',')}")
+			final Set<String> sessionAttributes) {
+		return new EnhancedJmsMessageConverter(true, sessionAttributes);
 	}
 
 }

@@ -4,6 +4,7 @@ import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Set;
 
 import org.apache.commons.collections4.CollectionUtils;
 import org.apache.commons.collections4.EnumerationUtils;
@@ -14,6 +15,7 @@ import org.coldis.library.dto.DtoType;
 import org.coldis.library.dto.DtoTypeMetadata;
 import org.coldis.library.exception.IntegrationException;
 import org.coldis.library.model.SimpleMessage;
+import org.coldis.library.service.helper.MultiLayerSessionHelper;
 import org.coldis.library.thread.ThreadMapContextHolder;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -25,7 +27,6 @@ import org.springframework.util.ClassUtils;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 
-import io.micrometer.observation.ObservationRegistry;
 import jakarta.jms.BytesMessage;
 import jakarta.jms.JMSException;
 import jakarta.jms.Message;
@@ -43,9 +44,9 @@ public class EnhancedJmsMessageConverter extends SimpleMessageConverter {
 	private static final Logger LOGGER = LoggerFactory.getLogger(EnhancedJmsMessageConverter.class);
 
 	/**
-	 * Local observation scope.
+	 * Session attribute.
 	 */
-	public static final ObservationRegistry REGISTRY = ObservationRegistry.create();
+	public static final String SESSION_ATTRIBUTE_PREFIX = "_SES_ATT_";
 
 	/**
 	 * Current async hop parameter.
@@ -61,6 +62,12 @@ public class EnhancedJmsMessageConverter extends SimpleMessageConverter {
 	 * Optimized serializer parameter.
 	 */
 	private static final String OPTIMIZED_SERIALIZER_PARAMETER = "optSer";
+
+	/**
+	 * Multi-layer session helper.
+	 */
+	@Autowired
+	private MultiLayerSessionHelper multiLayerSessionHelper;
 
 	/**
 	 * JMS converter properties.
@@ -99,10 +106,21 @@ public class EnhancedJmsMessageConverter extends SimpleMessageConverter {
 	 */
 	private Boolean useOptimizedSerializer = false;
 
+	/**
+	 * If the session info should be included in messages on message headers.
+	 */
+	private Set<String> includeSessionAttributesAsMessageHeaders;
+
 	/** Constructor. */
 	public EnhancedJmsMessageConverter(final Boolean useOptimizedSerializer) {
 		super();
 		this.useOptimizedSerializer = useOptimizedSerializer;
+	}
+
+	/** Constructor. */
+	public EnhancedJmsMessageConverter(final Boolean useOptimizedSerializer, final Set<String> includeSessionAttributesAsMessageHeaders) {
+		this(useOptimizedSerializer);
+		this.includeSessionAttributesAsMessageHeaders = includeSessionAttributesAsMessageHeaders;
 	}
 
 	/**
@@ -128,19 +146,48 @@ public class EnhancedJmsMessageConverter extends SimpleMessageConverter {
 	}
 
 	/**
+	 * Checks if the object is primitive.
+	 *
+	 * @param  object Object.
+	 * @return        If the object is primitive.
+	 */
+	private Boolean isPrimitive(
+			final Object object) {
+		return (object instanceof String) || (object instanceof Integer) || (object instanceof Long) || (object instanceof Float) || (object instanceof Double)
+				|| (object instanceof Boolean) || (object instanceof Byte);
+	}
+
+	/**
+	 * Converts the object to JMS attribute.
+	 *
+	 * @param  object Object.
+	 * @return        JMS attribute.
+	 */
+	private Object toJmsAttribute(
+			final Object object) {
+		return this.isPrimitive(object) ? object : Objects.toString(object);
+	}
+
+	/**
 	 * Adds parameters to the JMS message.
 	 */
 	private void addParametersToMessage(
 			final Message message) throws JMSException {
+
 		// Adds current async hop to message.
 		message.setLongProperty(EnhancedJmsMessageConverter.CURRENT_ASYNC_HOP_PARAMETER, this.getCurrentAsyncHop());
-		// Adds thread local properties.
-		for (final String attributeName : this.jmsConverterProperties.getThreadAttributes()) {
-			final Object attributeValue = ThreadMapContextHolder.getAttribute(attributeName);
-			if (attributeValue != null) {
-				message.setObjectProperty(attributeName, attributeValue);
+
+		// Sets session headers.
+		if (CollectionUtils.isNotEmpty(this.includeSessionAttributesAsMessageHeaders)) {
+			for (final String sessionAttribute : this.includeSessionAttributesAsMessageHeaders) {
+				final Object sessionAttributeValue = this.multiLayerSessionHelper.getAttribute(sessionAttribute);
+				if (sessionAttributeValue != null) {
+					message.setObjectProperty(EnhancedJmsMessageConverter.SESSION_ATTRIBUTE_PREFIX + sessionAttribute,
+							this.toJmsAttribute(sessionAttributeValue));
+				}
 			}
 		}
+
 	}
 
 	/**
@@ -253,7 +300,6 @@ public class EnhancedJmsMessageConverter extends SimpleMessageConverter {
 					message = this.toJsonMessage(payload, session);
 				}
 			}
-
 			// Generates a simple message.
 			if (message == null) {
 				message = super.toMessage(payload, session);
@@ -422,18 +468,24 @@ public class EnhancedJmsMessageConverter extends SimpleMessageConverter {
 	/**
 	 * Get parameters from the JMS message.
 	 */
+	@SuppressWarnings("unchecked")
 	private void getParametersFromMessage(
 			final Message message) throws JMSException {
 		// Increments the current async hop on the request.
 		this.incrementCurrentAsyncHopOnRequest(message);
 
-		// Adds thread local properties.
-		for (final String attributeName : this.jmsConverterProperties.getThreadAttributes()) {
-			final Object attributeValue = message.getObjectProperty(attributeName);
-			if (attributeValue != null) {
-				ThreadMapContextHolder.setAttribute(attributeName, attributeValue);
+		// Sets session headers.
+		for (final Object sessionPropertyNameObject : EnumerationUtils.toList(message.getPropertyNames())) {
+			if (sessionPropertyNameObject instanceof final String sessionPropertyName
+					&& sessionPropertyName.startsWith(EnhancedJmsMessageConverter.SESSION_ATTRIBUTE_PREFIX)) {
+				final String sessionAttributeName = sessionPropertyName.substring(EnhancedJmsMessageConverter.SESSION_ATTRIBUTE_PREFIX.length());
+				final Object sessionAttributeValue = message.getObjectProperty(sessionPropertyName);
+				if (sessionAttributeValue != null) {
+					this.multiLayerSessionHelper.getThreadSession().put(sessionAttributeName, sessionAttributeValue);
+				}
 			}
 		}
+
 	}
 
 	/**
