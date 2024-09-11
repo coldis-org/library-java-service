@@ -94,12 +94,6 @@ public class EnhancedMessageConverterTest {
 	@Autowired
 	private JmsTemplate jmsTemplate;
 
-	/**
-	 * Multi-layer session helper.
-	 */
-	@Autowired
-	private MultiLayerSessionHelper multiLayerSessionHelper;
-
 	/** Test service. */
 	@Autowired
 	private EnhancedMessageConverterTestServiceClient testServiceClient;
@@ -263,15 +257,15 @@ public class EnhancedMessageConverterTest {
 			Assertions.assertNull(ThreadMapContextHolder.getAttribute("sessionAttrN"));
 
 			// Validates multi-layer attributes.
-			Assertions.assertEquals(Objects.toString(attr1), Objects.toString(this.multiLayerSessionHelper.getAttribute("testJmsAttr1")));
-			Assertions.assertEquals(Objects.toString(attr2), Objects.toString(this.multiLayerSessionHelper.getAttribute("testJmsAttr2")));
-			Assertions.assertEquals(Objects.toString(attr3), Objects.toString(this.multiLayerSessionHelper.getAttribute("testJmsAttr3")));
-			Assertions.assertEquals(Objects.toString(attr4), Objects.toString(this.multiLayerSessionHelper.getAttribute("testJmsAttr4")));
+			Assertions.assertEquals(Objects.toString(attr1), Objects.toString(MultiLayerSessionHelper.getAttribute("testJmsAttr1")));
+			Assertions.assertEquals(Objects.toString(attr2), Objects.toString(MultiLayerSessionHelper.getAttribute("testJmsAttr2")));
+			Assertions.assertEquals(Objects.toString(attr3), Objects.toString(MultiLayerSessionHelper.getAttribute("testJmsAttr3")));
+			Assertions.assertEquals(Objects.toString(attr4), Objects.toString(MultiLayerSessionHelper.getAttribute("testJmsAttr4")));
 			// Assertions.assertEquals(Objects.toString(attr5),Objects.toString(
 			// this.multiLayerSessionHelper.getAttribute("testJmsAttr5")));
-			Assertions.assertEquals(Objects.toString(attr6), Objects.toString(this.multiLayerSessionHelper.getAttribute("testJmsAttr6")));
-			Assertions.assertNull(this.multiLayerSessionHelper.getAttribute("testJmsAttrN"));
-			Assertions.assertNull(this.multiLayerSessionHelper.getAttribute("sessionAttrN"));
+			Assertions.assertEquals(Objects.toString(attr6), Objects.toString(MultiLayerSessionHelper.getAttribute("testJmsAttr6")));
+			Assertions.assertNull(MultiLayerSessionHelper.getAttribute("testJmsAttrN"));
+			Assertions.assertNull(MultiLayerSessionHelper.getAttribute("sessionAttrN"));
 
 		}
 	}

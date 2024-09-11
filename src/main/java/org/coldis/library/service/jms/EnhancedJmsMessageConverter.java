@@ -64,12 +64,6 @@ public class EnhancedJmsMessageConverter extends SimpleMessageConverter {
 	private static final String OPTIMIZED_SERIALIZER_PARAMETER = "optSer";
 
 	/**
-	 * Multi-layer session helper.
-	 */
-	@Autowired
-	private MultiLayerSessionHelper multiLayerSessionHelper;
-
-	/**
 	 * JMS converter properties.
 	 */
 	@Autowired
@@ -180,7 +174,7 @@ public class EnhancedJmsMessageConverter extends SimpleMessageConverter {
 		// Sets session headers.
 		if (CollectionUtils.isNotEmpty(this.includeSessionAttributesAsMessageHeaders)) {
 			for (final String sessionAttribute : this.includeSessionAttributesAsMessageHeaders) {
-				final Object sessionAttributeValue = this.multiLayerSessionHelper.getAttribute(sessionAttribute);
+				final Object sessionAttributeValue = MultiLayerSessionHelper.getAttribute(sessionAttribute);
 				if (sessionAttributeValue != null) {
 					message.setObjectProperty(EnhancedJmsMessageConverter.SESSION_ATTRIBUTE_PREFIX + sessionAttribute,
 							this.toJmsAttribute(sessionAttributeValue));
@@ -481,7 +475,7 @@ public class EnhancedJmsMessageConverter extends SimpleMessageConverter {
 				final String sessionAttributeName = sessionPropertyName.substring(EnhancedJmsMessageConverter.SESSION_ATTRIBUTE_PREFIX.length());
 				final Object sessionAttributeValue = message.getObjectProperty(sessionPropertyName);
 				if (sessionAttributeValue != null) {
-					this.multiLayerSessionHelper.getThreadSession().put(sessionAttributeName, sessionAttributeValue);
+					MultiLayerSessionHelper.getThreadSession().put(sessionAttributeName, sessionAttributeValue);
 				}
 			}
 		}

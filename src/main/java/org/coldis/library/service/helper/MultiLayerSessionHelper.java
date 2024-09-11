@@ -24,7 +24,7 @@ public class MultiLayerSessionHelper {
 	 *
 	 * @return Session.
 	 */
-	public Map<String, Object> getThreadSession() {
+	public static Map<String, Object> getThreadSession() {
 		return ThreadMapContextHolder.getAttributes();
 	}
 
@@ -33,7 +33,7 @@ public class MultiLayerSessionHelper {
 	 *
 	 * @return Session.
 	 */
-	public HttpServletRequest getServletRequest() {
+	public static HttpServletRequest getServletRequest() {
 		final ServletRequestAttributes requestAttributes = ((ServletRequestAttributes) RequestContextHolder.getRequestAttributes());
 		return (requestAttributes == null ? null : requestAttributes.getRequest());
 	}
@@ -43,10 +43,10 @@ public class MultiLayerSessionHelper {
 	 *
 	 * @return Object from the session.
 	 */
-	public Object getAttribute(
+	public static Object getAttribute(
 			final String key) {
 		Object attribute = null;
-		final HttpServletRequest servletRequest = this.getServletRequest();
+		final HttpServletRequest servletRequest = MultiLayerSessionHelper.getServletRequest();
 		final HttpSession servletSession = (servletRequest == null ? null : servletRequest.getSession(false));
 		if (attribute == null) {
 			if (servletRequest != null) {
@@ -59,7 +59,7 @@ public class MultiLayerSessionHelper {
 			}
 		}
 		if (attribute == null) {
-			if (servletSession != null && Set.of("session", "sessionid").contains(key.toLowerCase())) {
+			if ((servletSession != null) && Set.of("session", "sessionid").contains(key.toLowerCase())) {
 				attribute = servletSession.getId();
 			}
 		}
@@ -74,13 +74,13 @@ public class MultiLayerSessionHelper {
 			}
 		}
 		if (attribute == null) {
-			if (servletRequest != null && servletRequest.getCookies() != null) {
+			if ((servletRequest != null) && (servletRequest.getCookies() != null)) {
 				attribute = Arrays.stream(servletRequest.getCookies()).filter(cookie -> key.equalsIgnoreCase(cookie.getName())).map(Cookie::getValue)
 						.findFirst().orElse(null);
 			}
 		}
 		if (attribute == null) {
-			final Map<String, Object> threadSession = this.getThreadSession();
+			final Map<String, Object> threadSession = MultiLayerSessionHelper.getThreadSession();
 			if (threadSession != null) {
 				attribute = threadSession.get(key);
 			}

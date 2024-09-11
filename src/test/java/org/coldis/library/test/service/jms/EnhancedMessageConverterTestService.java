@@ -26,10 +26,6 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 )
 public class EnhancedMessageConverterTestService {
 
-	/** Multi-layer session helper. */
-	@Autowired
-	private MultiLayerSessionHelper multiLayerSessionHelper;
-
 	/** Object mapper. */
 	@Autowired
 	private ObjectMapper objectMapper;
@@ -63,10 +59,10 @@ public class EnhancedMessageConverterTestService {
 			final Long testJmsAttr6,
 			@RequestParam(required = false)
 			final Long sessionAttrN) {
-		this.multiLayerSessionHelper.getServletRequest().setAttribute("testJmsAttr3", sessionAttr3);
-		this.multiLayerSessionHelper.getServletRequest().getSession(true).setAttribute("testJmsAttr4", sessionAttr4);
-		this.multiLayerSessionHelper.getThreadSession().put("testJmsAttr5", sessionAttr5);
-		this.multiLayerSessionHelper.getThreadSession().put("testJmsAttrN", sessionAttrN);
+		MultiLayerSessionHelper.getServletRequest().setAttribute("testJmsAttr3", sessionAttr3);
+		MultiLayerSessionHelper.getServletRequest().getSession(true).setAttribute("testJmsAttr4", sessionAttr4);
+		MultiLayerSessionHelper.getThreadSession().put("testJmsAttr5", sessionAttr5);
+		MultiLayerSessionHelper.getThreadSession().put("testJmsAttrN", sessionAttrN);
 		this.jmsTemplate.convertAndSend(queue, ObjectMapperHelper.convert(this.objectMapper, data, DtoTestObjectDto.class, true));
 	}
 
