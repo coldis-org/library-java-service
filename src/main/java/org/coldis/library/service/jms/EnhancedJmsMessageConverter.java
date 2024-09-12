@@ -8,12 +8,14 @@ import java.util.Set;
 
 import org.apache.commons.collections4.CollectionUtils;
 import org.apache.commons.collections4.EnumerationUtils;
+import org.apache.commons.lang3.ObjectUtils;
 import org.apache.commons.lang3.StringUtils;
 import org.apache.fury.BaseFury;
 import org.coldis.library.dto.DtoOrigin;
 import org.coldis.library.dto.DtoType;
 import org.coldis.library.dto.DtoTypeMetadata;
 import org.coldis.library.exception.IntegrationException;
+import org.coldis.library.helper.ReflectionHelper;
 import org.coldis.library.model.SimpleMessage;
 import org.coldis.library.service.helper.MultiLayerSessionHelper;
 import org.coldis.library.thread.ThreadMapContextHolder;
@@ -47,6 +49,11 @@ public class EnhancedJmsMessageConverter extends SimpleMessageConverter {
 	 * Session attribute.
 	 */
 	public static final String SESSION_ATTRIBUTE_PREFIX = "_SES_ATT_";
+
+	/**
+	 * Origin queue attribute.
+	 */
+	public static final String ORIGIN_DESTINATION_ATTRIBUTE = "originDestination";
 
 	/**
 	 * Current async hop parameter.
@@ -479,6 +486,11 @@ public class EnhancedJmsMessageConverter extends SimpleMessageConverter {
 				}
 			}
 		}
+
+		// Sets the origin queue.
+		final String destination = Objects.toString(ObjectUtils.firstNonNull(ReflectionHelper.getAttribute(message.getJMSDestination(), "address"),
+				ReflectionHelper.getAttribute(message.getJMSDestination(), "name"), "unknown-queue"));
+		MultiLayerSessionHelper.getThreadSession().put(EnhancedJmsMessageConverter.ORIGIN_DESTINATION_ATTRIBUTE, destination);
 
 	}
 

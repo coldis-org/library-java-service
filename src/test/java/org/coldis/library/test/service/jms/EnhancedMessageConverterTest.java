@@ -253,6 +253,8 @@ public class EnhancedMessageConverterTest {
 			// Assertions.assertEquals(Objects.toString(attr5),
 			// Objects.toString(ThreadMapContextHolder.getAttribute("testJmsAttr5")));
 			Assertions.assertEquals(Objects.toString(attr6), Objects.toString(ThreadMapContextHolder.getAttribute("testJmsAttr6")));
+			Assertions.assertEquals("message/thread",
+					Objects.toString(ThreadMapContextHolder.getAttribute(EnhancedJmsMessageConverter.ORIGIN_DESTINATION_ATTRIBUTE)));
 			Assertions.assertNull(ThreadMapContextHolder.getAttribute("testJmsAttrN"));
 			Assertions.assertNull(ThreadMapContextHolder.getAttribute("sessionAttrN"));
 
@@ -264,6 +266,8 @@ public class EnhancedMessageConverterTest {
 			// Assertions.assertEquals(Objects.toString(attr5),Objects.toString(
 			// this.multiLayerSessionHelper.getAttribute("testJmsAttr5")));
 			Assertions.assertEquals(Objects.toString(attr6), Objects.toString(MultiLayerSessionHelper.getAttribute("testJmsAttr6")));
+			Assertions.assertEquals("message/thread",
+					Objects.toString(MultiLayerSessionHelper.getAttribute(EnhancedJmsMessageConverter.ORIGIN_DESTINATION_ATTRIBUTE)));
 			Assertions.assertNull(MultiLayerSessionHelper.getAttribute("testJmsAttrN"));
 			Assertions.assertNull(MultiLayerSessionHelper.getAttribute("sessionAttrN"));
 
