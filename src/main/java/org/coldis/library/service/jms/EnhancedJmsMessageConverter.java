@@ -21,8 +21,6 @@ import org.coldis.library.service.helper.MultiLayerSessionHelper;
 import org.coldis.library.thread.ThreadMapContextHolder;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.jms.support.converter.MessageConversionException;
 import org.springframework.jms.support.converter.SimpleMessageConverter;
 import org.springframework.util.ClassUtils;
@@ -73,54 +71,47 @@ public class EnhancedJmsMessageConverter extends SimpleMessageConverter {
 	/**
 	 * JMS converter properties.
 	 */
-	@Autowired
-	private JmsConverterProperties jmsConverterProperties;
+	private final JmsConverterProperties jmsConverterProperties;
 
 	/**
 	 * Object mapper.
 	 */
-	@Autowired
-	@Qualifier("thinJsonMapper")
-	private ObjectMapper objectMapper;
+	private final ObjectMapper objectMapper;
 
 	/**
 	 * Optimized serializer.
 	 */
-	@Autowired
-	@Qualifier(value = "javaOptimizedSerializer")
-	private BaseFury optimizedSerializer;
-
-	/**
-	 * DTO JMS message converter.
-	 */
-	@Autowired
-	private DtoJmsMessageConverter dtoJmsMessageConverter;
-
-	/**
-	 * Typable JMS message converter.
-	 */
-	@Autowired
-	private TypableJmsMessageConverter typableJmsMessageConverter;
-
-	/**
-	 * Use optimized serializer.
-	 */
-	private Boolean useOptimizedSerializer = false;
+	private final BaseFury optimizedSerializer;
 
 	/**
 	 * If the session info should be included in messages on message headers.
 	 */
-	private Set<String> includeSessionAttributesAsMessageHeaders;
+	private final Set<String> includeSessionAttributesAsMessageHeaders;
+
+	/**
+	 * DTO JMS message converter.
+	 */
+	private final DtoJmsMessageConverter dtoJmsMessageConverter;
+
+	/**
+	 * Typable JMS message converter.
+	 */
+	private final TypableJmsMessageConverter typableJmsMessageConverter;
 
 	/** Constructor. */
-	public EnhancedJmsMessageConverter(final Boolean useOptimizedSerializer) {
+	public EnhancedJmsMessageConverter(
+			final JmsConverterProperties jmsConverterProperties,
+			final ObjectMapper objectMapper,
+			final BaseFury optimizedSerializer,
+			final DtoJmsMessageConverter dtoJmsMessageConverter,
+			final TypableJmsMessageConverter typableJmsMessageConverter,
+			final Set<String> includeSessionAttributesAsMessageHeaders) {
 		super();
-		this.useOptimizedSerializer = useOptimizedSerializer;
-	}
-
-	/** Constructor. */
-	public EnhancedJmsMessageConverter(final Boolean useOptimizedSerializer, final Set<String> includeSessionAttributesAsMessageHeaders) {
-		this(useOptimizedSerializer);
+		this.jmsConverterProperties = jmsConverterProperties;
+		this.objectMapper = objectMapper;
+		this.optimizedSerializer = optimizedSerializer;
+		this.dtoJmsMessageConverter = dtoJmsMessageConverter;
+		this.typableJmsMessageConverter = typableJmsMessageConverter;
 		this.includeSessionAttributesAsMessageHeaders = includeSessionAttributesAsMessageHeaders;
 	}
 
@@ -293,7 +284,7 @@ public class EnhancedJmsMessageConverter extends SimpleMessageConverter {
 			// Sends a non-simple message.
 			if (!this.isSimpleMessage(payload)) {
 				// If optimized serializer is enabled.
-				if (this.useOptimizedSerializer) {
+				if (this.optimizedSerializer != null) {
 					message = this.toSerializedMessage(payload, session);
 				}
 				// If optimized serializer is not enabled.
