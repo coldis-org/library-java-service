@@ -189,7 +189,6 @@ public class EnhancedMessageConverterTest {
 	 * @throws Exception If the test fails.
 	 */
 	@Test
-	// @Disabled
 	public void testAsyncLoops() throws Exception {
 		for (int i = 0; i < 17; i++) {
 			EnhancedMessageConverterTest.asyncHops = 0L;
@@ -208,7 +207,6 @@ public class EnhancedMessageConverterTest {
 	 * @throws Exception If the test fails.
 	 */
 	@Test
-	// @Disabled
 	public void testSendSessionAttributes() throws Exception {
 
 		// For each test data.
