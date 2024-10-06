@@ -98,7 +98,7 @@ public class DataInstallerTest extends SpringTestHelper {
 		for (final DataInstallerTestEntity testEntity : DataInstallerTest.ALL_DATA) {
 			// Asserts that the object have been created.
 			Assertions.assertTrue(TestHelper.waitUntilValid(
-					() -> this.testRepository.findById(new DataInstallerTestEntityKey(testEntity.getProperty1(), testEntity.getProperty2())).orElseThrow(),
+					() -> this.testRepository.findById(new DataInstallerTestEntityKey(testEntity.getProperty1(), testEntity.getProperty2())).orElse(null),
 					data -> Objects.equals(testEntity, data), TestHelper.LONG_WAIT, TestHelper.SHORT_WAIT));
 		}
 	}
