@@ -20,7 +20,7 @@ import org.springframework.web.bind.annotation.RestController;
 @ServiceClient(
 		namespace = "org.coldis.library.test.service.exception",
 		targetPath = "src/test/java",
-		endpoint = "http://localhost:9090/exception"
+		endpoint = "http://localhost:${local.server.port}/exception"
 )
 public class ExceptionHandlerService {
 

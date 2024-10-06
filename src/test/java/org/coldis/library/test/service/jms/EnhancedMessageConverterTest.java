@@ -10,8 +10,10 @@ import org.coldis.library.service.jms.DtoJmsMessageConverter;
 import org.coldis.library.service.jms.EnhancedJmsMessageConverter;
 import org.coldis.library.service.jms.JmsConverterProperties;
 import org.coldis.library.service.jms.TypableJmsMessageConverter;
-import org.coldis.library.test.ContainerExtension;
+import org.coldis.library.test.StartTestWithContainerExtension;
+import org.coldis.library.test.StopTestWithContainerExtension;
 import org.coldis.library.test.TestHelper;
+import org.coldis.library.test.TestWithContainer;
 import org.coldis.library.thread.ThreadMapContextHolder;
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.BeforeEach;
@@ -35,9 +37,11 @@ import jakarta.jms.Message;
  * JMS message converter test.
  */
 @EnableJms
-@ExtendWith(ContainerExtension.class)
-@SpringBootTest(webEnvironment = WebEnvironment.DEFINED_PORT)
-@DirtiesContext(classMode = DirtiesContext.ClassMode.BEFORE_CLASS)
+@TestWithContainer
+@ExtendWith(StartTestWithContainerExtension.class)
+@SpringBootTest(webEnvironment = WebEnvironment.RANDOM_PORT)
+@ExtendWith(StopTestWithContainerExtension.class)
+@DirtiesContext(classMode = DirtiesContext.ClassMode.AFTER_CLASS)
 public class EnhancedMessageConverterTest {
 
 	/**

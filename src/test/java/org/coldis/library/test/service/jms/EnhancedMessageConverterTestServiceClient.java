@@ -107,7 +107,7 @@ java.lang.Long sessionAttrN
 			) throws BusinessException {
 		// Operation parameters.
 		StringBuilder path = new StringBuilder(this.valueResolver
-				.resolveStringValue("http://localhost:9090/enhanced-message-converter-service" + (StringUtils.isBlank("send-message") ? "" : "/send-message") + "?"));
+				.resolveStringValue("http://localhost:${local.server.port}/enhanced-message-converter-service" + (StringUtils.isBlank("send-message") ? "" : "/send-message") + "?"));
 		final HttpMethod method = HttpMethod.POST;
 		final MultiValueMap<String, String> headers = new LinkedMultiValueMap<>();
 		Object body = null;

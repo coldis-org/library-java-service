@@ -1,6 +1,6 @@
 {
     "asynchronously": true,
-    "serviceOperationUrl": "http://localhost:${property:server.port}/test/data-installer",
+    "serviceOperationUrl": "http://localhost:${property:local.server.port}/test/data-installer",
     "idProperties": ["property1", "property2"],
     "searchProperties": ["property1", "property2"],
     "searchPropertiesStrategy": "PARAMETER",

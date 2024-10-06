@@ -4,10 +4,11 @@ import org.coldis.library.exception.BusinessException;
 import org.coldis.library.exception.IntegrationException;
 import org.coldis.library.service.client.GenericRestServiceClient;
 import org.coldis.library.service.health.HealthCheckValue;
-import org.springframework.beans.factory.annotation.Value;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.core.ParameterizedTypeReference;
 import org.springframework.http.HttpMethod;
 import org.springframework.stereotype.Service;
+import org.springframework.util.StringValueResolver;
 
 /**
  * Health check service client.
@@ -16,22 +17,10 @@ import org.springframework.stereotype.Service;
 public class HealthCheckServiceClient extends GenericRestServiceClient {
 
 	/**
-	 * Service endpoint.
+	 * Value resolver.
 	 */
-	@Value("http://localhost:9090")
-	private String endpoint;
-
-	/**
-	 * Service context.
-	 */
-	@Value("${org.coldis.configuration.health-check:/health-check}")
-	private String context;
-
-	/**
-	 * Default constructor.
-	 */
-	public HealthCheckServiceClient() {
-	}
+	@Autowired
+	private StringValueResolver valueResolver;
 
 	/**
 	 * Health check service.
@@ -43,7 +32,9 @@ public class HealthCheckServiceClient extends GenericRestServiceClient {
 	 *                                  (bad request).
 	 */
 	public HealthCheckValue check() throws IntegrationException, BusinessException {
-		return this.executeOperation(this.endpoint + this.context, HttpMethod.GET, null, null, null, new ParameterizedTypeReference<HealthCheckValue>() {})
-				.getBody();
+		return this.executeOperation(
+				this.valueResolver.resolveStringValue("http://localhost:${local.server.port:9090}")
+						+ this.valueResolver.resolveStringValue("${org.coldis.configuration.health-check:/health-check}"),
+				HttpMethod.GET, null, null, null, new ParameterizedTypeReference<HealthCheckValue>() {}).getBody();
 	}
 }

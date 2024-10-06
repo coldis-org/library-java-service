@@ -105,7 +105,7 @@ java.lang.Object[] parameters
 			) throws BusinessException {
 		// Operation parameters.
 		StringBuilder path = new StringBuilder(this.valueResolver
-				.resolveStringValue("http://localhost:9090/exception" + (StringUtils.isBlank("business") ? "" : "/business") + "?"));
+				.resolveStringValue("http://localhost:${local.server.port}/exception" + (StringUtils.isBlank("business") ? "" : "/business") + "?"));
 		final HttpMethod method = HttpMethod.POST;
 		final MultiValueMap<String, String> headers = new LinkedMultiValueMap<>();
 		Object body = null;
@@ -191,7 +191,7 @@ java.lang.Object[] parameters
 			) throws BusinessException {
 		// Operation parameters.
 		StringBuilder path = new StringBuilder(this.valueResolver
-				.resolveStringValue("http://localhost:9090/exception" + (StringUtils.isBlank("integration") ? "" : "/integration") + "?"));
+				.resolveStringValue("http://localhost:${local.server.port}/exception" + (StringUtils.isBlank("integration") ? "" : "/integration") + "?"));
 		final HttpMethod method = HttpMethod.POST;
 		final MultiValueMap<String, String> headers = new LinkedMultiValueMap<>();
 		Object body = null;
@@ -274,7 +274,7 @@ org.coldis.library.test.service.exception.ExceptionTestClass object
 			) throws BusinessException {
 		// Operation parameters.
 		StringBuilder path = new StringBuilder(this.valueResolver
-				.resolveStringValue("http://localhost:9090/exception" + (StringUtils.isBlank("constraint-violation") ? "" : "/constraint-violation") + "?"));
+				.resolveStringValue("http://localhost:${local.server.port}/exception" + (StringUtils.isBlank("constraint-violation") ? "" : "/constraint-violation") + "?"));
 		final HttpMethod method = HttpMethod.POST;
 		final MultiValueMap<String, String> headers = new LinkedMultiValueMap<>();
 		Object body = null;

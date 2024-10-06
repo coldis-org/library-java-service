@@ -22,7 +22,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 @ServiceClient(
 		namespace = "org.coldis.library.test.service.jms",
 		targetPath = "src/test/java",
-		endpoint = "http://localhost:9090/enhanced-message-converter-service"
+		endpoint = "http://localhost:${local.server.port}/enhanced-message-converter-service"
 )
 public class EnhancedMessageConverterTestService {
 

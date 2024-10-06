@@ -1,11 +1,16 @@
 package org.coldis.library.test.service.installer;
 
+import java.time.LocalDateTime;
 import java.util.Objects;
 
 import org.apache.commons.lang3.ArrayUtils;
+import org.coldis.library.helper.DateTimeHelper;
 import org.coldis.library.service.installer.DataInstaller;
-import org.coldis.library.test.ContainerExtension;
+import org.coldis.library.test.SpringTestHelper;
+import org.coldis.library.test.StartTestWithContainerExtension;
+import org.coldis.library.test.StopTestWithContainerExtension;
 import org.coldis.library.test.TestHelper;
+import org.coldis.library.test.TestWithContainer;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.Test;
@@ -13,15 +18,19 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.context.SpringBootTest.WebEnvironment;
+import org.springframework.test.annotation.DirtiesContext;
 import org.springframework.transaction.annotation.Transactional;
 import org.testcontainers.containers.GenericContainer;
 
 /**
  * Data installer test.
  */
-@ExtendWith(ContainerExtension.class)
-@SpringBootTest(webEnvironment = WebEnvironment.DEFINED_PORT)
-public class DataInstallerTest extends TestHelper {
+@TestWithContainer
+@ExtendWith(StartTestWithContainerExtension.class)
+@SpringBootTest(webEnvironment = WebEnvironment.RANDOM_PORT)
+@ExtendWith(StopTestWithContainerExtension.class)
+@DirtiesContext(classMode = DirtiesContext.ClassMode.AFTER_CLASS)
+public class DataInstallerTest extends SpringTestHelper {
 
 	/**
 	 * Redis container.
@@ -89,7 +98,7 @@ public class DataInstallerTest extends TestHelper {
 		for (final DataInstallerTestEntity testEntity : DataInstallerTest.ALL_DATA) {
 			// Asserts that the object have been created.
 			Assertions.assertTrue(TestHelper.waitUntilValid(
-					() -> this.testRepository.findById(new DataInstallerTestEntityKey(testEntity.getProperty1(), testEntity.getProperty2())).orElse(null),
+					() -> this.testRepository.findById(new DataInstallerTestEntityKey(testEntity.getProperty1(), testEntity.getProperty2())).orElseThrow(),
 					data -> Objects.equals(testEntity, data), TestHelper.LONG_WAIT, TestHelper.SHORT_WAIT));
 		}
 	}
@@ -110,6 +119,10 @@ public class DataInstallerTest extends TestHelper {
 					() -> this.testRepository.findById(new DataInstallerTestEntityKey(testEntity.getProperty1(), testEntity.getProperty2())).orElse(null),
 					data -> Objects.equals(testEntity, data), TestHelper.LONG_WAIT, TestHelper.SHORT_WAIT));
 		}
+
+		// After the first installation.
+		final LocalDateTime timeOfInstallation = DateTimeHelper.getCurrentLocalDateTime();
+
 		// Installs data.
 		this.dataInstaller.install();
 		// For each updatable object.
@@ -120,9 +133,10 @@ public class DataInstallerTest extends TestHelper {
 					data -> Objects.equals(testEntity, data), TestHelper.LONG_WAIT, TestHelper.SHORT_WAIT));
 			// Gets the persisted entity.
 			final DataInstallerTestEntity persistedEntity = this.testRepository
-					.findById(new DataInstallerTestEntityKey(testEntity.getProperty1(), testEntity.getProperty2())).orElse(null);
+					.findById(new DataInstallerTestEntityKey(testEntity.getProperty1(), testEntity.getProperty2())).orElseThrow();
 			// Makes sure the created and updated date are different.
-			Assertions.assertTrue(persistedEntity.getCreatedAt().isBefore(persistedEntity.getUpdatedAt()));
+			Assertions.assertTrue(persistedEntity.getCreatedAt().isBefore(timeOfInstallation));
+			Assertions.assertTrue(persistedEntity.getUpdatedAt().isAfter(timeOfInstallation));
 		}
 		// For each non-updatable object.
 		for (final DataInstallerTestEntity testEntity : DataInstallerTest.NON_UPDATABLE_DATA) {
@@ -132,9 +146,10 @@ public class DataInstallerTest extends TestHelper {
 					data -> Objects.equals(testEntity, data), TestHelper.LONG_WAIT, TestHelper.SHORT_WAIT));
 			// Gets the persisted entity.
 			final DataInstallerTestEntity persistedEntity = this.testRepository
-					.findById(new DataInstallerTestEntityKey(testEntity.getProperty1(), testEntity.getProperty2())).orElse(null);
+					.findById(new DataInstallerTestEntityKey(testEntity.getProperty1(), testEntity.getProperty2())).orElseThrow();
 			// Makes sure the created and updated date are different.
-			Assertions.assertTrue(persistedEntity.getCreatedAt().isEqual(persistedEntity.getUpdatedAt()));
+			Assertions.assertTrue(persistedEntity.getCreatedAt().isBefore(timeOfInstallation));
+			Assertions.assertTrue(persistedEntity.getUpdatedAt().isBefore(timeOfInstallation));
 		}
 	}
 }

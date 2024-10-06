@@ -12,25 +12,29 @@ import org.coldis.library.service.ratelimit.RateLimitInterceptor;
 import org.coldis.library.service.ratelimit.RateLimitKey;
 import org.coldis.library.service.ratelimit.RateLimitStats;
 import org.coldis.library.service.ratelimit.RateLimits;
-import org.coldis.library.test.ContainerExtension;
+import org.coldis.library.test.StartTestWithContainerExtension;
+import org.coldis.library.test.StopTestWithContainerExtension;
 import org.coldis.library.test.TestHelper;
+import org.coldis.library.test.TestWithContainer;
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.context.SpringBootTest.WebEnvironment;
-import org.springframework.util.StringValueResolver;
+import org.springframework.test.annotation.DirtiesContext;
 import org.testcontainers.containers.GenericContainer;
 
 /**
  * Rate limit test.
  */
-@ExtendWith(ContainerExtension.class)
-@SpringBootTest(webEnvironment = WebEnvironment.DEFINED_PORT)
+@TestWithContainer
+@ExtendWith(StartTestWithContainerExtension.class)
+@SpringBootTest(webEnvironment = WebEnvironment.RANDOM_PORT)
+@ExtendWith(StopTestWithContainerExtension.class)
+@DirtiesContext(classMode = DirtiesContext.ClassMode.AFTER_CLASS)
 public class RateLimitTest {
 
 	/**
@@ -119,7 +123,6 @@ public class RateLimitTest {
 			final String test,
 			final String arg) {
 	}
-
 
 	/**
 	 * Rate limit with configured parameters.
@@ -246,21 +249,21 @@ public class RateLimitTest {
 	@Test
 	public void testLocalRateLimitWithConfigurableParameters() throws Exception {
 		// Runs the configured calls for the limited methods.
-		LOGGER.info("Started calling");
-		for (int count = 1; count <= configuredLimit; count++) {
+		RateLimitTest.LOGGER.info("Started calling");
+		for (int count = 1; count <= this.configuredLimit; count++) {
 			this.localRateLimitWithConfiguredParameters();
 			RateLimitTest.LOGGER.debug(Integer.toString(count));
 			RateLimitTest.LOGGER.debug(RateLimitInterceptor.EXECUTIONS.values().stream()
 					.map(stringRateLimitStatsMap -> stringRateLimitStatsMap.getOrDefault("", new RateLimitStats()).getExecutions().size()).toList().toString());
 		}
-		LOGGER.info("Ended calling calling");
+		RateLimitTest.LOGGER.info("Ended calling calling");
 
 		// The next call should pass the limits.
 		Assertions.assertThrows(Exception.class, this::localRateLimitWithConfiguredParameters);
 
 		// Waits the period and try again.
-		Thread.sleep(configuredPeriod * 1000);
-		for (int count = 1; count <= configuredLimit; count++) {
+		Thread.sleep(this.configuredPeriod * 1000);
+		for (int count = 1; count <= this.configuredLimit; count++) {
 			this.localRateLimitWithConfiguredParameters();
 		}
 
