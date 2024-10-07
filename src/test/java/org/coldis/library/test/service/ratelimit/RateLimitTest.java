@@ -12,6 +12,7 @@ import org.coldis.library.service.ratelimit.RateLimitInterceptor;
 import org.coldis.library.service.ratelimit.RateLimitKey;
 import org.coldis.library.service.ratelimit.RateLimitStats;
 import org.coldis.library.service.ratelimit.RateLimits;
+import org.coldis.library.test.SpringTestHelper;
 import org.coldis.library.test.StartTestWithContainerExtension;
 import org.coldis.library.test.StopTestWithContainerExtension;
 import org.coldis.library.test.TestHelper;
@@ -34,8 +35,7 @@ import org.testcontainers.containers.GenericContainer;
 @ExtendWith(StartTestWithContainerExtension.class)
 @SpringBootTest(webEnvironment = WebEnvironment.RANDOM_PORT)
 @ExtendWith(StopTestWithContainerExtension.class)
-@DirtiesContext(classMode = DirtiesContext.ClassMode.AFTER_CLASS)
-public class RateLimitTest {
+public class RateLimitTest extends SpringTestHelper {
 
 	/**
 	 * Redis container.

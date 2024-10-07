@@ -29,7 +29,6 @@ import org.testcontainers.containers.GenericContainer;
 @ExtendWith(StartTestWithContainerExtension.class)
 @SpringBootTest(webEnvironment = WebEnvironment.RANDOM_PORT)
 @ExtendWith(StopTestWithContainerExtension.class)
-@DirtiesContext(classMode = DirtiesContext.ClassMode.AFTER_CLASS)
 public class DataInstallerTest extends SpringTestHelper {
 
 	/**
