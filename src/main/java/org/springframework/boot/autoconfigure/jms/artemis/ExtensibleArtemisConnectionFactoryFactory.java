@@ -1,5 +1,8 @@
 package org.springframework.boot.autoconfigure.jms.artemis;
 
+import java.util.function.Function;
+
+import org.apache.activemq.artemis.api.core.client.ServerLocator;
 import org.apache.activemq.artemis.jms.client.ActiveMQConnectionFactory;
 import org.coldis.library.service.jms.ExtendedArtemisProperties;
 import org.springframework.beans.factory.ListableBeanFactory;
@@ -24,7 +27,9 @@ public class ExtensibleArtemisConnectionFactoryFactory extends ArtemisConnection
 	 */
 	@Override
 	public <T extends ActiveMQConnectionFactory> T createConnectionFactory(
-			final Class<T> factoryClass) {
-		return super.createConnectionFactory(factoryClass);
+			final Function<String, T> nativeFactoryCreator,
+			final Function<ServerLocator, T> embeddedFactoryCreator) {
+		return super.createConnectionFactory(nativeFactoryCreator, embeddedFactoryCreator);
 	}
+
 }

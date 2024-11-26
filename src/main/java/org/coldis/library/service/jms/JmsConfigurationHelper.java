@@ -284,7 +284,7 @@ public class JmsConfigurationHelper {
 			final ArtemisProperties properties) {
 		final ExtendedArtemisProperties actualProperties = this.mergeProperties(properties);
 		final ActiveMQConnectionFactory connectionFactory = new ExtensibleArtemisConnectionFactoryFactory(beanFactory, actualProperties)
-				.createConnectionFactory(ActiveMQConnectionFactory.class);
+				.createConnectionFactory(ActiveMQConnectionFactory::new, ActiveMQConnectionFactory::new);
 		this.setConnectionExtendedProperties(actualProperties, connectionFactory);
 		// Returns the pooled connection factory;
 		return new JmsPoolConnectionFactoryFactory(actualProperties.getPool()).createPooledConnectionFactory(connectionFactory);
