@@ -11,7 +11,6 @@ import java.util.Properties;
 import org.apache.commons.lang3.StringUtils;
 import org.coldis.library.exception.BusinessException;
 import org.coldis.library.helper.DateTimeHelper;
-import org.coldis.library.model.SimpleMessage;
 import org.coldis.library.model.Typable;
 import org.coldis.library.persistence.LockBehavior;
 import org.coldis.library.persistence.keyvalue.KeyValue;
@@ -72,11 +71,6 @@ public class BatchService {
 	 * Placeholder resolver.
 	 */
 	private static final PropertyPlaceholderHelper PLACEHOLDER_HELPER = new PropertyPlaceholderHelper("${", "}");
-
-	/**
-	 * Batch expired message.
-	 */
-	private static final String BATCH_EXPIRED_MESSAGE_CODE = "batch.expired";
 
 	/**
 	 * JMS template.
@@ -177,7 +171,7 @@ public class BatchService {
 
 		// Throws an exception if the batch has expired.
 		if (batchExecutorValue.isExpired()) {
-			throw new BusinessException(new SimpleMessage(BatchService.BATCH_EXPIRED_MESSAGE_CODE));
+			throw new BatchExpiredException();
 		}
 
 		// For each item in the next batch.
@@ -302,8 +296,7 @@ public class BatchService {
 				catch (final Throwable throwable) {
 					BatchService.LOGGER.error("Error processing batch '" + key + "': " + throwable.getLocalizedMessage());
 					BatchService.LOGGER.debug("Error processing batch '" + key + "'.", throwable);
-					if (!(throwable instanceof BusinessException)
-							|| (!((BusinessException) throwable).getCode().equals(BatchService.BATCH_EXPIRED_MESSAGE_CODE))) {
+					if (!(throwable instanceof BatchExpiredException)) {
 						this.queueResumeAsync(keySuffix, batchExecutorValue.getNextBatchStartingAt().plus(batchExecutorValue.getDelayBetweenRuns()));
 					}
 					throw throwable;
@@ -328,13 +321,8 @@ public class BatchService {
 		try {
 			this.resume(keySuffix);
 		}
-		catch (final BusinessException exception) {
-			if ("batch.expired".equalsIgnoreCase(exception.getCode())) {
-				BatchService.LOGGER.debug("Error processing batch '" + keySuffix + "'.", exception);
-			}
-			else {
-				throw exception;
-			}
+		catch (final BatchExpiredException exception) {
+			BatchService.LOGGER.debug("Error processing batch '" + keySuffix + "'.", exception);
 		}
 	}
 
