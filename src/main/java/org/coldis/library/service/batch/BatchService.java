@@ -325,7 +325,17 @@ public class BatchService {
 	)
 	public <Type> void resumeAsync(
 			final String keySuffix) throws BusinessException {
-		this.resume(keySuffix);
+		try {
+			this.resume(keySuffix);
+		}
+		catch (final BusinessException exception) {
+			if ("batch.expired".equalsIgnoreCase(exception.getCode())) {
+				BatchService.LOGGER.debug("Error processing batch '" + keySuffix + "'.", exception);
+			}
+			else {
+				throw exception;
+			}
+		}
 	}
 
 	/**
