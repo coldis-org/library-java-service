@@ -26,6 +26,7 @@
         <project.config.source.test.compile.annotationProcessors>
             org.coldis.library.dto.DtoGenerator,org.coldis.library.service.client.generator.ServiceClientGenerator</project.config.source.test.compile.annotationProcessors>
         <project.config.swagger.scope>compile</project.config.swagger.scope>
+		<project.config.source.test.fork-count>3</project.config.source.test.fork-count>
     </properties>
     <scm>
         <url>https://github.com/coldis-org/library-java-service</url>
