@@ -7,8 +7,8 @@ import org.springframework.core.annotation.Order;
 /**
  * Service configuration.
  */
-@Order
 @Configuration
+@Order(value = -1000)
 @PropertySource(
 		value = { "classpath:service.properties" },
 		ignoreResourceNotFound = true
