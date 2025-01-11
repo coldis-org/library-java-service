@@ -1,4 +1,4 @@
-package org.coldis.library.service.controller;
+package org.coldis.library.service.serialization;
 
 import org.apache.fury.BaseFury;
 import org.apache.fury.Fury;

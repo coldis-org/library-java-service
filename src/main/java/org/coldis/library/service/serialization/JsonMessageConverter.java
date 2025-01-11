@@ -1,4 +1,4 @@
-package org.coldis.library.service.controller;
+package org.coldis.library.service.serialization;
 
 import org.springframework.http.MediaType;
 import org.springframework.http.converter.json.AbstractJackson2HttpMessageConverter;

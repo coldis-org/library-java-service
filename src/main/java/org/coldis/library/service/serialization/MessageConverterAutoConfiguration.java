@@ -1,4 +1,4 @@
-package org.coldis.library.service.controller;
+package org.coldis.library.service.serialization;
 
 import java.util.List;
 

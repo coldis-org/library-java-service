@@ -1,4 +1,4 @@
-package org.coldis.library.service.controller;
+package org.coldis.library.service.serialization;
 
 import org.apache.commons.lang3.ArrayUtils;
 import org.coldis.library.serialization.csv.CsvHelper;
