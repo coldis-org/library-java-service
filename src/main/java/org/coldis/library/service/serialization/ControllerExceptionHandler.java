@@ -49,7 +49,7 @@ public class ControllerExceptionHandler {
 			final SimpleMessage message) {
 		// The default message is the original one.
 		String actualMessage = this.messageService.getMessage(message.getCode(), message.getParameters());
-		actualMessage = (Objects.equals(message.getCode(), actualMessage) && StringUtils.isNotEmpty(message.getContent()) ? message.getContent()
+		actualMessage = (Objects.equals(message.getCode(), actualMessage) && StringUtils.isNotBlank(message.getContent()) ? message.getContent()
 				: actualMessage);
 		// Returns the enriched message
 		message.setContent(actualMessage);
