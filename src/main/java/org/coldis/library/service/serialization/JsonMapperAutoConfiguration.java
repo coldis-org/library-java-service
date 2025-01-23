@@ -1,12 +1,6 @@
 package org.coldis.library.service.serialization;
 
-import java.io.IOException;
-import java.math.BigDecimal;
-import java.util.Arrays;
-import java.util.Objects;
-
 import org.apache.commons.lang3.ArrayUtils;
-import org.coldis.library.model.view.ModelView;
 import org.coldis.library.serialization.ObjectMapperHelper;
 import org.coldis.library.service.ServiceConfiguration;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -20,17 +14,8 @@ import org.springframework.context.annotation.Primary;
 import org.springframework.http.converter.json.Jackson2ObjectMapperBuilder;
 
 import com.fasterxml.jackson.annotation.JsonInclude.Include;
-import com.fasterxml.jackson.annotation.JsonView;
-import com.fasterxml.jackson.core.JsonGenerator;
-import com.fasterxml.jackson.databind.BeanProperty;
-import com.fasterxml.jackson.databind.JsonMappingException;
-import com.fasterxml.jackson.databind.JsonSerializer;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.SerializationFeature;
-import com.fasterxml.jackson.databind.SerializerProvider;
-import com.fasterxml.jackson.databind.introspect.Annotated;
-import com.fasterxml.jackson.databind.introspect.JacksonAnnotationIntrospector;
-import com.fasterxml.jackson.databind.ser.ContextualSerializer;
 
 /**
  * JSON mapper auto configuration.
@@ -46,7 +31,6 @@ public class JsonMapperAutoConfiguration {
 	@Value(value = "#{'${org.coldis.configuration.base-package}'.split(',')}")
 	private String[] jsonTypePackages;
 
-
 	/**
 	 * Creates the generic object mapper.
 	 *
@@ -55,8 +39,8 @@ public class JsonMapperAutoConfiguration {
 	 */
 	public ObjectMapper genericMapper(
 			final Jackson2ObjectMapperBuilder builder) {
-		ObjectMapper objectMapper = builder.build();
-		ObjectMapperHelper.configureMapper(objectMapper, this.jsonTypePackages);
+		final ObjectMapper objectMapper = builder.build();
+		ObjectMapperHelper.configureMapper(objectMapper, ArrayUtils.add(this.jsonTypePackages, ServiceConfiguration.BASE_PACKAGE));
 		return objectMapper;
 	}
 
