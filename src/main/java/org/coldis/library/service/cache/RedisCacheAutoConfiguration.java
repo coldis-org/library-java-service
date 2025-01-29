@@ -81,8 +81,8 @@ public class RedisCacheAutoConfiguration {
 		final ObjectMapper objectMapper = jsonMapperAutoConfiguration.genericMapper(builder);
 		objectMapper.registerModule(ObjectMapperHelper.getDateTimeModule());
 		objectMapper.disable(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES);
-		GenericJackson2JsonRedisSerializer.registerNullValueSerializer(objectMapper, "typeName");
-		objectMapper.activateDefaultTypingAsProperty(objectMapper.getPolymorphicTypeValidator(), DefaultTyping.NON_FINAL, "typeName");
+//		GenericJackson2JsonRedisSerializer.registerNullValueSerializer(objectMapper, "typeName");
+//		objectMapper.activateDefaultTypingAsProperty(objectMapper.getPolymorphicTypeValidator(), DefaultTyping.NON_FINAL, "typeName");
 		final GenericJackson2JsonRedisSerializer serializer = new GenericJackson2JsonRedisSerializer(objectMapper);
 		this.serializationPair = SerializationPair.fromSerializer(serializer);
 	}
