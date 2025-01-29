@@ -6,7 +6,6 @@ import org.coldis.library.serialization.ObjectMapperHelper;
 import org.coldis.library.service.serialization.JsonMapperAutoConfiguration;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnClass;
 import org.springframework.cache.CacheManager;
@@ -39,12 +38,6 @@ public class RedisCacheAutoConfiguration {
 	 * Logger.
 	 */
 	private static final Logger LOGGER = LoggerFactory.getLogger(RedisCacheAutoConfiguration.class);
-
-	/**
-	 * JSON mapper auto configuration.
-	 */
-	@Autowired
-	private JsonMapperAutoConfiguration jsonMapperAutoConfiguration;
 
 	/**
 	 * Serialization pair.
@@ -84,8 +77,8 @@ public class RedisCacheAutoConfiguration {
 	/**
 	 * Default constructor.
 	 */
-	public RedisCacheAutoConfiguration(final Jackson2ObjectMapperBuilder builder) {
-		final ObjectMapper objectMapper = this.jsonMapperAutoConfiguration.genericMapper(builder);
+	public RedisCacheAutoConfiguration(final JsonMapperAutoConfiguration jsonMapperAutoConfiguration, final Jackson2ObjectMapperBuilder builder) {
+		final ObjectMapper objectMapper = jsonMapperAutoConfiguration.genericMapper(builder);
 		objectMapper.registerModule(ObjectMapperHelper.getDateTimeModule());
 		objectMapper.disable(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES);
 		GenericJackson2JsonRedisSerializer.registerNullValueSerializer(objectMapper, "typeName");
