@@ -314,7 +314,7 @@ public class BatchServiceTest extends SpringTestHelper {
 		this.batchService.checkAll();
 
 		// Waits a bit and cancels.
-		Thread.sleep(500);
+		Thread.sleep(200);
 		this.batchService.cancel(testBatchExecutor.getKeySuffix());
 
 		// This batch should not reach the end.
