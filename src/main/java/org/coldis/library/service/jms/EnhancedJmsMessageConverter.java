@@ -357,8 +357,13 @@ public class EnhancedJmsMessageConverter extends SimpleMessageConverter {
 				: List.of(preferedClassesNamesAttribute.split(",")));
 		final List<String> availablePreferedClasses = preferedClassesNames.stream()
 				.filter(className -> ClassUtils.isPresent(className, message.getClass().getClassLoader())).toList();
-		final Class<?> preferedClass = (CollectionUtils.isEmpty(availablePreferedClasses) ? null
+		Class<?> preferedClass = (CollectionUtils.isEmpty(availablePreferedClasses) ? null
 				: ClassUtils.forName(availablePreferedClasses.getFirst(), message.getClass().getClassLoader()));
+		if (preferedClass == null) {
+			EnhancedJmsMessageConverter.LOGGER.error("Prefered class could not be loaded: " + preferedClassesNamesAttribute);
+			preferedClass = (CollectionUtils.isEmpty(preferedClassesNames) ? null
+					: this.objectMapper.getTypeFactory().constructFromCanonical(preferedClassesNames.getFirst()).getRawClass());
+		}
 		return preferedClass;
 	}
 
