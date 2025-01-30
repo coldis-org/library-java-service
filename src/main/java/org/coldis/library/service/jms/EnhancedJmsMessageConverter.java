@@ -360,9 +360,15 @@ public class EnhancedJmsMessageConverter extends SimpleMessageConverter {
 		Class<?> preferedClass = (CollectionUtils.isEmpty(availablePreferedClasses) ? null
 				: ClassUtils.forName(availablePreferedClasses.getFirst(), message.getClass().getClassLoader()));
 		if (preferedClass == null) {
-			EnhancedJmsMessageConverter.LOGGER.error("Prefered class could not be loaded: " + preferedClassesNamesAttribute);
-			preferedClass = (CollectionUtils.isEmpty(preferedClassesNames) ? null
-					: this.objectMapper.getTypeFactory().constructFromCanonical(preferedClassesNames.getFirst()).getRawClass());
+			EnhancedJmsMessageConverter.LOGGER.error("Prefered class could not be loaded from name: " + preferedClassesNames);
+			try {
+				preferedClass = (CollectionUtils.isEmpty(preferedClassesNames) ? null
+						: this.objectMapper.getTypeFactory().constructFromCanonical(preferedClassesNames.getFirst()).getRawClass());
+			}
+			catch (final Exception exception) {
+				EnhancedJmsMessageConverter.LOGGER.error("Prefered class could still not be loaded from object mapper: " + preferedClassesNames);
+				EnhancedJmsMessageConverter.LOGGER.debug("Prefered class could still not be loaded from object mapper: " + preferedClassesNames, exception);
+			}
 		}
 		return preferedClass;
 	}
