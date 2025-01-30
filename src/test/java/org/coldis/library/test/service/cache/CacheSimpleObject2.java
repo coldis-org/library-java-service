@@ -1,7 +1,9 @@
 package org.coldis.library.test.service.cache;
 
 import java.math.BigDecimal;
-import java.util.List;
+import java.util.HashSet;
+import java.util.Objects;
+import java.util.Set;
 
 import org.coldis.library.model.Typable;
 import org.coldis.library.model.view.ModelView;
@@ -35,9 +37,9 @@ public class CacheSimpleObject2 implements Typable {
 	private BigDecimal attribute;
 
 	/**
-	 * List.
+	 * Set.
 	 */
-	private List<CacheSimpleObject2> list;
+	private Set<CacheSimpleObject2>list;
 
 	/**
 	 * Constructor.
@@ -61,7 +63,7 @@ public class CacheSimpleObject2 implements Typable {
 	 *
 	 * @param attribute Attribute.
 	 */
-	public CacheSimpleObject2(final BigDecimal attribute, final List<CacheSimpleObject2> list) {
+	public CacheSimpleObject2(final BigDecimal attribute, final Set<CacheSimpleObject2> list) {
 		super();
 		this.attribute = attribute;
 		this.list = list;
@@ -94,7 +96,9 @@ public class CacheSimpleObject2 implements Typable {
 	 *
 	 * @return The list.
 	 */
-	public List<CacheSimpleObject2> getList() {
+	@JsonView({ ModelView.Public.class })
+	public Set<CacheSimpleObject2> getSet() {
+		this.list = (this.list == null ? new HashSet<>() : new HashSet<>(this.list));
 		return this.list;
 	}
 
@@ -103,8 +107,8 @@ public class CacheSimpleObject2 implements Typable {
 	 *
 	 * @param list New list.
 	 */
-	public void setList(
-			final List<CacheSimpleObject2> list) {
+	public void setSet(
+			final Set<CacheSimpleObject2> list) {
 		this.list = list;
 	}
 
@@ -114,6 +118,30 @@ public class CacheSimpleObject2 implements Typable {
 	@Override
 	public String getTypeName() {
 		return CacheSimpleObject2.TYPE_NAME;
+	}
+
+	/**
+	 * @see java.lang.Object#hashCode()
+	 */
+	@Override
+	public int hashCode() {
+		return Objects.hash(this.attribute, this.list);
+	}
+
+	/**
+	 * @see java.lang.Object#equals(java.lang.Object)
+	 */
+	@Override
+	public boolean equals(
+			final Object obj) {
+		if (this == obj) {
+			return true;
+		}
+		if ((obj == null) || (this.getClass() != obj.getClass())) {
+			return false;
+		}
+		final CacheSimpleObject2 other = (CacheSimpleObject2) obj;
+		return Objects.equals(this.attribute, other.attribute) && Objects.equals(this.list, other.list);
 	}
 
 }

@@ -1,8 +1,7 @@
 package org.coldis.library.test.service.cache;
 
 import java.math.BigDecimal;
-import java.util.ArrayList;
-import java.util.List;
+import java.util.Set;
 
 import org.springframework.cache.annotation.Cacheable;
 import org.springframework.stereotype.Service;
@@ -71,8 +70,7 @@ public class CachedService {
 	)
 	public CacheSimpleObject2 getFromCentralCache4() {
 		CachedService.ATTR_1++;
-		return new CacheSimpleObject2(new BigDecimal(CachedService.ATTR_1),
-				new ArrayList<>(List.of(new CacheSimpleObject2(new BigDecimal(CachedService.ATTR_1)))));
+		return new CacheSimpleObject2(new BigDecimal(CachedService.ATTR_1), Set.of(new CacheSimpleObject2(new BigDecimal(CachedService.ATTR_1))));
 	}
 
 	/**

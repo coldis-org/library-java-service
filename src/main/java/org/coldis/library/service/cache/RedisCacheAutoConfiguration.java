@@ -1,7 +1,9 @@
 package org.coldis.library.service.cache;
 
 import java.time.Duration;
+import java.util.Set;
 
+import org.coldis.library.model.verification.Verification;
 import org.coldis.library.service.serialization.JsonMapperAutoConfiguration;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -20,10 +22,14 @@ import org.springframework.data.redis.serializer.GenericJackson2JsonRedisSeriali
 import org.springframework.data.redis.serializer.RedisSerializationContext.SerializationPair;
 import org.springframework.http.converter.json.Jackson2ObjectMapperBuilder;
 
+import com.fasterxml.jackson.annotation.JsonInclude;
 import com.fasterxml.jackson.annotation.JsonTypeInfo;
+import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.SerializationFeature;
 import com.fasterxml.jackson.databind.cfg.MapperConfig;
 import com.fasterxml.jackson.databind.introspect.Annotated;
+import com.fasterxml.jackson.databind.introspect.AnnotatedClass;
 import com.fasterxml.jackson.databind.introspect.JacksonAnnotationIntrospector;
 
 /**
@@ -95,16 +101,29 @@ public class RedisCacheAutoConfiguration {
 				final Annotated ann) {
 			return null;
 		}
+
+		/**
+		 * @see com.fasterxml.jackson.databind.introspect.JacksonAnnotationIntrospector#findTypeName(com.fasterxml.jackson.databind.introspect.AnnotatedClass)
+		 */
+		@Override
+		public String findTypeName(
+				final AnnotatedClass ac) {
+			return null;
+		}
 	}
 
 	/**
 	 * Default constructor.
+	 *
+	 * @throws JsonProcessingException
 	 */
-	public RedisCacheAutoConfiguration(final JsonMapperAutoConfiguration jsonMapperAutoConfiguration, final Jackson2ObjectMapperBuilder builder) {
+	public RedisCacheAutoConfiguration(final JsonMapperAutoConfiguration jsonMapperAutoConfiguration, final Jackson2ObjectMapperBuilder builder)
+			throws JsonProcessingException {
 		final ObjectMapper objectMapper = jsonMapperAutoConfiguration.genericMapper(builder);
+		objectMapper.setDefaultPropertyInclusion(JsonInclude.Include.NON_NULL);
 		objectMapper.setAnnotationIntrospector(new IgnoreTypeInfoIntrospector());
 		final GenericJackson2JsonRedisSerializer serializer = GenericJackson2JsonRedisSerializer.builder().objectMapper(objectMapper).defaultTyping(true)
-				.build();
+				.registerNullValueSerializer(false).build();
 		this.serializationPair = SerializationPair.fromSerializer(serializer);
 	}
 
