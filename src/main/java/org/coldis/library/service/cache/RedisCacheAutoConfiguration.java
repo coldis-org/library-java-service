@@ -2,7 +2,6 @@ package org.coldis.library.service.cache;
 
 import java.time.Duration;
 
-import org.coldis.library.serialization.ObjectMapperHelper;
 import org.coldis.library.service.serialization.JsonMapperAutoConfiguration;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -21,9 +20,11 @@ import org.springframework.data.redis.serializer.GenericJackson2JsonRedisSeriali
 import org.springframework.data.redis.serializer.RedisSerializationContext.SerializationPair;
 import org.springframework.http.converter.json.Jackson2ObjectMapperBuilder;
 
-import com.fasterxml.jackson.databind.DeserializationFeature;
+import com.fasterxml.jackson.annotation.JsonTypeInfo;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.fasterxml.jackson.databind.ObjectMapper.DefaultTyping;
+import com.fasterxml.jackson.databind.cfg.MapperConfig;
+import com.fasterxml.jackson.databind.introspect.Annotated;
+import com.fasterxml.jackson.databind.introspect.JacksonAnnotationIntrospector;
 
 /**
  * Cache configuration.
@@ -75,15 +76,35 @@ public class RedisCacheAutoConfiguration {
 	private RedisCacheManager daysExpirationCentralCacheManager;
 
 	/**
+	 * Ignore type info introspector.
+	 */
+	private class IgnoreTypeInfoIntrospector extends JacksonAnnotationIntrospector {
+
+		/**
+		 * Serial.
+		 */
+		private static final long serialVersionUID = 6492455468446095497L;
+
+		/**
+		 * @see com.fasterxml.jackson.databind.introspect.JacksonAnnotationIntrospector#findPolymorphicTypeInfo(com.fasterxml.jackson.databind.cfg.MapperConfig,
+		 *      com.fasterxml.jackson.databind.introspect.Annotated)
+		 */
+		@Override
+		public JsonTypeInfo.Value findPolymorphicTypeInfo(
+				final MapperConfig<?> config,
+				final Annotated ann) {
+			return null;
+		}
+	}
+
+	/**
 	 * Default constructor.
 	 */
 	public RedisCacheAutoConfiguration(final JsonMapperAutoConfiguration jsonMapperAutoConfiguration, final Jackson2ObjectMapperBuilder builder) {
 		final ObjectMapper objectMapper = jsonMapperAutoConfiguration.genericMapper(builder);
-		objectMapper.registerModule(ObjectMapperHelper.getDateTimeModule());
-		objectMapper.disable(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES);
-//		GenericJackson2JsonRedisSerializer.registerNullValueSerializer(objectMapper, "typeName");
-//		objectMapper.activateDefaultTypingAsProperty(objectMapper.getPolymorphicTypeValidator(), DefaultTyping.NON_FINAL, "typeName");
-		final GenericJackson2JsonRedisSerializer serializer = new GenericJackson2JsonRedisSerializer(objectMapper);
+		objectMapper.setAnnotationIntrospector(new IgnoreTypeInfoIntrospector());
+		final GenericJackson2JsonRedisSerializer serializer = GenericJackson2JsonRedisSerializer.builder().objectMapper(objectMapper).defaultTyping(true)
+				.build();
 		this.serializationPair = SerializationPair.fromSerializer(serializer);
 	}
 

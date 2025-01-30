@@ -9,7 +9,22 @@ public class CacheSimpleObject1 {
 	 * Attribute.
 	 */
 	private Integer attribute;
-	
+
+	/**
+	 * Constructor.
+	 */
+	public CacheSimpleObject1() {
+	}
+
+	/**
+	 * Constructor.
+	 *
+	 * @param attribute Attribute.
+	 */
+	public CacheSimpleObject1(final Integer attribute) {
+		super();
+		this.attribute = attribute;
+	}
 
 	/**
 	 * Gets the attribute.
@@ -27,22 +42,6 @@ public class CacheSimpleObject1 {
 	 */
 	public void setAttribute(
 			final Integer attribute) {
-		this.attribute = attribute;
-	}
-
-	/**
-	 * Constructor.
-	 */
-	public CacheSimpleObject1() {
-	}
-
-	/**
-	 * Constructor.
-	 *
-	 * @param attribute Attribute.
-	 */
-	public CacheSimpleObject1(final Integer attribute) {
-		super();
 		this.attribute = attribute;
 	}
 
