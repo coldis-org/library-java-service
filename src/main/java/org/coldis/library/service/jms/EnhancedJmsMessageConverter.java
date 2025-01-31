@@ -113,6 +113,9 @@ public class EnhancedJmsMessageConverter extends SimpleMessageConverter {
 	 */
 	private SequencedMap<String, String> getAlternativeClassNames() {
 		this.alternativeClassNames = (this.alternativeClassNames == null ? new LinkedHashMap<>() : this.alternativeClassNames);
+		if (!this.alternativeClassNames.containsKey("")) {
+			this.alternativeClassNames.putFirst("", "");
+		}
 		return this.alternativeClassNames;
 	}
 
@@ -369,11 +372,8 @@ public class EnhancedJmsMessageConverter extends SimpleMessageConverter {
 				: List.of(preferedClassesNamesAttribute.split(",")));
 
 		// Adds alternatives classes names to preferred classes.
-		preferedClassesNames = preferedClassesNames.stream().flatMap(className -> {
-			final SequencedMap<String, String> alternativeClassNames = this.getAlternativeClassNames();
-			alternativeClassNames.putFirst("", "");
-			return alternativeClassNames.entrySet().stream().map(alternative -> className.replace(alternative.getKey(), alternative.getValue()));
-		}).distinct().toList();
+		preferedClassesNames = preferedClassesNames.stream().flatMap(className -> this.getAlternativeClassNames().entrySet().stream()
+				.map(alternative -> className.replace(alternative.getKey(), alternative.getValue()))).distinct().toList();
 
 		// Checks for available classes, and get the first available.
 		final List<String> availablePreferedClasses = preferedClassesNames.stream()
@@ -466,12 +466,12 @@ public class EnhancedJmsMessageConverter extends SimpleMessageConverter {
 		if (this.jmsConverterProperties.getMaximumAsyncHopsIgnoredFor(convertedDestination)) {
 			currentAsyncHop = 0L;
 		}
-		
+
 		// Increments the hops if not.
 		else {
 			currentAsyncHop = (currentAsyncHop == null ? 1L : currentAsyncHop + 1);
 		}
-		
+
 		// Sets the message attribute.
 		ThreadMapContextHolder.setAttribute(EnhancedJmsMessageConverter.CURRENT_ASYNC_HOP_PARAMETER, currentAsyncHop);
 		return currentAsyncHop;
