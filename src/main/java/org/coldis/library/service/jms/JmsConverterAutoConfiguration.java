@@ -43,18 +43,6 @@ public class JmsConverterAutoConfiguration {
 	private BaseFury optimizedSerializer;
 
 	/**
-	 * DTO JMS message converter.
-	 */
-	@Autowired
-	private DtoJmsMessageConverter dtoJmsMessageConverter;
-
-	/**
-	 * Typable JMS message converter.
-	 */
-	@Autowired
-	private TypableJmsMessageConverter typableJmsMessageConverter;
-
-	/**
 	 * Enhanced JMS message converter.
 	 *
 	 * @return The enhanced JMS message converter.
@@ -71,8 +59,7 @@ public class JmsConverterAutoConfiguration {
 	public EnhancedJmsMessageConverter enhancedJmsMessageConverter(
 			@Value("#{'${org.coldis.library.service.jms.session-attributes:}'.split(',')}")
 			final Set<String> sessionAttributes) {
-		return new EnhancedJmsMessageConverter(this.jmsConverterProperties, this.objectMapper, null, this.dtoJmsMessageConverter,
-				this.typableJmsMessageConverter, sessionAttributes);
+		return new EnhancedJmsMessageConverter(this.jmsConverterProperties, this.objectMapper, null, sessionAttributes);
 	}
 
 	/**
@@ -91,8 +78,7 @@ public class JmsConverterAutoConfiguration {
 	public EnhancedJmsMessageConverter internalEnhancedJmsMessageConverter(
 			@Value("#{'${org.coldis.library.service.jms.session-attributes:}'.split(',')}")
 			final Set<String> sessionAttributes) {
-		return new EnhancedJmsMessageConverter(this.jmsConverterProperties, this.objectMapper, this.optimizedSerializer, this.dtoJmsMessageConverter,
-				this.typableJmsMessageConverter, sessionAttributes);
+		return new EnhancedJmsMessageConverter(this.jmsConverterProperties, this.objectMapper, this.optimizedSerializer, sessionAttributes);
 	}
 
 }

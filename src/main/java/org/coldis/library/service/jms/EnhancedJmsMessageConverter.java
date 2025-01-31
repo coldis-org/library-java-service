@@ -1,9 +1,11 @@
 package org.coldis.library.service.jms;
 
 import java.util.Arrays;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.SequencedMap;
 import java.util.Set;
 
 import org.apache.commons.collections4.CollectionUtils;
@@ -88,31 +90,40 @@ public class EnhancedJmsMessageConverter extends SimpleMessageConverter {
 	 */
 	private final Set<String> includeSessionAttributesAsMessageHeaders;
 
-	/**
-	 * DTO JMS message converter.
-	 */
-	private final DtoJmsMessageConverter dtoJmsMessageConverter;
-
-	/**
-	 * Typable JMS message converter.
-	 */
-	private final TypableJmsMessageConverter typableJmsMessageConverter;
+	/** Alternative class names (or parts). */
+	private SequencedMap<String, String> alternativeClassNames;
 
 	/** Constructor. */
 	public EnhancedJmsMessageConverter(
 			final JmsConverterProperties jmsConverterProperties,
 			final ObjectMapper objectMapper,
 			final BaseFury optimizedSerializer,
-			final DtoJmsMessageConverter dtoJmsMessageConverter,
-			final TypableJmsMessageConverter typableJmsMessageConverter,
 			final Set<String> includeSessionAttributesAsMessageHeaders) {
 		super();
 		this.jmsConverterProperties = jmsConverterProperties;
 		this.objectMapper = objectMapper;
 		this.optimizedSerializer = optimizedSerializer;
-		this.dtoJmsMessageConverter = dtoJmsMessageConverter;
-		this.typableJmsMessageConverter = typableJmsMessageConverter;
 		this.includeSessionAttributesAsMessageHeaders = includeSessionAttributesAsMessageHeaders;
+	}
+
+	/**
+	 * Gets the alternativeClassNames.
+	 *
+	 * @return The alternativeClassNames.
+	 */
+	private SequencedMap<String, String> getAlternativeClassNames() {
+		this.alternativeClassNames = (this.alternativeClassNames == null ? new LinkedHashMap<>() : this.alternativeClassNames);
+		return this.alternativeClassNames;
+	}
+
+	/**
+	 * Sets the alternativeClassNames.
+	 *
+	 * @param alternativeClassNames New alternativeClassNames.
+	 */
+	public void setAlternativeClassNames(
+			final SequencedMap<String, String> alternativeClassNames) {
+		this.alternativeClassNames = alternativeClassNames;
 	}
 
 	/**
@@ -352,23 +363,25 @@ public class EnhancedJmsMessageConverter extends SimpleMessageConverter {
 	 */
 	private Class<?> getPreferedClassFromMessage(
 			final Message message) throws JMSException, ClassNotFoundException, LinkageError {
+		// Parses preferred classes.
 		final String preferedClassesNamesAttribute = message.getStringProperty(EnhancedJmsMessageConverter.PREFERED_TYPE_PARAMETER);
-		final List<String> preferedClassesNames = (StringUtils.isBlank(preferedClassesNamesAttribute) ? List.of()
+		List<String> preferedClassesNames = (StringUtils.isBlank(preferedClassesNamesAttribute) ? List.of()
 				: List.of(preferedClassesNamesAttribute.split(",")));
+
+		// Adds alternatives classes names to preferred classes.
+		preferedClassesNames = preferedClassesNames.stream().flatMap(className -> {
+			final SequencedMap<String, String> alternativeClassNames = this.getAlternativeClassNames();
+			alternativeClassNames.putFirst("", "");
+			return alternativeClassNames.entrySet().stream().map(alternative -> className.replace(alternative.getKey(), alternative.getValue()));
+		}).distinct().toList();
+
+		// Checks for available classes, and get the first available.
 		final List<String> availablePreferedClasses = preferedClassesNames.stream()
 				.filter(className -> ClassUtils.isPresent(className, message.getClass().getClassLoader())).toList();
-		Class<?> preferedClass = (CollectionUtils.isEmpty(availablePreferedClasses) ? null
+		final Class<?> preferedClass = (CollectionUtils.isEmpty(availablePreferedClasses) ? null
 				: ClassUtils.forName(availablePreferedClasses.getFirst(), message.getClass().getClassLoader()));
 		if (preferedClass == null) {
 			EnhancedJmsMessageConverter.LOGGER.error("Prefered class could not be loaded from name: " + preferedClassesNames);
-			try {
-				preferedClass = (CollectionUtils.isEmpty(preferedClassesNames) ? null
-						: this.objectMapper.getTypeFactory().constructFromCanonical(preferedClassesNames.getFirst()).getRawClass());
-			}
-			catch (final Exception exception) {
-				EnhancedJmsMessageConverter.LOGGER.error("Prefered class could still not be loaded from object mapper: " + preferedClassesNames);
-				EnhancedJmsMessageConverter.LOGGER.debug("Prefered class could still not be loaded from object mapper: " + preferedClassesNames, exception);
-			}
 		}
 		return preferedClass;
 	}
@@ -395,7 +408,6 @@ public class EnhancedJmsMessageConverter extends SimpleMessageConverter {
 					object = this.objectMapper.readValue(messageBytes, preferedClass);
 				}
 			}
-
 		}
 		// Logs errors.
 		catch (final Exception exception) {
@@ -425,14 +437,6 @@ public class EnhancedJmsMessageConverter extends SimpleMessageConverter {
 			object = this.fromJsonMessage(message);
 		}
 
-		// Tries converting the message using deprecated converters.
-		if (object == null) {
-			object = this.typableJmsMessageConverter.fromMessageUsingCurrentConverter(message);
-		}
-		if (object == null) {
-			object = this.dtoJmsMessageConverter.fromMessageUsingCurrentConverter(message);
-		}
-
 		// Tries using simple converter.
 		if (object == null) {
 			object = super.fromMessage(message);
@@ -454,6 +458,7 @@ public class EnhancedJmsMessageConverter extends SimpleMessageConverter {
 		Long currentAsyncHop = (EnumerationUtils.toList(message.getPropertyNames()).contains(EnhancedJmsMessageConverter.CURRENT_ASYNC_HOP_PARAMETER)
 				? message.getLongProperty(EnhancedJmsMessageConverter.CURRENT_ASYNC_HOP_PARAMETER)
 				: null);
+
 		// Resets the hops if queue is ignored.
 		final String destination = Objects.toString(message.getJMSDestination());
 		final String[] destinationParts = destination.split("[\\[\\]]");
@@ -461,10 +466,13 @@ public class EnhancedJmsMessageConverter extends SimpleMessageConverter {
 		if (this.jmsConverterProperties.getMaximumAsyncHopsIgnoredFor(convertedDestination)) {
 			currentAsyncHop = 0L;
 		}
+		
 		// Increments the hops if not.
 		else {
 			currentAsyncHop = (currentAsyncHop == null ? 1L : currentAsyncHop + 1);
 		}
+		
+		// Sets the message attribute.
 		ThreadMapContextHolder.setAttribute(EnhancedJmsMessageConverter.CURRENT_ASYNC_HOP_PARAMETER, currentAsyncHop);
 		return currentAsyncHop;
 	}

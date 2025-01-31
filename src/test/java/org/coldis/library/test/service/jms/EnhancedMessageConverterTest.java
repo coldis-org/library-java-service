@@ -6,10 +6,8 @@ import java.util.Objects;
 import org.coldis.library.helper.RandomHelper;
 import org.coldis.library.serialization.ObjectMapperHelper;
 import org.coldis.library.service.helper.MultiLayerSessionHelper;
-import org.coldis.library.service.jms.DtoJmsMessageConverter;
 import org.coldis.library.service.jms.EnhancedJmsMessageConverter;
 import org.coldis.library.service.jms.JmsConverterProperties;
-import org.coldis.library.service.jms.TypableJmsMessageConverter;
 import org.coldis.library.test.SpringTestHelper;
 import org.coldis.library.test.StartTestWithContainerExtension;
 import org.coldis.library.test.StopTestWithContainerExtension;
@@ -100,18 +98,6 @@ public class EnhancedMessageConverterTest extends SpringTestHelper {
 	/** Test service. */
 	@Autowired
 	private EnhancedMessageConverterTestServiceClient testServiceClient;
-
-	/**
-	 * Typed JMS message converter.
-	 */
-	@Autowired
-	private DtoJmsMessageConverter dtoJmsMessageConverter;
-
-	/**
-	 * Typed JMS message converter.
-	 */
-	@Autowired
-	private TypableJmsMessageConverter typableJmsMessageConverter;
 
 	/**
 	 * Enhanced JMS message converter.
@@ -322,42 +308,6 @@ public class EnhancedMessageConverterTest extends SpringTestHelper {
 		// For each test data.
 		for (final DtoTestObject testData : EnhancedMessageConverterTest.TEST_DATA) {
 			this.jmsTemplate.convertAndSend("message/original", ObjectMapperHelper.convert(this.objectMapper, testData, DtoTestObjectDto.class, true));
-			// Asserts that the message is correctly converted.
-			Assertions.assertTrue(TestHelper.waitUntilValid(() -> EnhancedMessageConverterTest.currentTestMessage,
-					message -> (message != null) && message.equals(testData), TestHelper.LONG_WAIT, TestHelper.SHORT_WAIT));
-		}
-	}
-
-	/**
-	 * Tests the JSON JMS message converter.
-	 *
-	 * @throws Exception If the test fails.
-	 */
-	@Test
-	public void testOldDtoObjectReceiveObject() throws Exception {
-		this.jmsTemplate.setMessageConverter(this.dtoJmsMessageConverter);
-		// For each test data.
-		for (final DtoTestObject testData : EnhancedMessageConverterTest.TEST_DATA) {
-			// Sends the test data as a JMS message.
-			this.jmsTemplate.convertAndSend("message/original", testData);
-			// Asserts that the message is correctly converted.
-			Assertions.assertTrue(TestHelper.waitUntilValid(() -> EnhancedMessageConverterTest.currentTestMessage,
-					message -> (message != null) && message.equals(testData), TestHelper.LONG_WAIT, TestHelper.SHORT_WAIT));
-		}
-	}
-
-	/**
-	 * Tests the JSON JMS message converter.
-	 *
-	 * @throws Exception If the test fails.
-	 */
-	@Test
-	public void testOldTypableObjectReceiveObject() throws Exception {
-		this.jmsTemplate.setMessageConverter(this.typableJmsMessageConverter);
-		// For each test data.
-		for (final DtoTestObject testData : EnhancedMessageConverterTest.TEST_DATA) {
-			// Sends the test data as a JMS message.
-			this.jmsTemplate.convertAndSend("message/original", testData);
 			// Asserts that the message is correctly converted.
 			Assertions.assertTrue(TestHelper.waitUntilValid(() -> EnhancedMessageConverterTest.currentTestMessage,
 					message -> (message != null) && message.equals(testData), TestHelper.LONG_WAIT, TestHelper.SHORT_WAIT));
