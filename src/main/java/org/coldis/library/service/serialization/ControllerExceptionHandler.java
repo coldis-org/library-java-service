@@ -38,7 +38,7 @@ public class ControllerExceptionHandler {
 	 */
 	@Autowired
 	private LocalizedMessageService messageService;
-
+	
 	/**
 	 * Enriches a message by its code and arguments.
 	 *

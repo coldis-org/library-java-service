@@ -1,7 +1,5 @@
 package org.coldis.library.service.batch;
 
-import java.util.Collection;
-
 import org.coldis.library.exception.BusinessException;
 import org.coldis.library.model.SimpleMessage;
 

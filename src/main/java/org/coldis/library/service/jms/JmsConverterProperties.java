@@ -1,7 +1,5 @@
 package org.coldis.library.service.jms;
 
-import java.util.ArrayList;
-import java.util.List;
 import java.util.Map;
 
 import org.springframework.boot.context.properties.ConfigurationProperties;
