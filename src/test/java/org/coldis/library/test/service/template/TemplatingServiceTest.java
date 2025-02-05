@@ -3,7 +3,7 @@ package org.coldis.library.test.service.template;
 import java.util.Map;
 
 import org.apache.velocity.VelocityContext;
-import org.coldis.library.service.helper.TemplatingService;
+import org.coldis.library.service.helper.TemplatingServiceComponent;
 import org.coldis.library.test.SpringTestHelper;
 import org.coldis.library.test.StartTestWithContainerExtension;
 import org.coldis.library.test.StopTestWithContainerExtension;
@@ -45,7 +45,7 @@ public class TemplatingServiceTest extends SpringTestHelper {
 	 * Templating service.
 	 */
 	@Autowired
-	private TemplatingService templatingService;
+	private TemplatingServiceComponent templatingService;
 
 	/**
 	 * Test templates.

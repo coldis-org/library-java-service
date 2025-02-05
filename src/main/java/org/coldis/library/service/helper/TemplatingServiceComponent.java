@@ -11,13 +11,13 @@ import org.coldis.library.exception.IntegrationException;
 import org.coldis.library.model.SimpleMessage;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.context.annotation.Bean;
-import org.springframework.stereotype.Service;
+import org.springframework.stereotype.Component;
 
 /**
  * Templating service.
  */
-@Service
-public class TemplatingService {
+@Component
+public class TemplatingServiceComponent {
 
 	/**
 	 * Default charset.
@@ -56,7 +56,7 @@ public class TemplatingService {
 	@Qualifier(value = "stringVelocityRepository")
 	public StringResourceRepository stringVelocityRepository(
 			@Qualifier(value = "stringVelocityEngine")
-			VelocityEngine stringVelocityEngine) {
+			final VelocityEngine stringVelocityEngine) {
 		this.stringVelocityRepository = StringResourceLoader.getRepository();
 		return this.stringVelocityRepository;
 	}
@@ -83,7 +83,7 @@ public class TemplatingService {
 	public void addStringTemplate(
 			final String key,
 			final String template) {
-		this.addStringTemplate(key, template, TemplatingService.DEFAULT_CHARSET);
+		this.addStringTemplate(key, template, TemplatingServiceComponent.DEFAULT_CHARSET);
 	}
 
 	/**
@@ -118,7 +118,7 @@ public class TemplatingService {
 	public String applyStringTemplate(
 			final String key,
 			final VelocityContext context) {
-		return this.applyStringTemplate(key, context, TemplatingService.DEFAULT_CHARSET);
+		return this.applyStringTemplate(key, context, TemplatingServiceComponent.DEFAULT_CHARSET);
 	}
 
 }

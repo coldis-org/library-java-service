@@ -9,7 +9,7 @@ import org.apache.commons.lang3.StringUtils;
 import org.coldis.library.exception.BusinessException;
 import org.coldis.library.exception.IntegrationException;
 import org.coldis.library.model.SimpleMessage;
-import org.coldis.library.service.localization.LocalizedMessageService;
+import org.coldis.library.service.localization.LocalizedMessageServiceComponent;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -37,7 +37,7 @@ public class ControllerExceptionHandler {
 	 * Message service.
 	 */
 	@Autowired
-	private LocalizedMessageService messageService;
+	private LocalizedMessageServiceComponent messageService;
 	
 	/**
 	 * Enriches a message by its code and arguments.

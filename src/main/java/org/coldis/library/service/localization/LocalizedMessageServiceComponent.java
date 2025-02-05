@@ -3,13 +3,14 @@ package org.coldis.library.service.localization;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.MessageSource;
 import org.springframework.context.i18n.LocaleContextHolder;
+import org.springframework.stereotype.Component;
 import org.springframework.stereotype.Service;
 
 /**
  * Message service.
  */
-@Service
-public class LocalizedMessageService {
+@Component
+public class LocalizedMessageServiceComponent {
 
 	/**
 	 * Message source.
