@@ -1,10 +1,9 @@
 package org.coldis.library.service.security;
 
 import java.io.IOException;
-import java.util.Arrays;
 import java.util.Objects;
 
-import org.apache.commons.lang3.ArrayUtils;
+import org.coldis.library.service.http.HttpServletHelper;
 import org.coldis.library.service.http.UserAgentHelper;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -19,7 +18,6 @@ import jakarta.servlet.FilterChain;
 import jakarta.servlet.ServletException;
 import jakarta.servlet.ServletRequest;
 import jakarta.servlet.ServletResponse;
-import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 
 /** Browser request security filter. */
@@ -52,20 +50,21 @@ public class BrowserRequestSecurityFilter implements Filter {
 			final FilterChain chain) throws IOException, ServletException {
 		// Throws an unauthorized request if not a browser.
 		boolean isBrowser = true;
-		if (request instanceof final HttpServletRequest servletRequest && (ArrayUtils.isEmpty(this.ignorePaths)
-				|| Arrays.stream(this.ignorePaths).noneMatch(ignorePath -> servletRequest.getRequestURI().matches(ignorePath)))) {
+		if (HttpServletHelper.shouldConsiderPath(request, this.ignorePaths)) {
 			if (!Objects.equals("Browser", UserAgentHelper.getUserAgentDetails().getOrDefault("agentClass", "Browser"))) {
-				if (response instanceof final HttpServletResponse servletResponse) {
-					servletResponse.sendError(HttpStatus.UNAUTHORIZED.value());
-					isBrowser = false;
-				}
+				isBrowser = false;
 			}
 		}
 
-		// Continues the chain.
+		// Continues the chain if a browser.
 		if (isBrowser) {
 			chain.doFilter(request, response);
 		}
+		// Sends unauthorized response if not.
+		else if (response instanceof final HttpServletResponse servletResponse) {
+			servletResponse.sendError(HttpStatus.UNAUTHORIZED.value());
+		}
 
 	}
+
 }

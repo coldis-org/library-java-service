@@ -33,7 +33,7 @@ import org.testcontainers.containers.GenericContainer;
 				"org.coldis.library.service.security.ignore-non-browser-requests-paths=/exception/business" }
 )
 @ExtendWith(StopTestWithContainerExtension.class)
-public class SecurityTest extends SpringTestHelper {
+public class BrowserRequestSecurityTest extends SpringTestHelper {
 
 	/**
 	 * Redis container.
