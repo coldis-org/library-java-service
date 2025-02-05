@@ -9,7 +9,9 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
+import org.springframework.cache.annotation.Cacheable;
 import org.springframework.core.annotation.Order;
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Component;
 
@@ -18,6 +20,7 @@ import jakarta.servlet.FilterChain;
 import jakarta.servlet.ServletException;
 import jakarta.servlet.ServletRequest;
 import jakarta.servlet.ServletResponse;
+import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 
 /** Browser request security filter. */
@@ -40,6 +43,21 @@ public class BrowserRequestSecurityFilter implements Filter {
 	private String[] ignorePaths;
 
 	/**
+	 * If the request is from a browser.
+	 *
+	 * @param  servletRequest Request.
+	 * @return                If the request is from a browser.
+	 */
+	@Cacheable(
+			cacheManager = "minutesExpirationLocalCacheManager",
+			value = "BrowserRequestSecurityFilter.isFromBrowser"
+	)
+	private boolean isFromBrowser(
+			final String userAgent) {
+		return Objects.equals("Browser", UserAgentHelper.getUserAgentDetails(userAgent).getOrDefault("agentClass", "Browser"));
+	}
+
+	/**
 	 * @see javax.servlet.Filter#doFilter(javax.servlet.ServletRequest,
 	 *      javax.servlet.ServletResponse, javax.servlet.FilterChain)
 	 */
@@ -51,8 +69,8 @@ public class BrowserRequestSecurityFilter implements Filter {
 		// Throws an unauthorized request if not a browser.
 		boolean isBrowser = true;
 		if (HttpServletHelper.shouldConsiderPath(request, this.ignorePaths)) {
-			if (!Objects.equals("Browser", UserAgentHelper.getUserAgentDetails().getOrDefault("agentClass", "Browser"))) {
-				isBrowser = false;
+			if (request instanceof final HttpServletRequest servletRequest) {
+				isBrowser = this.isFromBrowser(servletRequest.getHeader(HttpHeaders.USER_AGENT));
 			}
 		}
 
