@@ -6,7 +6,7 @@ import org.coldis.library.exception.BusinessException;
 import org.coldis.library.model.SimpleMessage;
 
 /**
- * Rate liimt exception.
+ * Rate limit exception.
  */
 public class RateLimitException extends BusinessException {
 

@@ -1,4 +1,4 @@
-package org.coldis.library.service.controller;
+package org.coldis.library.service.http;
 
 import java.util.Collection;
 import java.util.Collections;

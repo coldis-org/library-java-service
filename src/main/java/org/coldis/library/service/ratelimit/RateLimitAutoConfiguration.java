@@ -5,6 +5,9 @@ import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.core.annotation.Order;
 
+/**
+ * Rate limit configuration.
+ */
 @Order(100)
 @Configuration
 public class RateLimitAutoConfiguration {

@@ -56,14 +56,36 @@ public class RateLimitInterceptor implements ApplicationContextAware, EmbeddedVa
 	 */
 	public static Map<String, Map<String, RateLimitStats>> EXECUTIONS = new HashMap<>();
 
+	/**
+	 * Value resolver.
+	 */
 	public static StringValueResolver VALUE_RESOLVER;
 
+	/**
+	 * @see org.springframework.context.EmbeddedValueResolverAware#setEmbeddedValueResolver(org.springframework.util.StringValueResolver)
+	 */
 	@Override
-	public void setEmbeddedValueResolver(final StringValueResolver resolver) {
-		VALUE_RESOLVER = resolver;
+	public void setEmbeddedValueResolver(
+			final StringValueResolver resolver) {
+		RateLimitInterceptor.VALUE_RESOLVER = resolver;
 	}
 
-	private long resolveLongValue(final String value) {
+	/**
+	 * @see org.springframework.context.ApplicationContextAware#setApplicationContext(org.springframework.context.ApplicationContext)
+	 */
+	@Override
+	public void setApplicationContext(
+			final ApplicationContext applicationContext) throws BeansException {
+	}
+
+	/**
+	 * Resolves a long value.
+	 *
+	 * @param  String value
+	 * @return        Long value.
+	 */
+	private long resolveLongValue(
+			final String value) {
 		return Long.parseLong(Objects.requireNonNull(RateLimitInterceptor.VALUE_RESOLVER.resolveStringValue(value)));
 	}
 
@@ -304,7 +326,4 @@ public class RateLimitInterceptor implements ApplicationContextAware, EmbeddedVa
 
 	}
 
-	@Override
-	public void setApplicationContext(ApplicationContext applicationContext) throws BeansException {
-	}
 }

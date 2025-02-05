@@ -42,9 +42,9 @@ public class ExceptionHandlerService {
 			method = RequestMethod.POST
 	)
 	public void businessExceptionService(
-			@RequestParam
+			@RequestParam(defaultValue = "error")
 			final String code,
-			@RequestParam
+			@RequestParam(required = false)
 			final Object[] parameters) throws BusinessException {
 		throw new BusinessException(new SimpleMessage(code, parameters));
 	}
@@ -61,9 +61,9 @@ public class ExceptionHandlerService {
 			method = RequestMethod.POST
 	)
 	public void integrationExceptionService(
-			@RequestParam
+			@RequestParam(defaultValue = "error")
 			final String code,
-			@RequestParam
+			@RequestParam(required = false)
 			final Object[] parameters) throws IntegrationException {
 		throw new IntegrationException(new SimpleMessage(code, parameters));
 	}
