@@ -111,6 +111,15 @@ public class EnhancedJmsMessageConverter extends SimpleMessageConverter {
 		this.includeSessionAttributesAsMessageHeaders = includeSessionAttributesAsMessageHeaders;
 	}
 
+	/** Constructor. */
+	public EnhancedJmsMessageConverter(
+			final JmsConverterProperties jmsConverterProperties,
+			final ObjectMapper objectMapper,
+			final BaseFury optimizedSerializer,
+			final Set<String> includeSessionAttributesAsMessageHeaders) {
+		this(jmsConverterProperties, objectMapper, optimizedSerializer, false, includeSessionAttributesAsMessageHeaders);
+	}
+
 	/**
 	 * Gets the alternativeClassNames.
 	 *
