@@ -32,8 +32,9 @@ public class ExtendedMessagingMessageListenerAdapter extends MessagingMessageLis
 		}
 		// Drops message on business exception.
 		catch (final ListenerExecutionFailedException exception) {
+			exception.
 			if (exception.getCause() instanceof BusinessException) {
-				ExtendedMessagingMessageListenerAdapter.LOGGER.warn("Dropping message due to business exception: " + exception.getCause().getMessage() + ".");
+				ExtendedMessagingMessageListenerAdapter.LOGGER.warn("Dropping message due to business exception: " + exception.getLocalizedMessage() + ".");
 				ExtendedMessagingMessageListenerAdapter.LOGGER.debug("Dropping message due to business exception.", exception);
 			}
 			else {
