@@ -59,7 +59,7 @@ public class JmsConfigurationHelper {
 	private Double backoffMultiplier;
 
 	/** Back-off max elapsed time. */
-	@Value("${org.coldis.library.service.jms.listener.cache-level:4}")
+	@Value("${org.coldis.library.service.jms.listener.cache-level:}")
 	private Integer cacheLevel;
 
 	/** Back-off max elapsed time. */
