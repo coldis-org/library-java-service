@@ -59,7 +59,7 @@ public class JmsConverterAutoConfiguration {
 	public EnhancedJmsMessageConverter enhancedJmsMessageConverter(
 			@Value("#{'${org.coldis.library.service.jms.session-attributes:}'.split(',')}")
 			final Set<String> sessionAttributes) {
-		return new EnhancedJmsMessageConverter(this.jmsConverterProperties, this.objectMapper, null, sessionAttributes);
+		return new EnhancedJmsMessageConverter(this.jmsConverterProperties, this.objectMapper, this.optimizedSerializer, false, sessionAttributes);
 	}
 
 	/**
@@ -78,7 +78,7 @@ public class JmsConverterAutoConfiguration {
 	public EnhancedJmsMessageConverter internalEnhancedJmsMessageConverter(
 			@Value("#{'${org.coldis.library.service.jms.session-attributes:}'.split(',')}")
 			final Set<String> sessionAttributes) {
-		return new EnhancedJmsMessageConverter(this.jmsConverterProperties, this.objectMapper, this.optimizedSerializer, sessionAttributes);
+		return new EnhancedJmsMessageConverter(this.jmsConverterProperties, this.objectMapper, this.optimizedSerializer, true, sessionAttributes);
 	}
 
 }

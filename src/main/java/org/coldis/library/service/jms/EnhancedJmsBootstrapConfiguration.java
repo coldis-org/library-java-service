@@ -1,6 +1,5 @@
 package org.coldis.library.service.jms;
 
-import org.coldis.library.thread.ThreadMapContextHolder;
 import org.springframework.beans.BeansException;
 import org.springframework.beans.factory.config.BeanDefinition;
 import org.springframework.beans.factory.support.BeanDefinitionRegistry;
@@ -13,38 +12,12 @@ import org.springframework.jms.config.JmsListenerConfigUtils;
 import org.springframework.jms.config.MethodJmsListenerEndpoint;
 import org.springframework.jms.listener.adapter.MessagingMessageListenerAdapter;
 
-import jakarta.jms.JMSException;
-import jakarta.jms.Message;
-import jakarta.jms.Session;
-
 /**
  * JMS bootstrap enhanced configuration.
  */
 @Configuration(proxyBeanMethods = false)
 @Role(BeanDefinition.ROLE_INFRASTRUCTURE)
 public class EnhancedJmsBootstrapConfiguration implements BeanDefinitionRegistryPostProcessor {
-
-	/**
-	 * Context-aware messaging message listener adapter.
-	 */
-	public final class ContextAwareMessagingMessageListenerAdapter extends MessagingMessageListenerAdapter {
-
-		/**
-		 * @see org.springframework.jms.listener.adapter.MessagingMessageListenerAdapter#onMessage(jakarta.jms.Message,
-		 *      jakarta.jms.Session)
-		 */
-		@Override
-		public void onMessage(
-				final Message jmsMessage,
-				final Session session) throws JMSException {
-			try {
-				super.onMessage(jmsMessage, session);
-			}
-			finally {
-				ThreadMapContextHolder.clear();
-			}
-		}
-	}
 
 	/**
 	 * @see org.springframework.beans.factory.support.BeanDefinitionRegistryPostProcessor#postProcessBeanDefinitionRegistry(org.springframework.beans.factory.support.BeanDefinitionRegistry)
@@ -64,7 +37,7 @@ public class EnhancedJmsBootstrapConfiguration implements BeanDefinitionRegistry
 	@Bean
 	@Role(BeanDefinition.ROLE_INFRASTRUCTURE)
 	public JmsListenerAnnotationBeanPostProcessor enhancedJmsListenerAnnotationProcessor() {
-		return new JmsListenerAnnotationBeanPostProcessor() {
+		return new JmsListenerAnnotationBeanPostProcessor(  ) {
 
 			/**
 			 * @see org.springframework.jms.annotation.JmsListenerAnnotationBeanPostProcessor#createMethodJmsListenerEndpoint()
@@ -78,7 +51,7 @@ public class EnhancedJmsBootstrapConfiguration implements BeanDefinitionRegistry
 					 */
 					@Override
 					protected MessagingMessageListenerAdapter createMessageListenerInstance() {
-						return new ContextAwareMessagingMessageListenerAdapter();
+						return new ExtendedMessagingMessageListenerAdapter();
 					}
 				};
 			}

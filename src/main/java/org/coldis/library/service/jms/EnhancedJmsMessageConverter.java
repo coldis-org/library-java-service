@@ -85,6 +85,9 @@ public class EnhancedJmsMessageConverter extends SimpleMessageConverter {
 	 */
 	private final BaseFury optimizedSerializer;
 
+	/** Use optimized serializer. */
+	private Boolean useOptimizedSerializer = false;
+
 	/**
 	 * If the session info should be included in messages on message headers.
 	 */
@@ -98,11 +101,13 @@ public class EnhancedJmsMessageConverter extends SimpleMessageConverter {
 			final JmsConverterProperties jmsConverterProperties,
 			final ObjectMapper objectMapper,
 			final BaseFury optimizedSerializer,
+			final Boolean useOptimizedSerializer,
 			final Set<String> includeSessionAttributesAsMessageHeaders) {
 		super();
 		this.jmsConverterProperties = jmsConverterProperties;
 		this.objectMapper = objectMapper;
 		this.optimizedSerializer = optimizedSerializer;
+		this.useOptimizedSerializer = useOptimizedSerializer;
 		this.includeSessionAttributesAsMessageHeaders = includeSessionAttributesAsMessageHeaders;
 	}
 
@@ -298,7 +303,7 @@ public class EnhancedJmsMessageConverter extends SimpleMessageConverter {
 			// Sends a non-simple message.
 			if (!this.isSimpleMessage(payload)) {
 				// If optimized serializer is enabled.
-				if (this.optimizedSerializer != null) {
+				if ((this.optimizedSerializer != null) && this.useOptimizedSerializer) {
 					message = this.toSerializedMessage(payload, session);
 				}
 				// If optimized serializer is not enabled.

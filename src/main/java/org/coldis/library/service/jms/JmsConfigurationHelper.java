@@ -22,6 +22,7 @@ import org.springframework.jms.core.JmsTemplate;
 import org.springframework.jms.support.converter.MessageConverter;
 import org.springframework.jms.support.destination.DestinationResolver;
 import org.springframework.stereotype.Component;
+import org.springframework.util.ErrorHandler;
 import org.springframework.util.backoff.ExponentialBackOff;
 
 import jakarta.jms.ConnectionFactory;
@@ -79,6 +80,11 @@ public class JmsConfigurationHelper {
 	/** JMS destination resolver. */
 	@Autowired(required = false)
 	private DestinationResolver destinationResolver;
+
+	/** Error handler. */
+	@Autowired(required = false)
+	@Qualifier("enhancedJmsErrorHandler")
+	private ErrorHandler errorHandler;
 
 	/**
 	 * Gets the JMS listener executor.
@@ -209,8 +215,7 @@ public class JmsConfigurationHelper {
 				.withMaxPoolSize(maxPoolSize).withMaxPoolSizeCpuMultiplier(maxPoolSizeCpuMultiplier).withKeepAlive(Duration.ofSeconds(keepAliveSeconds)).build()
 				: this.jmsListenerExecutor);
 	}
-	
-	
+
 	/**
 	 * Merges the default properties with the actual properties.
 	 *
@@ -329,6 +334,9 @@ public class JmsConfigurationHelper {
 		}
 		if (cacheLevel != null) {
 			jmsContainerFactory.setCacheLevel(cacheLevel);
+		}
+		if (this.errorHandler != null) {
+			jmsContainerFactory.setErrorHandler(this.errorHandler);
 		}
 		jmsContainerFactory.setConnectionFactory(connectionFactory);
 		jmsContainerFactory.setSessionTransacted(true);
