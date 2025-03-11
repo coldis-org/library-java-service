@@ -1,5 +1,7 @@
 package org.coldis.library.service.jms;
 
+import java.util.Objects;
+
 import org.coldis.library.exception.BusinessException;
 import org.coldis.library.thread.ThreadMapContextHolder;
 import org.slf4j.Logger;
@@ -32,7 +34,8 @@ public class ExtendedMessagingMessageListenerAdapter extends MessagingMessageLis
 		}
 		// Drops message on business exception.
 		catch (final ListenerExecutionFailedException exception) {
-			if (exception.getCause() instanceof BusinessException) {
+			final Throwable exceptionCause = exception.getCause();
+			if (exceptionCause instanceof final BusinessException businessException && Objects.equals(400, businessException.getStatusCode())) {
 				ExtendedMessagingMessageListenerAdapter.LOGGER.warn("Dropping message due to business exception: " + exception.getLocalizedMessage() + ".");
 				ExtendedMessagingMessageListenerAdapter.LOGGER.debug("Dropping message due to business exception.", exception);
 			}
