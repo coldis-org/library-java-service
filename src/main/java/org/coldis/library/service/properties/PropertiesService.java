@@ -1,7 +1,6 @@
 package org.coldis.library.service.properties;
 
 import org.coldis.library.exception.IntegrationException;
-import org.coldis.library.helper.ObjectHelper;
 import org.coldis.library.helper.ReflectionHelper;
 import org.coldis.library.model.SimpleMessage;
 import org.springframework.beans.BeansException;
@@ -9,11 +8,10 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
 import org.springframework.context.ApplicationContext;
 import org.springframework.context.ApplicationContextAware;
 import org.springframework.web.bind.annotation.PathVariable;
+import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestMethod;
 import org.springframework.web.bind.annotation.RestController;
-
-import io.swagger.v3.oas.annotations.parameters.RequestBody;
 
 /**
  * Properties service.
@@ -37,34 +35,148 @@ public class PropertiesService implements ApplicationContextAware {
 	}
 
 	/**
-	 * Gets the properties.
+	 * Sets a bean configuration property.
 	 *
-	 * @param  name Property name.
-	 * @return      Property value.
+	 * @param name  Property name.
+	 * @param value Property value.
+	 */
+	private void setProperty(
+			final String beanName,
+			final String name,
+			final Object value) {
+
+		// Tries getting the bean.
+		final Object bean = this.applicationContext.getBean(beanName);
+
+		// Validates it has @ConfigurationProperties annotation.
+		final ConfigurationProperties annotation = bean.getClass().getAnnotation(ConfigurationProperties.class);
+		if (annotation == null) {
+			throw new IntegrationException(new SimpleMessage("Bean " + beanName + " does not have @ConfigurationProperties annotation."));
+		}
+
+		// Sets the property.
+		ReflectionHelper.setAttribute(bean, name, value);
+
+	}
+
+	/**
+	 * Sets a bean configuration property.
+	 *
+	 * @param name  Property name.
+	 * @param value Property value.
 	 */
 	@RequestMapping(
-			path = "/{beanName}/{name}",
+			path = "string/{beanName}/{name}",
 			method = RequestMethod.PUT
 	)
-	public void setProperties(
+	public void setStringProperty(
 			@PathVariable
 			final String beanName,
 			@PathVariable
 			final String name,
 			@RequestBody
-			final Object value) {
-		// Tries getting the bean.
-		final Object bean = this.applicationContext.getBean(beanName);
-		
-		// Validates it has @ConfigurationProperties annotation.
-		ConfigurationProperties annotation = bean.getClass().getAnnotation(ConfigurationProperties.class);
-		if (annotation == null) {
-			throw new IntegrationException(new SimpleMessage("Bean " + beanName + " does not have @ConfigurationProperties annotation."));
-		}
-		
-		// Sets the property.
-		ReflectionHelper.setAttribute(bean, name, value);
+			final String value) {
+		this.setProperty(beanName, name, value);
+	}
 
+	/**
+	 * Sets a bean configuration property.
+	 *
+	 * @param name  Property name.
+	 * @param value Property value.
+	 */
+	@RequestMapping(
+			path = "integer/{beanName}/{name}",
+			method = RequestMethod.PUT
+	)
+	public void setNumberProperty(
+			@PathVariable
+			final String beanName,
+			@PathVariable
+			final String name,
+			@RequestBody
+			final Integer value) {
+		this.setProperty(beanName, name, value);
+	}
+
+	/**
+	 * Sets a bean configuration property.
+	 *
+	 * @param name  Property name.
+	 * @param value Property value.
+	 */
+	@RequestMapping(
+			path = "long/{beanName}/{name}",
+			method = RequestMethod.PUT
+	)
+	public void setNumberProperty(
+			@PathVariable
+			final String beanName,
+			@PathVariable
+			final String name,
+			@RequestBody
+			final Long value) {
+		this.setProperty(beanName, name, value);
+	}
+
+	/**
+	 * Sets a bean configuration property.
+	 *
+	 * @param name  Property name.
+	 * @param value Property value.
+	 */
+	@RequestMapping(
+			path = "float/{beanName}/{name}",
+			method = RequestMethod.PUT
+	)
+	public void setNumberProperty(
+			@PathVariable
+			final String beanName,
+			@PathVariable
+			final String name,
+			@RequestBody
+			final Float value) {
+		this.setProperty(beanName, name, value);
+	}
+
+	/**
+	 * Sets a bean configuration property.
+	 *
+	 * @param name  Property name.
+	 * @param value Property value.
+	 */
+	@RequestMapping(
+			path = "double/{beanName}/{name}",
+			method = RequestMethod.PUT
+	)
+	public void setNumberProperty(
+			@PathVariable
+			final String beanName,
+			@PathVariable
+			final String name,
+			@RequestBody
+			final Double value) {
+		this.setProperty(beanName, name, value);
+	}
+
+	/**
+	 * Sets a bean configuration property.
+	 *
+	 * @param name  Property name.
+	 * @param value Property value.
+	 */
+	@RequestMapping(
+			path = "boolean/{beanName}/{name}",
+			method = RequestMethod.PUT
+	)
+	public void setNumberProperty(
+			@PathVariable
+			final String beanName,
+			@PathVariable
+			final String name,
+			@RequestBody
+			final Boolean value) {
+		this.setProperty(beanName, name, value);
 	}
 
 }
