@@ -86,6 +86,21 @@ public class PropertiesServiceTest {
 		this.restTemplate.put("http://localhost:" + this.port + "/properties/double/testProperties1/property4", 2, Void.class);
 		// Validates updated property value.
 		Assertions.assertEquals(2D, this.testProperties1.getProperty4());
+		
+		// Validates initial property value.
+		Assertions.assertEquals(1F, this.testProperties1.getProperty5());
+		// Updates property.
+		this.restTemplate.put("http://localhost:" + this.port + "/properties/float/testProperties1/property5", 2, Void.class);
+		// Validates updated property value.
+		Assertions.assertEquals(2F, this.testProperties1.getProperty5());
+		
+		// Validates initial property value.
+		Assertions.assertEquals(true, this.testProperties1.getProperty6());
+		// Updates property.
+		this.restTemplate.put("http://localhost:" + this.port + "/properties/boolean/testProperties1/property6", false, Void.class);
+		// Validates updated property value.
+		Assertions.assertEquals(false, this.testProperties1.getProperty6());
+		
 	}
 
 }
