@@ -1,5 +1,7 @@
 package org.coldis.library.service.properties;
 
+import javax.sql.DataSource;
+
 import org.coldis.library.exception.IntegrationException;
 import org.coldis.library.helper.ReflectionHelper;
 import org.coldis.library.model.SimpleMessage;
@@ -50,7 +52,7 @@ public class PropertiesService implements ApplicationContextAware {
 
 		// Validates it has @ConfigurationProperties annotation.
 		final ConfigurationProperties annotation = bean.getClass().getAnnotation(ConfigurationProperties.class);
-		if (annotation == null) {
+		if ((annotation == null) && !DataSource.class.isAssignableFrom(bean.getClass())) {
 			throw new IntegrationException(new SimpleMessage("Bean " + beanName + " does not have @ConfigurationProperties annotation."));
 		}
 

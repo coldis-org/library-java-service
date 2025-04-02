@@ -5,6 +5,7 @@ import java.util.Objects;
 import org.coldis.library.exception.BusinessException;
 import org.coldis.library.thread.ThreadMapContextHolder;
 import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.jms.listener.adapter.ListenerExecutionFailedException;
 import org.springframework.jms.listener.adapter.MessagingMessageListenerAdapter;
 
@@ -18,7 +19,7 @@ import jakarta.jms.Session;
 public class ExtendedMessagingMessageListenerAdapter extends MessagingMessageListenerAdapter {
 
 	/** Logger. */
-	private static final Logger LOGGER = org.slf4j.LoggerFactory.getLogger(ExtendedMessagingMessageListenerAdapter.class);
+	private static final Logger LOGGER = LoggerFactory.getLogger(ExtendedMessagingMessageListenerAdapter.class);
 
 	/**
 	 * @see org.springframework.jms.listener.adapter.MessagingMessageListenerAdapter#onMessage(jakarta.jms.Message,
