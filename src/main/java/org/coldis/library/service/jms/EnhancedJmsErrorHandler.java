@@ -19,18 +19,14 @@ public class EnhancedJmsErrorHandler implements ErrorHandler {
 	private static final Logger LOGGER = LoggerFactory.getLogger(EnhancedJmsErrorHandler.class);
 
 	/**
-	 * Error message.
-	 */
-	private static final String ERROR_MESSAGE = "Error processing JMS message";
-
-	/**
 	 * @see org.springframework.util.ErrorHandler#handleError(java.lang.Throwable
 	 */
 	@Override
 	public void handleError(
 			final Throwable throwable) {
-		EnhancedJmsErrorHandler.LOGGER.error(EnhancedJmsErrorHandler.ERROR_MESSAGE + ": " + throwable.getLocalizedMessage() + ".");
-		EnhancedJmsErrorHandler.LOGGER.debug(EnhancedJmsErrorHandler.ERROR_MESSAGE + ".", throwable);
+		EnhancedJmsErrorHandler.LOGGER.error((throwable.getLocalizedMessage() + ": " + throwable) == null ? "Unknown error" : throwable.getMessage() + ".");
+		EnhancedJmsErrorHandler.LOGGER.debug((throwable.getLocalizedMessage() + ": " + throwable) == null ? "Unknown error" : throwable.getMessage() + ".",
+				throwable);
 	}
 
 }
