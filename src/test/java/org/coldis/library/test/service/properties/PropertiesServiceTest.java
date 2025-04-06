@@ -131,7 +131,7 @@ public class PropertiesServiceTest {
 		final boolean execute = this.dataSource.getConnection().prepareCall("SELECT 1").execute();
 
 		// Updates property to an invalid database connection.
-		this.restTemplate.put("http://localhost:" + this.port + "/properties/string/dataSource/hikariConfigMXBean.jdbcUrl", "jdbc:postgresql://localhost:1234/test",
+		this.restTemplate.put("http://localhost:" + this.port + "/properties/string/dataSource/pool.dataSource.jdbcUrl?fieldAccess=true", "jdbc:postgresql://localhost:1234/test",
 				Void.class);
 
 		// Makes sure the connection is not valid.
