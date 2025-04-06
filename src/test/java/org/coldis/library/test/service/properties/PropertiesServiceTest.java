@@ -1,5 +1,9 @@
 package org.coldis.library.test.service.properties;
 
+import java.sql.Connection;
+
+import javax.sql.DataSource;
+
 import org.coldis.library.test.StartTestWithContainerExtension;
 import org.coldis.library.test.StopTestWithContainerExtension;
 import org.coldis.library.test.TestHelper;
@@ -7,12 +11,16 @@ import org.coldis.library.test.TestWithContainer;
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.context.SpringBootTest.WebEnvironment;
 import org.springframework.web.client.RestTemplate;
 import org.testcontainers.containers.GenericContainer;
+
+import com.zaxxer.hikari.HikariDataSource;
 
 /**
  * Properties service test.
@@ -22,6 +30,11 @@ import org.testcontainers.containers.GenericContainer;
 @SpringBootTest(webEnvironment = WebEnvironment.RANDOM_PORT)
 @ExtendWith(StopTestWithContainerExtension.class)
 public class PropertiesServiceTest {
+
+	/**
+	 * Logger.
+	 */
+	private static final Logger LOGGER = LoggerFactory.getLogger(PropertiesServiceTest.class);
 
 	/**
 	 * Redis container.
@@ -56,6 +69,10 @@ public class PropertiesServiceTest {
 	@Autowired
 	private RestTemplate restTemplate;
 
+	/** Datasource. */
+	@Autowired
+	private DataSource dataSource;
+
 	/** Test properties update. */
 	@Test
 	public void testPropertiesUpdate() {
@@ -86,21 +103,52 @@ public class PropertiesServiceTest {
 		this.restTemplate.put("http://localhost:" + this.port + "/properties/double/testProperties1/property4", 2, Void.class);
 		// Validates updated property value.
 		Assertions.assertEquals(2D, this.testProperties1.getProperty4());
-		
+
 		// Validates initial property value.
 		Assertions.assertEquals(1F, this.testProperties1.getProperty5());
 		// Updates property.
 		this.restTemplate.put("http://localhost:" + this.port + "/properties/float/testProperties1/property5", 2, Void.class);
 		// Validates updated property value.
 		Assertions.assertEquals(2F, this.testProperties1.getProperty5());
-		
+
 		// Validates initial property value.
 		Assertions.assertEquals(true, this.testProperties1.getProperty6());
 		// Updates property.
 		this.restTemplate.put("http://localhost:" + this.port + "/properties/boolean/testProperties1/property6", false, Void.class);
 		// Validates updated property value.
 		Assertions.assertEquals(false, this.testProperties1.getProperty6());
-		
+
+	}
+
+	/**
+	 * Tests updating database connection.
+	 *
+	 * @throws Exception If the test fails.
+	 */
+	@Test
+	public void testDatabaseConnectionUpdate() throws Exception {
+		// Validates initial property value.
+		final boolean execute = this.dataSource.getConnection().prepareCall("SELECT 1").execute();
+
+		// Updates property to an invalid database connection.
+		this.restTemplate.put("http://localhost:" + this.port + "/properties/string/dataSource/hikariConfigMXBean.jdbcUrl", "jdbc:postgresql://localhost:1234/test",
+				Void.class);
+
+		// Makes sure the connection is not valid.
+		Assertions.assertTrue(TestHelper.waitUntilValid(() -> {
+			try {
+				LOGGER.info("Testing database connection...");
+				final Connection connection = this.dataSource.getConnection();
+				connection.prepareCall("SELECT 1").execute();
+				((HikariDataSource) this.dataSource).evictConnection(connection);
+				return Boolean.FALSE;
+			}
+			catch (final Exception exception) {
+				PropertiesServiceTest.LOGGER.error("Error while executing database connection test.", exception);
+				return Boolean.TRUE;
+			}
+		}, valid -> valid, TestHelper.VERY_LONG_WAIT, TestHelper.VERY_SHORT_WAIT));
+
 	}
 
 }

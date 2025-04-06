@@ -13,6 +13,7 @@ import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestMethod;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 /**
@@ -44,8 +45,11 @@ public class PropertiesService implements ApplicationContextAware {
 	 */
 	private void setProperty(
 			final String beanName,
+			final Boolean fieldAccess,
 			final String name,
 			final Object value) {
+
+		final String actualName = name;
 
 		// Tries getting the bean.
 		final Object bean = this.applicationContext.getBean(beanName);
@@ -57,7 +61,7 @@ public class PropertiesService implements ApplicationContextAware {
 		}
 
 		// Sets the property.
-		ReflectionHelper.setAttribute(bean, name, value);
+		ReflectionHelper.setAttribute(bean, fieldAccess, actualName, value);
 
 	}
 
@@ -74,11 +78,13 @@ public class PropertiesService implements ApplicationContextAware {
 	public void setStringProperty(
 			@PathVariable
 			final String beanName,
+			@RequestParam(defaultValue = "false")
+			final Boolean fieldAccess,
 			@PathVariable
 			final String name,
 			@RequestBody
 			final String value) {
-		this.setProperty(beanName, name, value);
+		this.setProperty(beanName, fieldAccess, name, value);
 	}
 
 	/**
@@ -94,11 +100,13 @@ public class PropertiesService implements ApplicationContextAware {
 	public void setNumberProperty(
 			@PathVariable
 			final String beanName,
+			@RequestParam(defaultValue = "false")
+			final Boolean fieldAccess,
 			@PathVariable
 			final String name,
 			@RequestBody
 			final Integer value) {
-		this.setProperty(beanName, name, value);
+		this.setProperty(beanName, fieldAccess, name, value);
 	}
 
 	/**
@@ -114,11 +122,13 @@ public class PropertiesService implements ApplicationContextAware {
 	public void setNumberProperty(
 			@PathVariable
 			final String beanName,
+			@RequestParam(defaultValue = "false")
+			final Boolean fieldAccess,
 			@PathVariable
 			final String name,
 			@RequestBody
 			final Long value) {
-		this.setProperty(beanName, name, value);
+		this.setProperty(beanName, fieldAccess, name, value);
 	}
 
 	/**
@@ -134,11 +144,13 @@ public class PropertiesService implements ApplicationContextAware {
 	public void setNumberProperty(
 			@PathVariable
 			final String beanName,
+			@RequestParam(defaultValue = "false")
+			final Boolean fieldAccess,
 			@PathVariable
 			final String name,
 			@RequestBody
 			final Float value) {
-		this.setProperty(beanName, name, value);
+		this.setProperty(beanName, fieldAccess, name, value);
 	}
 
 	/**
@@ -154,11 +166,13 @@ public class PropertiesService implements ApplicationContextAware {
 	public void setNumberProperty(
 			@PathVariable
 			final String beanName,
+			@RequestParam(defaultValue = "false")
+			final Boolean fieldAccess,
 			@PathVariable
 			final String name,
 			@RequestBody
 			final Double value) {
-		this.setProperty(beanName, name, value);
+		this.setProperty(beanName, fieldAccess, name, value);
 	}
 
 	/**
@@ -174,11 +188,13 @@ public class PropertiesService implements ApplicationContextAware {
 	public void setNumberProperty(
 			@PathVariable
 			final String beanName,
+			@RequestParam(defaultValue = "false")
+			final Boolean fieldAccess,
 			@PathVariable
 			final String name,
 			@RequestBody
 			final Boolean value) {
-		this.setProperty(beanName, name, value);
+		this.setProperty(beanName, fieldAccess, name, value);
 	}
 
 }
