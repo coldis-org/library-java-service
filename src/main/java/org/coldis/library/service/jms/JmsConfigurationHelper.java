@@ -252,6 +252,10 @@ public class JmsConfigurationHelper {
 				actualProperties.getProducerMaxRate() == null ? connectionFactory.getProducerMaxRate() : actualProperties.getProducerMaxRate());
 		connectionFactory.setConfirmationWindowSize(actualProperties.getConfirmationWindowSize() == null ? connectionFactory.getConfirmationWindowSize()
 				: actualProperties.getConfirmationWindowSize());
+		connectionFactory.setTransactionBatchSize(
+				actualProperties.getAckBatchSize() == null ? connectionFactory.getTransactionBatchSize() : actualProperties.getAckBatchSize());
+		connectionFactory
+				.setDupsOKBatchSize(actualProperties.getAckBatchSize() == null ? connectionFactory.getDupsOKBatchSize() : actualProperties.getAckBatchSize());
 		connectionFactory
 				.setUseGlobalPools(actualProperties.getUseGlobalPools() == null ? connectionFactory.isUseGlobalPools() : actualProperties.getUseGlobalPools());
 		connectionFactory.setCacheDestinations(

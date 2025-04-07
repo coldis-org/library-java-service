@@ -34,6 +34,8 @@ public class ExtendedArtemisProperties extends ArtemisProperties implements Arte
 
 	private Integer confirmationWindowSize;
 
+	private Integer ackBatchSize;
+
 	private Boolean blockOnDurableSend;
 
 	private Boolean blockOnNonDurableSend;
@@ -236,6 +238,25 @@ public class ExtendedArtemisProperties extends ArtemisProperties implements Arte
 	public void setConfirmationWindowSize(
 			final Integer confirmationWindowSize) {
 		this.confirmationWindowSize = confirmationWindowSize;
+	}
+
+	/**
+	 * Gets the ackBatchSize.
+	 *
+	 * @return The ackBatchSize.
+	 */
+	public Integer getAckBatchSize() {
+		return this.ackBatchSize;
+	}
+
+	/**
+	 * Sets the ackBatchSize.
+	 *
+	 * @param ackBatchSize New ackBatchSize.
+	 */
+	public void setAckBatchSize(
+			final Integer ackBatchSize) {
+		this.ackBatchSize = ackBatchSize;
 	}
 
 	/**
