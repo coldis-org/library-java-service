@@ -421,7 +421,7 @@ public class JmsConfigurationHelper {
 			final Long backoffMaxElapsedTime) {
 		// Creates a new container factory.
 		final DefaultJmsListenerContainerFactory jmsContainerFactory = this.createJmsContainerFactory(taskExecutor, connectionFactory, destinationResolver,
-				messageConverter, cacheLevel, maxMessagesPerTask, backoffInitialInterval, backoffMultiplier, backoffMaxElapsedTime);
+				messageConverter, errorHandler, cacheLevel, maxMessagesPerTask, backoffInitialInterval, backoffMultiplier, backoffMaxElapsedTime);
 		jmsContainerFactory.setSubscriptionDurable(true);
 		jmsContainerFactory.setSubscriptionShared(true);
 		// Returns the container factory.

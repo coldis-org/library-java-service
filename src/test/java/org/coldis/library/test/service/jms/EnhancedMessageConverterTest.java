@@ -22,7 +22,6 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.context.SpringBootTest.WebEnvironment;
-import org.springframework.jms.annotation.EnableJms;
 import org.springframework.jms.annotation.JmsListener;
 import org.springframework.jms.core.JmsTemplate;
 import org.testcontainers.containers.GenericContainer;
@@ -34,7 +33,6 @@ import jakarta.jms.Message;
 /**
  * JMS message converter test.
  */
-@EnableJms
 @TestWithContainer
 @ExtendWith(StartTestWithContainerExtension.class)
 @SpringBootTest(webEnvironment = WebEnvironment.RANDOM_PORT)

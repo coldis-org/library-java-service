@@ -8,7 +8,7 @@ import org.springframework.boot.autoconfigure.jms.artemis.ExtendedArtemisConfigu
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.context.annotation.Import;
-import org.springframework.jms.annotation.EnableJms;
+import org.springframework.context.annotation.Primary;
 import org.springframework.jms.config.DefaultJmsListenerContainerFactory;
 import org.springframework.jms.core.JmsTemplate;
 
@@ -17,7 +17,6 @@ import jakarta.jms.ConnectionFactory;
 /**
  * JMS configuration.
  */
-@EnableJms
 @Configuration
 @Import(value = { ExtendedArtemisConfiguration.class })
 public class JmsConfiguration {
@@ -34,7 +33,8 @@ public class JmsConfiguration {
 	 * @return             The JMS connection factory.
 	 */
 	@Bean
-	public ConnectionFactory createJmsConnectionFactory(
+	@Primary
+	public ConnectionFactory jmsConnectionFactory(
 			final ListableBeanFactory beanFactory,
 			final ExtendedArtemisProperties properties) {
 		return this.jmsConfigurationHelper.createJmsConnectionFactory(beanFactory, properties);
@@ -46,8 +46,9 @@ public class JmsConfiguration {
 	 * @param  connectionFactory Connection factory.
 	 * @return                   The JMS container factory.
 	 */
-	@Bean(name = "testJmsContainerFactory")
-	public DefaultJmsListenerContainerFactory createJmsContainerFactory(
+	@Bean
+	@Primary
+	public DefaultJmsListenerContainerFactory testJmsContainerFactory(
 			final ConnectionFactory connectionFactory) {
 		return this.jmsConfigurationHelper.createJmsContainerFactory(connectionFactory);
 	}
@@ -59,7 +60,8 @@ public class JmsConfiguration {
 	 * @return                   The JMS template.
 	 */
 	@Bean
-	public JmsTemplate createJmsTemplate(
+	@Primary
+	public JmsTemplate jmsTemplate(
 			final ConnectionFactory connectionFactory) {
 		return this.jmsConfigurationHelper.createJmsTemplate(connectionFactory);
 	}

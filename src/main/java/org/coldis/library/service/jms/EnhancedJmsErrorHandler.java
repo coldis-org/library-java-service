@@ -24,9 +24,10 @@ public class EnhancedJmsErrorHandler implements ErrorHandler {
 	@Override
 	public void handleError(
 			final Throwable throwable) {
-		EnhancedJmsErrorHandler.LOGGER.error((throwable.getLocalizedMessage() + ": " + throwable) == null ? "Unknown error" : throwable.getLocalizedMessage() + ".");
-		EnhancedJmsErrorHandler.LOGGER.debug((throwable.getLocalizedMessage() + ": " + throwable) == null ? "Unknown error" : throwable.getLocalizedMessage() + ".",
-				throwable);
+		EnhancedJmsErrorHandler.LOGGER
+				.error(throwable.getLocalizedMessage() + ": " + (throwable == null ? "Unknown error" : throwable.getLocalizedMessage()) + ".");
+		EnhancedJmsErrorHandler.LOGGER
+				.debug(throwable.getLocalizedMessage() + ": " + (throwable == null ? "Unknown error" : throwable.getLocalizedMessage()) + ".", throwable);
 	}
 
 }
