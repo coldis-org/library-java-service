@@ -254,8 +254,8 @@ public class JmsConfigurationHelper {
 				: actualProperties.getConfirmationWindowSize());
 		connectionFactory.setTransactionBatchSize(
 				actualProperties.getAckBatchSize() == null ? connectionFactory.getTransactionBatchSize() : actualProperties.getAckBatchSize());
-		connectionFactory
-				.setDupsOKBatchSize(actualProperties.getAckBatchSize() == null ? connectionFactory.getDupsOKBatchSize() : actualProperties.getAckBatchSize());
+		connectionFactory.setDupsOKBatchSize(
+				actualProperties.getDupsAckBatchSize() == null ? connectionFactory.getDupsOKBatchSize() : actualProperties.getDupsAckBatchSize());
 		connectionFactory
 				.setUseGlobalPools(actualProperties.getUseGlobalPools() == null ? connectionFactory.isUseGlobalPools() : actualProperties.getUseGlobalPools());
 		connectionFactory.setCacheDestinations(

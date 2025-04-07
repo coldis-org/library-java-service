@@ -36,6 +36,8 @@ public class ExtendedArtemisProperties extends ArtemisProperties implements Arte
 
 	private Integer ackBatchSize;
 
+	private Integer dupsAckBatchSize;
+
 	private Boolean blockOnDurableSend;
 
 	private Boolean blockOnNonDurableSend;
@@ -257,6 +259,25 @@ public class ExtendedArtemisProperties extends ArtemisProperties implements Arte
 	public void setAckBatchSize(
 			final Integer ackBatchSize) {
 		this.ackBatchSize = ackBatchSize;
+	}
+
+	/**
+	 * Gets the dupsAckBatchSize.
+	 *
+	 * @return The dupsAckBatchSize.
+	 */
+	public Integer getDupsAckBatchSize() {
+		return this.dupsAckBatchSize;
+	}
+
+	/**
+	 * Sets the dupsAckBatchSize.
+	 *
+	 * @param dupsAckBatchSize New dupsAckBatchSize.
+	 */
+	public void setDupsAckBatchSize(
+			final Integer dupsAckBatchSize) {
+		this.dupsAckBatchSize = dupsAckBatchSize;
 	}
 
 	/**
