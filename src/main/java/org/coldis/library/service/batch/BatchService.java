@@ -312,6 +312,7 @@ public class BatchService {
 	 * @param  executor          Executor.
 	 * @throws BusinessException If the batch fails.
 	 */
+	@Transactional(propagation = Propagation.REQUIRED)
 	@JmsListener(
 			destination = BatchService.RESUME_QUEUE,
 			concurrency = "${org.coldis.configuration.service.batch-concurrency:1-17}"
