@@ -52,6 +52,8 @@ public class ExtendedArtemisProperties extends ArtemisProperties implements Arte
 
 	private Integer reconnectAttempts;
 
+	private Integer retryInterval;
+
 	/**
 	 * Gets the useGlobalPools.
 	 *
@@ -412,4 +414,24 @@ public class ExtendedArtemisProperties extends ArtemisProperties implements Arte
 			final Integer reconnectAttempts) {
 		this.reconnectAttempts = reconnectAttempts;
 	}
+
+	/**
+	 * Gets the retryInterval.
+	 *
+	 * @return The retryInterval.
+	 */
+	public Integer getRetryInterval() {
+		return this.retryInterval;
+	}
+
+	/**
+	 * Sets the retryInterval.
+	 *
+	 * @param retryInterval New retryInterval.
+	 */
+	public void setRetryInterval(
+			final Integer retryInterval) {
+		this.retryInterval = retryInterval;
+	}
+
 }

@@ -47,7 +47,7 @@ public class JmsConfigurationHelper {
 
 	/** Back-off initial interval. */
 
-	@Value("${org.coldis.library.service.jms.listener.max-messages-per-task:50}")
+	@Value("${org.coldis.library.service.jms.listener.max-messages-per-task:30}")
 	private Integer maxMessagesPerTask;
 
 	/** Back-off initial interval. */
@@ -279,6 +279,8 @@ public class JmsConfigurationHelper {
 				actualProperties.getCallFailoverTimeout() == null ? connectionFactory.getCallFailoverTimeout() : actualProperties.getCallFailoverTimeout());
 		connectionFactory.setReconnectAttempts(
 				actualProperties.getReconnectAttempts() == null ? connectionFactory.getReconnectAttempts() : actualProperties.getReconnectAttempts());
+		connectionFactory.setRetryInterval(
+				actualProperties.getRetryInterval() == null ? connectionFactory.getRetryInterval() : actualProperties.getRetryInterval());
 	}
 
 	/**
