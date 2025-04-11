@@ -256,6 +256,8 @@ public class JmsConfigurationHelper {
 				actualProperties.getAckBatchSize() == null ? connectionFactory.getTransactionBatchSize() : actualProperties.getAckBatchSize());
 		connectionFactory.setDupsOKBatchSize(
 				actualProperties.getDupsAckBatchSize() == null ? connectionFactory.getDupsOKBatchSize() : actualProperties.getDupsAckBatchSize());
+		connectionFactory.setBlockOnAcknowledge(
+				actualProperties.getBlockOnAcknowledge() == null ? connectionFactory.isBlockOnAcknowledge() : actualProperties.getBlockOnAcknowledge());
 		connectionFactory
 				.setUseGlobalPools(actualProperties.getUseGlobalPools() == null ? connectionFactory.isUseGlobalPools() : actualProperties.getUseGlobalPools());
 		connectionFactory.setCacheDestinations(
@@ -279,8 +281,8 @@ public class JmsConfigurationHelper {
 				actualProperties.getCallFailoverTimeout() == null ? connectionFactory.getCallFailoverTimeout() : actualProperties.getCallFailoverTimeout());
 		connectionFactory.setReconnectAttempts(
 				actualProperties.getReconnectAttempts() == null ? connectionFactory.getReconnectAttempts() : actualProperties.getReconnectAttempts());
-		connectionFactory.setRetryInterval(
-				actualProperties.getRetryInterval() == null ? connectionFactory.getRetryInterval() : actualProperties.getRetryInterval());
+		connectionFactory
+				.setRetryInterval(actualProperties.getRetryInterval() == null ? connectionFactory.getRetryInterval() : actualProperties.getRetryInterval());
 	}
 
 	/**
