@@ -7,6 +7,7 @@ import java.util.concurrent.ScheduledExecutorService;
 
 import org.apache.activemq.artemis.api.core.client.ActiveMQClient;
 import org.apache.activemq.artemis.jms.client.ActiveMQConnectionFactory;
+import org.apache.commons.lang3.builder.EqualsBuilder;
 import org.coldis.library.helper.ObjectHelper;
 import org.coldis.library.thread.DynamicThreadPoolFactory;
 import org.springframework.beans.factory.ListableBeanFactory;
@@ -15,6 +16,7 @@ import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.autoconfigure.jms.AcknowledgeMode;
 import org.springframework.boot.autoconfigure.jms.JmsPoolConnectionFactoryFactory;
+import org.springframework.boot.autoconfigure.jms.JmsPoolConnectionFactoryProperties;
 import org.springframework.boot.autoconfigure.jms.artemis.ArtemisProperties;
 import org.springframework.boot.autoconfigure.jms.artemis.ExtensibleArtemisConnectionFactoryFactory;
 import org.springframework.jms.config.DefaultJmsListenerContainerFactory;
@@ -225,6 +227,7 @@ public class JmsConfigurationHelper {
 	private ExtendedArtemisProperties mergeProperties(
 			final ArtemisProperties properties) {
 		final ExtendedArtemisProperties actualProperties = new ExtendedArtemisProperties();
+		final JmsPoolConnectionFactoryProperties defaultJmsPoolConnectionFactoryProperties = new JmsPoolConnectionFactoryProperties();
 		ObjectHelper.copyAttributes(this.defaultProperties, actualProperties, true, true, null, (
 				getter,
 				sourceValue,
@@ -237,10 +240,13 @@ public class JmsConfigurationHelper {
 				getter,
 				sourceValue,
 				targetValue) -> sourceValue != null);
-		ObjectHelper.copyAttributes(properties.getPool(), actualProperties.getPool(), true, true, null, (
-				getter,
-				sourceValue,
-				targetValue) -> sourceValue != null);
+		// Only if the pool is not equal to the properties config.
+		if (!EqualsBuilder.reflectionEquals(properties.getPool(), defaultJmsPoolConnectionFactoryProperties, false)) {
+			ObjectHelper.copyAttributes(properties.getPool(), actualProperties.getPool(), true, true, null, (
+					getter,
+					sourceValue,
+					targetValue) -> sourceValue != null);
+		}
 		return actualProperties;
 	}
 
