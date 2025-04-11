@@ -229,7 +229,15 @@ public class JmsConfigurationHelper {
 				getter,
 				sourceValue,
 				targetValue) -> sourceValue != null);
+		ObjectHelper.copyAttributes(this.defaultProperties.getPool(), actualProperties.getPool(), true, true, null, (
+				getter,
+				sourceValue,
+				targetValue) -> sourceValue != null);
 		ObjectHelper.copyAttributes(properties, actualProperties, true, true, null, (
+				getter,
+				sourceValue,
+				targetValue) -> sourceValue != null);
+		ObjectHelper.copyAttributes(properties.getPool(), actualProperties.getPool(), true, true, null, (
 				getter,
 				sourceValue,
 				targetValue) -> sourceValue != null);
