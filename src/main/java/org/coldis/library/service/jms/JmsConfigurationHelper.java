@@ -182,7 +182,7 @@ public class JmsConfigurationHelper {
 			ActiveMQClient.injectPools(this.globalThreadPool, this.globalScheduledThreadPool, this.globalFlowControlThreadPool);
 		}
 	}
-
+	
 	/**
 	 * Gets the JMS listener executor.
 	 *
