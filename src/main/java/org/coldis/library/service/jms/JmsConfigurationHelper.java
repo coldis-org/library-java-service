@@ -115,7 +115,7 @@ public class JmsConfigurationHelper {
 			final Double minRunnableCpuMultiplier,
 			@Value("${org.coldis.library.service.jms.global.executor.core-size:}")
 			final Integer corePoolSize,
-			@Value("${org.coldis.library.service.jms.global.executor.core-size-cpu-multiplier:3}")
+			@Value("${org.coldis.library.service.jms.global.executor.core-size-cpu-multiplier:5}")
 			final Double corePoolSizeCpuMultiplier,
 			@Value("${org.coldis.library.service.jms.global.executor.max-size:}")
 			final Integer maxPoolSize,
@@ -149,7 +149,7 @@ public class JmsConfigurationHelper {
 			final Double flowControlMinRunnableCpuMultiplier,
 			@Value("${org.coldis.library.service.jms.global.flow-control.executor.core-size:}")
 			final Integer flowControlCorePoolSize,
-			@Value("${org.coldis.library.service.jms.global.flow-control.executor.core-size-cpu-multiplier:3}")
+			@Value("${org.coldis.library.service.jms.global.flow-control.executor.core-size-cpu-multiplier:5}")
 			final Double flowControlCorePoolSizeCpuMultiplier,
 			@Value("${org.coldis.library.service.jms.global.flow-control.executor.max-size:}")
 			final Integer flowControlMaxPoolSize,
@@ -210,7 +210,7 @@ public class JmsConfigurationHelper {
 			final Double minRunnableCpuMultiplier,
 			@Value("${org.coldis.library.service.jms.listener.executor.core-size:}")
 			final Integer corePoolSize,
-			@Value("${org.coldis.library.service.jms.listener.executor.core-size-cpu-multiplier:5}")
+			@Value("${org.coldis.library.service.jms.listener.executor.core-size-cpu-multiplier:20}")
 			final Double corePoolSizeCpuMultiplier,
 			@Value("${org.coldis.library.service.jms.listener.executor.max-size:}")
 			final Integer maxPoolSize,
