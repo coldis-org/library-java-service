@@ -7,7 +7,6 @@ import org.springframework.jms.annotation.EnableJms;
 /**
  * Test application.
  */
-@EnableJms
 @SpringBootApplication(scanBasePackages = "org.coldis")
 public class TestApplication {
 

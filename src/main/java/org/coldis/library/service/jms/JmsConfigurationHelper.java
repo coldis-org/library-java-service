@@ -15,10 +15,12 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.autoconfigure.jms.AcknowledgeMode;
+import org.springframework.boot.autoconfigure.jms.DefaultJmsListenerContainerFactoryConfigurer;
 import org.springframework.boot.autoconfigure.jms.JmsPoolConnectionFactoryFactory;
 import org.springframework.boot.autoconfigure.jms.JmsPoolConnectionFactoryProperties;
 import org.springframework.boot.autoconfigure.jms.artemis.ArtemisProperties;
 import org.springframework.boot.autoconfigure.jms.artemis.ExtensibleArtemisConnectionFactoryFactory;
+import org.springframework.context.annotation.Bean;
 import org.springframework.jms.config.DefaultJmsListenerContainerFactory;
 import org.springframework.jms.core.JmsTemplate;
 import org.springframework.jms.support.converter.MessageConverter;
@@ -49,7 +51,7 @@ public class JmsConfigurationHelper {
 
 	/** Back-off initial interval. */
 
-	@Value("${org.coldis.library.service.jms.listener.max-messages-per-task:}")
+	@Value("${org.coldis.library.service.jms.listener.max-messages-per-task:100}")
 	private Integer maxMessagesPerTask;
 
 	/** Back-off initial interval. */
@@ -65,7 +67,7 @@ public class JmsConfigurationHelper {
 	private Long backoffMaxElapsedTime;
 
 	/** Cache level. */
-	@Value("${org.coldis.library.service.jms.listener.cache-level:}")
+	@Value("${org.coldis.library.service.jms.listener.cache-level:1}")
 	private Integer cacheLevel;
 
 	/**
@@ -182,7 +184,7 @@ public class JmsConfigurationHelper {
 			ActiveMQClient.injectPools(this.globalThreadPool, this.globalScheduledThreadPool, this.globalFlowControlThreadPool);
 		}
 	}
-	
+
 	/**
 	 * Gets the JMS listener executor.
 	 *

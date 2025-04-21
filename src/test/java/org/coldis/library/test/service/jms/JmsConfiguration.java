@@ -48,7 +48,7 @@ public class JmsConfiguration {
 	 */
 	@Bean
 	@Primary
-	public DefaultJmsListenerContainerFactory testJmsContainerFactory(
+	public DefaultJmsListenerContainerFactory jmsListenerContainerFactory(
 			final ConnectionFactory connectionFactory) {
 		return this.jmsConfigurationHelper.createJmsContainerFactory(connectionFactory);
 	}
