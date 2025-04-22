@@ -34,7 +34,6 @@ public class JmsConfiguration {
 	 * @return             The JMS connection factory.
 	 */
 	@Bean
-	@Primary
 	@Qualifier("nativeJmsConnectionFactory")
 	public ConnectionFactory nativeJmsConnectionFactory(
 			final ListableBeanFactory beanFactory,
@@ -50,6 +49,7 @@ public class JmsConfiguration {
 	 * @return             The JMS connection factory.
 	 */
 	@Bean
+	@Primary
 	@Qualifier("pooledJmsConnectionFactory")
 	public ConnectionFactory pooledJmsConnectionFactory(
 			final ListableBeanFactory beanFactory,
