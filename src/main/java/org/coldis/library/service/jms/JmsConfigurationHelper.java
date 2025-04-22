@@ -15,12 +15,10 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.autoconfigure.jms.AcknowledgeMode;
-import org.springframework.boot.autoconfigure.jms.DefaultJmsListenerContainerFactoryConfigurer;
 import org.springframework.boot.autoconfigure.jms.JmsPoolConnectionFactoryFactory;
 import org.springframework.boot.autoconfigure.jms.JmsPoolConnectionFactoryProperties;
 import org.springframework.boot.autoconfigure.jms.artemis.ArtemisProperties;
 import org.springframework.boot.autoconfigure.jms.artemis.ExtensibleArtemisConnectionFactoryFactory;
-import org.springframework.context.annotation.Bean;
 import org.springframework.jms.config.DefaultJmsListenerContainerFactory;
 import org.springframework.jms.core.JmsTemplate;
 import org.springframework.jms.support.converter.MessageConverter;
@@ -319,15 +317,43 @@ public class JmsConfigurationHelper {
 	 * @param  properties  JMS properties.
 	 * @return             The JMS connection factory.
 	 */
-	public ConnectionFactory createJmsConnectionFactory(
+	public ConnectionFactory createNativeJmsConnectionFactory(
 			final ListableBeanFactory beanFactory,
 			final ArtemisProperties properties) {
 		final ExtendedArtemisProperties actualProperties = this.mergeProperties(properties);
 		final ActiveMQConnectionFactory connectionFactory = new ExtensibleArtemisConnectionFactoryFactory(beanFactory, actualProperties)
 				.createConnectionFactory(ActiveMQConnectionFactory::new, ActiveMQConnectionFactory::new);
 		this.setConnectionExtendedProperties(actualProperties, connectionFactory);
-		// Returns the pooled connection factory;
-		return new JmsPoolConnectionFactoryFactory(actualProperties.getPool()).createPooledConnectionFactory(connectionFactory);
+		return connectionFactory;
+	}
+
+	/**
+	 * Creates the JMS connection factory.
+	 *
+	 * @param  beanFactory Bean factory.
+	 * @param  properties  JMS properties.
+	 * @return             The JMS connection factory.
+	 */
+	public ConnectionFactory createPooledJmsConnectionFactory(
+			final ListableBeanFactory beanFactory,
+			final ArtemisProperties properties) {
+		final ExtendedArtemisProperties actualProperties = this.mergeProperties(properties);
+		return new JmsPoolConnectionFactoryFactory(actualProperties.getPool())
+				.createPooledConnectionFactory(this.createNativeJmsConnectionFactory(beanFactory, actualProperties));
+	}
+
+	/**
+	 * Creates the JMS connection factory.
+	 *
+	 * @param  beanFactory Bean factory.
+	 * @param  properties  JMS properties.
+	 * @return             The JMS connection factory.
+	 */
+	@Deprecated
+	public ConnectionFactory createJmsConnectionFactory(
+			final ListableBeanFactory beanFactory,
+			final ArtemisProperties properties) {
+		return this.createPooledJmsConnectionFactory(beanFactory, properties);
 	}
 
 	/**
