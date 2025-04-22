@@ -66,7 +66,7 @@ public class JmsConfiguration {
 	@Bean
 	@Primary
 	public DefaultJmsListenerContainerFactory jmsListenerContainerFactory(
-			@Qualifier("pooledJmsConnectionFactory")
+			@Qualifier("nativeJmsConnectionFactory")
 			final ConnectionFactory connectionFactory) {
 		return this.jmsConfigurationHelper.createJmsContainerFactory(connectionFactory);
 	}
@@ -80,7 +80,7 @@ public class JmsConfiguration {
 	@Bean
 	@Primary
 	public JmsTemplate jmsTemplate(
-			@Qualifier("nativeJmsConnectionFactory")
+			@Qualifier("pooledJmsConnectionFactory")
 			final ConnectionFactory connectionFactory) {
 		return this.jmsConfigurationHelper.createJmsTemplate(connectionFactory);
 	}
