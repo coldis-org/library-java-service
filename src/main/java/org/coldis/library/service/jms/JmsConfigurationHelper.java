@@ -50,7 +50,7 @@ public class JmsConfigurationHelper {
 
 	/** Back-off initial interval. */
 
-	@Value("${org.coldis.library.service.jms.listener.max-messages-per-task:}")
+	@Value("${org.coldis.library.service.jms.listener.max-messages-per-task:100}")
 	private Integer maxMessagesPerTask;
 
 	/** Back-off initial interval. */
@@ -66,7 +66,7 @@ public class JmsConfigurationHelper {
 	private Long backoffMaxElapsedTime;
 
 	/** Cache level. */
-	@Value("${org.coldis.library.service.jms.listener.cache-level:}")
+	@Value("${org.coldis.library.service.jms.listener.cache-level:3}")
 	private Integer cacheLevel;
 
 	/**
