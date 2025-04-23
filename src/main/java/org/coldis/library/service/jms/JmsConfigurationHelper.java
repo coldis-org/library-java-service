@@ -292,6 +292,9 @@ public class JmsConfigurationHelper {
 				actualProperties.getReconnectAttempts() == null ? connectionFactory.getReconnectAttempts() : actualProperties.getReconnectAttempts());
 		connectionFactory
 				.setRetryInterval(actualProperties.getRetryInterval() == null ? connectionFactory.getRetryInterval() : actualProperties.getRetryInterval());
+		connectionFactory.setRetryIntervalMultiplier(actualProperties.getRetryIntervalMultiplier() == null ? connectionFactory.getRetryIntervalMultiplier()
+				: actualProperties.getRetryIntervalMultiplier());
+
 	}
 
 	/**

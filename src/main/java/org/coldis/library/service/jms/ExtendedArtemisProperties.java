@@ -56,6 +56,8 @@ public class ExtendedArtemisProperties extends ArtemisProperties implements Arte
 
 	private Integer retryInterval;
 
+	private Double retryIntervalMultiplier;
+
 	/**
 	 * Gets the useGlobalPools.
 	 *
@@ -454,5 +456,24 @@ public class ExtendedArtemisProperties extends ArtemisProperties implements Arte
 			final Integer retryInterval) {
 		this.retryInterval = retryInterval;
 	}
+
+	/**
+	 * Gets the retryIntervalMultiplier.
+	 * @return The retryIntervalMultiplier.
+	 */
+	public Double getRetryIntervalMultiplier() {
+		return retryIntervalMultiplier;
+	}
+
+	/**
+	 * Sets the retryIntervalMultiplier.
+	 * @param retryIntervalMultiplier New retryIntervalMultiplier.
+	 */
+	public void setRetryIntervalMultiplier(
+			Double retryIntervalMultiplier) {
+		this.retryIntervalMultiplier = retryIntervalMultiplier;
+	}
+	
+	
 
 }
