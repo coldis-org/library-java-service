@@ -26,7 +26,6 @@ import org.springframework.jms.support.converter.MessageConverter;
 import org.springframework.jms.support.destination.DestinationResolver;
 import org.springframework.stereotype.Component;
 import org.springframework.util.ErrorHandler;
-import org.springframework.util.backoff.ExponentialBackOff;
 
 import jakarta.jms.ConnectionFactory;
 
@@ -344,60 +343,13 @@ public class JmsConfigurationHelper {
 	}
 
 	/**
-	 * Creates the JMS container factory.
-	 *
-	 * @param  connectionFactory      Connection factory.
-	 * @param  destinationResolver    Destination resolver.
-	 * @param  messageConverter       Message converter.
-	 * @param  exceptionListener      Error handler.
-	 * @param  backoffInitialInterval Back-off initial interval
-	 * @param  backoffMultiplier      Back-off multiplier.
-	 * @param  backoffMaxInterval     Back-off max interval.
-	 * @return                        The JMS container factory.
+	 * Creates the JMS container factory builder.
+	 * @return The JMS container factory builder.
 	 */
-	public DefaultJmsListenerContainerFactory createJmsContainerFactory(
-			final Executor taskExecutor,
-			final ConnectionFactory connectionFactory,
-			final DestinationResolver destinationResolver,
-			final MessageConverter messageConverter,
-			final ErrorHandler errorHandler,
-			final Integer cacheLevel,
-			final Integer maxMessagesPerTask,
-			final Long backoffInitialInterval,
-			final Double backoffMultiplier,
-			final Long backoffMaxElapsedTime) {
-		// Creates a new container factory.
-		final DefaultJmsListenerContainerFactory jmsContainerFactory = new DefaultJmsListenerContainerFactory();
-		// Sets the default configuration.
-		if (taskExecutor != null) {
-			jmsContainerFactory.setTaskExecutor(taskExecutor);
-		}
-		if (maxMessagesPerTask != null) {
-			jmsContainerFactory.setMaxMessagesPerTask(maxMessagesPerTask);
-		}
-		if (destinationResolver != null) {
-			jmsContainerFactory.setDestinationResolver(destinationResolver);
-		}
-		if (messageConverter != null) {
-			jmsContainerFactory.setMessageConverter(messageConverter);
-		}
-		if (errorHandler != null) {
-			jmsContainerFactory.setErrorHandler(errorHandler);
-		}
-		if (cacheLevel != null) {
-			jmsContainerFactory.setCacheLevel(cacheLevel);
-		}
-		jmsContainerFactory.setConnectionFactory(connectionFactory);
-		jmsContainerFactory.setSessionTransacted(true);
-		jmsContainerFactory.setAutoStartup(true);
-		jmsContainerFactory.setSessionAcknowledgeMode(AcknowledgeMode.AUTO.getMode());
-		if ((backoffInitialInterval != null) && (backoffMultiplier != null) && (backoffMaxElapsedTime != null)) {
-			final ExponentialBackOff backOff = new ExponentialBackOff(backoffInitialInterval, backoffMultiplier);
-			backOff.setMaxElapsedTime(backoffMaxElapsedTime);
-			jmsContainerFactory.setBackOff(backOff);
-		}
-		// Returns the container factory.
-		return jmsContainerFactory;
+	public JmsListenerContainerFactoryBuilder createJmsListenerContainerFactoryBuilder() {
+		return new JmsListenerContainerFactoryBuilder().taskExecutor(this.jmsListenerExecutor).maxMessagesPerTask(this.maxMessagesPerTask)
+				.destinationResolver(this.destinationResolver).messageConverter(this.messageConverter).errorHandler(this.errorHandler)
+				.cacheLevel(this.cacheLevel).backoff(this.backoffInitialInterval, this.backoffMultiplier, this.backoffMaxElapsedTime);
 	}
 
 	/**
@@ -412,6 +364,36 @@ public class JmsConfigurationHelper {
 	 * @param  backoffMaxInterval     Back-off max interval.
 	 * @return                        The JMS container factory.
 	 */
+	@Deprecated
+	public DefaultJmsListenerContainerFactory createJmsContainerFactory(
+			final Executor taskExecutor,
+			final ConnectionFactory connectionFactory,
+			final DestinationResolver destinationResolver,
+			final MessageConverter messageConverter,
+			final ErrorHandler errorHandler,
+			final Integer cacheLevel,
+			final Integer maxMessagesPerTask,
+			final Long backoffInitialInterval,
+			final Double backoffMultiplier,
+			final Long backoffMaxElapsedTime) {
+		return new JmsListenerContainerFactoryBuilder().taskExecutor(taskExecutor).maxMessagesPerTask(maxMessagesPerTask).destinationResolver(destinationResolver)
+				.messageConverter(messageConverter).errorHandler(errorHandler).cacheLevel(cacheLevel).connectionFactory(connectionFactory)
+				.sessionTransacted(true).autoStartup(true).backoff(backoffInitialInterval, backoffMultiplier, this.backoffMaxElapsedTime).build();
+	}
+
+	/**
+	 * Creates the JMS container factory.
+	 *
+	 * @param  connectionFactory      Connection factory.
+	 * @param  destinationResolver    Destination resolver.
+	 * @param  messageConverter       Message converter.
+	 * @param  exceptionListener      Error handler.
+	 * @param  backoffInitialInterval Back-off initial interval
+	 * @param  backoffMultiplier      Back-off multiplier.
+	 * @param  backoffMaxInterval     Back-off max interval.
+	 * @return                        The JMS container factory.
+	 */
+	@Deprecated
 	public DefaultJmsListenerContainerFactory createJmsContainerFactory(
 			final Executor taskExecutor,
 			final ConnectionFactory connectionFactory,
@@ -422,6 +404,7 @@ public class JmsConfigurationHelper {
 			final Long backoffInitialInterval,
 			final Double backoffMultiplier,
 			final Long backoffMaxElapsedTime) {
+
 		return this.createJmsContainerFactory(taskExecutor, connectionFactory, destinationResolver, messageConverter, null, cacheLevel, maxMessagesPerTask,
 				backoffInitialInterval, backoffMultiplier, backoffMaxElapsedTime);
 	}
@@ -438,6 +421,7 @@ public class JmsConfigurationHelper {
 	 * @param  backoffMaxInterval     Back-off max interval.
 	 * @return                        The JMS container factory.
 	 */
+	@Deprecated
 	public DefaultJmsListenerContainerFactory createJmsContainerFactory(
 			final ConnectionFactory connectionFactory) {
 		return this.createJmsContainerFactory(this.jmsListenerExecutor, connectionFactory, this.destinationResolver, this.messageConverter, this.errorHandler,
@@ -456,6 +440,7 @@ public class JmsConfigurationHelper {
 	 * @param  backoffMaxElapsedTime  Back-off max interval.
 	 * @return                        The JMS container factory.
 	 */
+	@Deprecated
 	public DefaultJmsListenerContainerFactory createJmsTopicContainerFactory(
 			final Executor taskExecutor,
 			final ConnectionFactory connectionFactory,
@@ -488,6 +473,7 @@ public class JmsConfigurationHelper {
 	 * @param  backoffMaxElapsedTime  Back-off max interval.
 	 * @return                        The JMS container factory.
 	 */
+	@Deprecated
 	public DefaultJmsListenerContainerFactory createJmsTopicContainerFactory(
 			final Executor taskExecutor,
 			final ConnectionFactory connectionFactory,
@@ -514,6 +500,7 @@ public class JmsConfigurationHelper {
 	 * @param  backoffMaxElapsedTime  Back-off max interval.
 	 * @return                        The JMS container factory.
 	 */
+	@Deprecated
 	public DefaultJmsListenerContainerFactory createJmsTopicContainerFactory(
 			final ConnectionFactory connectionFactory) {
 		return this.createJmsTopicContainerFactory(this.jmsListenerExecutor, connectionFactory, this.destinationResolver, this.messageConverter,

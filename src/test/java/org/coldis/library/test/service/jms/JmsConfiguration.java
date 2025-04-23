@@ -5,7 +5,9 @@ import org.coldis.library.service.jms.JmsConfigurationHelper;
 import org.springframework.beans.factory.ListableBeanFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Qualifier;
+import org.springframework.boot.autoconfigure.jms.DefaultJmsListenerContainerFactoryConfigurer;
 import org.springframework.boot.autoconfigure.jms.artemis.ExtendedArtemisConfiguration;
+import org.springframework.boot.jms.ConnectionFactoryUnwrapper;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.context.annotation.Import;
@@ -34,21 +36,6 @@ public class JmsConfiguration {
 	 * @return             The JMS connection factory.
 	 */
 	@Bean
-	@Qualifier("nativeJmsConnectionFactory")
-	public ConnectionFactory nativeJmsConnectionFactory(
-			final ListableBeanFactory beanFactory,
-			final ExtendedArtemisProperties properties) {
-		return this.jmsConfigurationHelper.createNativeJmsConnectionFactory(beanFactory, properties);
-	}
-
-	/**
-	 * Creates the JMS connection factory.
-	 *
-	 * @param  beanFactory Bean factory.
-	 * @param  properties  JMS properties.
-	 * @return             The JMS connection factory.
-	 */
-	@Bean
 	@Primary
 	@Qualifier("pooledJmsConnectionFactory")
 	public ConnectionFactory pooledJmsConnectionFactory(
@@ -66,9 +53,10 @@ public class JmsConfiguration {
 	@Bean
 	@Primary
 	public DefaultJmsListenerContainerFactory jmsListenerContainerFactory(
-			@Qualifier("nativeJmsConnectionFactory")
+			final DefaultJmsListenerContainerFactoryConfigurer configurer,
 			final ConnectionFactory connectionFactory) {
-		return this.jmsConfigurationHelper.createJmsContainerFactory(connectionFactory);
+		return this.jmsConfigurationHelper.createJmsListenerContainerFactoryBuilder().configurer(configurer)
+				.connectionFactory(ConnectionFactoryUnwrapper.unwrap(connectionFactory)).build();
 	}
 
 	/**
@@ -80,7 +68,6 @@ public class JmsConfiguration {
 	@Bean
 	@Primary
 	public JmsTemplate jmsTemplate(
-			@Qualifier("pooledJmsConnectionFactory")
 			final ConnectionFactory connectionFactory) {
 		return this.jmsConfigurationHelper.createJmsTemplate(connectionFactory);
 	}
