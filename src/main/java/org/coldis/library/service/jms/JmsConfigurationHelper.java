@@ -121,13 +121,13 @@ public class JmsConfigurationHelper {
 			final Integer minRunnable,
 			@Value("${org.coldis.library.service.jms.global.executor.min-runnable-cpu-multiplier:}")
 			final Double minRunnableCpuMultiplier,
-			@Value("${org.coldis.library.service.jms.global.executor.core-size:}")
+			@Value("${org.coldis.library.service.jms.global.executor.core-size:1}")
 			final Integer corePoolSize,
-			@Value("${org.coldis.library.service.jms.global.executor.core-size-cpu-multiplier:1}")
+			@Value("${org.coldis.library.service.jms.global.executor.core-size-cpu-multiplier:}")
 			final Double corePoolSizeCpuMultiplier,
 			@Value("${org.coldis.library.service.jms.global.executor.max-size:}")
 			final Integer maxPoolSize,
-			@Value("${org.coldis.library.service.jms.global.executor.max-size-cpu-multiplier:7}")
+			@Value("${org.coldis.library.service.jms.global.executor.max-size-cpu-multiplier:}")
 			final Double maxPoolSizeCpuMultiplier,
 			@Value("${org.coldis.library.service.jms.global.executor.keep-alive-seconds:60}")
 			final Integer keepAliveSeconds,
@@ -139,7 +139,7 @@ public class JmsConfigurationHelper {
 			final Boolean scheduledVirtual,
 			@Value("${org.coldis.library.service.jms.global.scheduled.executor.core-size:}")
 			final Integer scheduledCorePoolSize,
-			@Value("${org.coldis.library.service.jms.global.scheduled.executor.core-size-cpu-multiplier:5}")
+			@Value("${org.coldis.library.service.jms.global.scheduled.executor.core-size-cpu-multiplier:1}")
 			final Double scheduledCorePoolSizeCpuMultiplier,
 			@Value("${org.coldis.library.service.jms.global.executor.name:jms-global-flow-control-thread}")
 			final String flowControlName,
@@ -161,7 +161,7 @@ public class JmsConfigurationHelper {
 			final Double flowControlCorePoolSizeCpuMultiplier,
 			@Value("${org.coldis.library.service.jms.global.flow-control.executor.max-size:}")
 			final Integer flowControlMaxPoolSize,
-			@Value("${org.coldis.library.service.jms.global.flow-control.executor.max-size-cpu-multiplier:7}")
+			@Value("${org.coldis.library.service.jms.global.flow-control.executor.max-size-cpu-multiplier:}")
 			final Double flowControlMaxPoolSizeCpuMultiplier,
 			@Value("${org.coldis.library.service.jms.global.flow-control.executor.keep-alive-seconds:60}")
 			final Integer flowControlKeepAliveSeconds
