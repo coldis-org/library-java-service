@@ -10,6 +10,8 @@ import org.apache.activemq.artemis.jms.client.ActiveMQConnectionFactory;
 import org.apache.commons.lang3.builder.EqualsBuilder;
 import org.coldis.library.helper.ObjectHelper;
 import org.coldis.library.thread.DynamicThreadPoolFactory;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.ListableBeanFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Qualifier;
@@ -19,6 +21,7 @@ import org.springframework.boot.autoconfigure.jms.JmsPoolConnectionFactoryFactor
 import org.springframework.boot.autoconfigure.jms.JmsPoolConnectionFactoryProperties;
 import org.springframework.boot.autoconfigure.jms.artemis.ArtemisProperties;
 import org.springframework.boot.autoconfigure.jms.artemis.ExtensibleArtemisConnectionFactoryFactory;
+import org.springframework.boot.context.properties.ConfigurationProperties;
 import org.springframework.boot.task.SimpleAsyncTaskExecutorBuilder;
 import org.springframework.jms.config.DefaultJmsListenerContainerFactory;
 import org.springframework.jms.core.JmsTemplate;
@@ -34,6 +37,11 @@ import jakarta.jms.ConnectionFactory;
  */
 @Component
 public class JmsConfigurationHelper {
+
+	/**
+	 * Logger.
+	 */
+	private static final Logger LOGGER = LoggerFactory.getLogger(JmsConfigurationHelper.class);
 
 	/** JMS global thread pool. */
 	private ExecutorService globalThreadPool;
@@ -250,49 +258,160 @@ public class JmsConfigurationHelper {
 	private void setConnectionExtendedProperties(
 			final ExtendedArtemisProperties actualProperties,
 			final ActiveMQConnectionFactory connectionFactory) {
-		connectionFactory.setConsumerWindowSize(
-				actualProperties.getConsumerWindowSize() == null ? connectionFactory.getConsumerWindowSize() : actualProperties.getConsumerWindowSize());
-		connectionFactory.setConsumerMaxRate(
-				actualProperties.getConsumerMaxRate() == null ? connectionFactory.getConsumerMaxRate() : actualProperties.getConsumerMaxRate());
-		connectionFactory.setProducerWindowSize(
-				actualProperties.getProducerWindowSize() == null ? connectionFactory.getProducerWindowSize() : actualProperties.getProducerWindowSize());
-		connectionFactory.setProducerMaxRate(
-				actualProperties.getProducerMaxRate() == null ? connectionFactory.getProducerMaxRate() : actualProperties.getProducerMaxRate());
-		connectionFactory.setConfirmationWindowSize(actualProperties.getConfirmationWindowSize() == null ? connectionFactory.getConfirmationWindowSize()
-				: actualProperties.getConfirmationWindowSize());
-		connectionFactory.setTransactionBatchSize(
-				actualProperties.getAckBatchSize() == null ? connectionFactory.getTransactionBatchSize() : actualProperties.getAckBatchSize());
-		connectionFactory.setDupsOKBatchSize(
-				actualProperties.getDupsAckBatchSize() == null ? connectionFactory.getDupsOKBatchSize() : actualProperties.getDupsAckBatchSize());
-		connectionFactory.setBlockOnAcknowledge(
-				actualProperties.getBlockOnAcknowledge() == null ? connectionFactory.isBlockOnAcknowledge() : actualProperties.getBlockOnAcknowledge());
-		connectionFactory
-				.setUseGlobalPools(actualProperties.getUseGlobalPools() == null ? connectionFactory.isUseGlobalPools() : actualProperties.getUseGlobalPools());
-		connectionFactory.setCacheDestinations(
-				actualProperties.getCacheDestinations() == null ? connectionFactory.isCacheDestinations() : actualProperties.getCacheDestinations());
-		connectionFactory.setCacheLargeMessagesClient(actualProperties.getCacheLargeMessagesClient() == null ? connectionFactory.isCacheLargeMessagesClient()
-				: actualProperties.getCacheLargeMessagesClient());
-		connectionFactory.setCompressLargeMessage(
-				actualProperties.getCompressLargeMessage() == null ? connectionFactory.isCompressLargeMessage() : actualProperties.getCompressLargeMessage());
-		connectionFactory.setCompressionLevel(
-				actualProperties.getCompressionLevel() == null ? connectionFactory.getCompressionLevel() : actualProperties.getCompressionLevel());
-		connectionFactory.setBlockOnDurableSend(
-				actualProperties.getBlockOnDurableSend() == null ? connectionFactory.isBlockOnDurableSend() : actualProperties.getBlockOnDurableSend());
-		connectionFactory.setBlockOnNonDurableSend(actualProperties.getBlockOnNonDurableSend() == null ? connectionFactory.isBlockOnNonDurableSend()
-				: actualProperties.getBlockOnNonDurableSend());
-		connectionFactory.setClientFailureCheckPeriod(actualProperties.getClientFailureCheckPeriod() == null ? connectionFactory.getClientFailureCheckPeriod()
-				: actualProperties.getClientFailureCheckPeriod());
-		connectionFactory
-				.setConnectionTTL(actualProperties.getConnectionTTL() == null ? connectionFactory.getConnectionTTL() : actualProperties.getConnectionTTL());
-		connectionFactory.setCallTimeout(actualProperties.getCallTimeout() == null ? connectionFactory.getCallTimeout() : actualProperties.getCallTimeout());
-		connectionFactory.setCallFailoverTimeout(
-				actualProperties.getCallFailoverTimeout() == null ? connectionFactory.getCallFailoverTimeout() : actualProperties.getCallFailoverTimeout());
-		connectionFactory.setReconnectAttempts(
-				actualProperties.getReconnectAttempts() == null ? connectionFactory.getReconnectAttempts() : actualProperties.getReconnectAttempts());
-		connectionFactory
-				.setRetryInterval(actualProperties.getRetryInterval() == null ? connectionFactory.getRetryInterval() : actualProperties.getRetryInterval());
-		connectionFactory.setRetryIntervalMultiplier(actualProperties.getRetryIntervalMultiplier() == null ? connectionFactory.getRetryIntervalMultiplier()
-				: actualProperties.getRetryIntervalMultiplier());
+
+		// consumerWindowSize
+		final Integer consumerWindowSize = actualProperties.getConsumerWindowSize();
+		if (consumerWindowSize != null) {
+			JmsConfigurationHelper.LOGGER.debug("Configuring JMS ConnectionFactory - overriding consumerWindowSize → {}", consumerWindowSize);
+			connectionFactory.setConsumerWindowSize(consumerWindowSize);
+		}
+
+		// consumerMaxRate
+		final Integer consumerMaxRate = actualProperties.getConsumerMaxRate();
+		if (consumerMaxRate != null) {
+			JmsConfigurationHelper.LOGGER.debug("Configuring JMS ConnectionFactory - overriding consumerMaxRate → {}", consumerMaxRate);
+			connectionFactory.setConsumerMaxRate(consumerMaxRate);
+		}
+
+		// producerWindowSize
+		final Integer producerWindowSize = actualProperties.getProducerWindowSize();
+		if (producerWindowSize != null) {
+			JmsConfigurationHelper.LOGGER.debug("Configuring JMS ConnectionFactory - overriding producerWindowSize → {}", producerWindowSize);
+			connectionFactory.setProducerWindowSize(producerWindowSize);
+		}
+
+		// producerMaxRate
+		final Integer producerMaxRate = actualProperties.getProducerMaxRate();
+		if (producerMaxRate != null) {
+			JmsConfigurationHelper.LOGGER.debug("Configuring JMS ConnectionFactory - overriding producerMaxRate → {}", producerMaxRate);
+			connectionFactory.setProducerMaxRate(producerMaxRate);
+		}
+
+		// confirmationWindowSize
+		final Integer confirmationWindowSize = actualProperties.getConfirmationWindowSize();
+		if (confirmationWindowSize != null) {
+			JmsConfigurationHelper.LOGGER.debug("Configuring JMS ConnectionFactory - overriding confirmationWindowSize → {}", confirmationWindowSize);
+			connectionFactory.setConfirmationWindowSize(confirmationWindowSize);
+		}
+
+		// transactionBatchSize (ackBatchSize)
+		final Integer ackBatchSize = actualProperties.getAckBatchSize();
+		if (ackBatchSize != null) {
+			JmsConfigurationHelper.LOGGER.debug("Configuring JMS ConnectionFactory - overriding transactionBatchSize → {}", ackBatchSize);
+			connectionFactory.setTransactionBatchSize(ackBatchSize);
+		}
+
+		// dupsOKBatchSize
+		final Integer dupsAckBatchSize = actualProperties.getDupsAckBatchSize();
+		if (dupsAckBatchSize != null) {
+			JmsConfigurationHelper.LOGGER.debug("Configuring JMS ConnectionFactory - overriding dupsOKBatchSize → {}", dupsAckBatchSize);
+			connectionFactory.setDupsOKBatchSize(dupsAckBatchSize);
+		}
+
+		// blockOnAcknowledge
+		final Boolean blockOnAcknowledge = actualProperties.getBlockOnAcknowledge();
+		if (blockOnAcknowledge != null) {
+			JmsConfigurationHelper.LOGGER.debug("Configuring JMS ConnectionFactory - overriding blockOnAcknowledge → {}", blockOnAcknowledge);
+			connectionFactory.setBlockOnAcknowledge(blockOnAcknowledge);
+		}
+
+		// useGlobalPools
+		final Boolean useGlobalPools = actualProperties.getUseGlobalPools();
+		if (useGlobalPools != null) {
+			JmsConfigurationHelper.LOGGER.debug("Configuring JMS ConnectionFactory - overriding useGlobalPools → {}", useGlobalPools);
+			connectionFactory.setUseGlobalPools(useGlobalPools);
+		}
+
+		// cacheDestinations
+		final Boolean cacheDestinations = actualProperties.getCacheDestinations();
+		if (cacheDestinations != null) {
+			JmsConfigurationHelper.LOGGER.debug("Configuring JMS ConnectionFactory - overriding cacheDestinations → {}", cacheDestinations);
+			connectionFactory.setCacheDestinations(cacheDestinations);
+		}
+
+		// cacheLargeMessagesClient
+		final Boolean cacheLargeMessagesClient = actualProperties.getCacheLargeMessagesClient();
+		if (cacheLargeMessagesClient != null) {
+			JmsConfigurationHelper.LOGGER.debug("Configuring JMS ConnectionFactory - overriding cacheLargeMessagesClient → {}", cacheLargeMessagesClient);
+			connectionFactory.setCacheLargeMessagesClient(cacheLargeMessagesClient);
+		}
+
+		// compressLargeMessage
+		final Boolean compressLargeMessage = actualProperties.getCompressLargeMessage();
+		if (compressLargeMessage != null) {
+			JmsConfigurationHelper.LOGGER.debug("Configuring JMS ConnectionFactory - overriding compressLargeMessage → {}", compressLargeMessage);
+			connectionFactory.setCompressLargeMessage(compressLargeMessage);
+		}
+
+		// compressionLevel
+		final Integer compressionLevel = actualProperties.getCompressionLevel();
+		if (compressionLevel != null) {
+			JmsConfigurationHelper.LOGGER.debug("Configuring JMS ConnectionFactory - overriding compressionLevel → {}", compressionLevel);
+			connectionFactory.setCompressionLevel(compressionLevel);
+		}
+
+		// blockOnDurableSend
+		final Boolean blockOnDurableSend = actualProperties.getBlockOnDurableSend();
+		if (blockOnDurableSend != null) {
+			JmsConfigurationHelper.LOGGER.debug("Configuring JMS ConnectionFactory - overriding blockOnDurableSend → {}", blockOnDurableSend);
+			connectionFactory.setBlockOnDurableSend(blockOnDurableSend);
+		}
+
+		// blockOnNonDurableSend
+		final Boolean blockOnNonDurableSend = actualProperties.getBlockOnNonDurableSend();
+		if (blockOnNonDurableSend != null) {
+			JmsConfigurationHelper.LOGGER.debug("Configuring JMS ConnectionFactory - overriding blockOnNonDurableSend → {}", blockOnNonDurableSend);
+			connectionFactory.setBlockOnNonDurableSend(blockOnNonDurableSend);
+		}
+
+		// clientFailureCheckPeriod
+		final Long clientFailureCheckPeriod = actualProperties.getClientFailureCheckPeriod();
+		if (clientFailureCheckPeriod != null) {
+			JmsConfigurationHelper.LOGGER.debug("Configuring JMS ConnectionFactory - overriding clientFailureCheckPeriod → {}", clientFailureCheckPeriod);
+			connectionFactory.setClientFailureCheckPeriod(clientFailureCheckPeriod);
+		}
+
+		// connectionTTL
+		final Long connectionTTL = actualProperties.getConnectionTTL();
+		if (connectionTTL != null) {
+			JmsConfigurationHelper.LOGGER.debug("Configuring JMS ConnectionFactory - overriding connectionTTL → {}", connectionTTL);
+			connectionFactory.setConnectionTTL(connectionTTL);
+		}
+
+		// callTimeout
+		final Long callTimeout = actualProperties.getCallTimeout();
+		if (callTimeout != null) {
+			JmsConfigurationHelper.LOGGER.debug("Configuring JMS ConnectionFactory - overriding callTimeout → {}", callTimeout);
+			connectionFactory.setCallTimeout(callTimeout);
+		}
+
+		// callFailoverTimeout
+		final Long callFailoverTimeout = actualProperties.getCallFailoverTimeout();
+		if (callFailoverTimeout != null) {
+			JmsConfigurationHelper.LOGGER.debug("Configuring JMS ConnectionFactory - overriding callFailoverTimeout → {}", callFailoverTimeout);
+			connectionFactory.setCallFailoverTimeout(callFailoverTimeout);
+		}
+
+		// reconnectAttempts
+		final Integer reconnectAttempts = actualProperties.getReconnectAttempts();
+		if (reconnectAttempts != null) {
+			JmsConfigurationHelper.LOGGER.debug("Configuring JMS ConnectionFactory - overriding reconnectAttempts → {}", reconnectAttempts);
+			connectionFactory.setReconnectAttempts(reconnectAttempts);
+		}
+
+		// retryInterval
+		final Long retryInterval = actualProperties.getRetryInterval();
+		if (retryInterval != null) {
+			JmsConfigurationHelper.LOGGER.debug("Configuring JMS ConnectionFactory - overriding retryInterval → {}", retryInterval);
+			connectionFactory.setRetryInterval(retryInterval);
+		}
+
+		// retryIntervalMultiplier
+		final Double retryIntervalMultiplier = actualProperties.getRetryIntervalMultiplier();
+		if (retryIntervalMultiplier != null) {
+			JmsConfigurationHelper.LOGGER.debug("Configuring JMS ConnectionFactory - overriding retryIntervalMultiplier → {}", retryIntervalMultiplier);
+			connectionFactory.setRetryIntervalMultiplier(retryIntervalMultiplier);
+		}
 
 	}
 
@@ -306,6 +425,9 @@ public class JmsConfigurationHelper {
 	public ConnectionFactory createNativeJmsConnectionFactory(
 			final ListableBeanFactory beanFactory,
 			final ArtemisProperties properties) {
+		JmsConfigurationHelper.LOGGER.debug("Configuring JMS ConnectionFactory for properties → {}",
+				properties.getClass().getAnnotation(ConfigurationProperties.class) == null ? null
+						: properties.getClass().getAnnotation(ConfigurationProperties.class).prefix());
 		final ExtendedArtemisProperties actualProperties = this.mergeProperties(properties);
 		final ActiveMQConnectionFactory connectionFactory = new ExtensibleArtemisConnectionFactoryFactory(beanFactory, actualProperties)
 				.createConnectionFactory(ActiveMQConnectionFactory::new, ActiveMQConnectionFactory::new);
@@ -323,6 +445,9 @@ public class JmsConfigurationHelper {
 	public ConnectionFactory createPooledJmsConnectionFactory(
 			final ListableBeanFactory beanFactory,
 			final ArtemisProperties properties) {
+		JmsConfigurationHelper.LOGGER.debug("Configuring pooled JMS ConnectionFactory for properties → {}",
+				properties.getClass().getAnnotation(ConfigurationProperties.class) == null ? null
+						: properties.getClass().getAnnotation(ConfigurationProperties.class).prefix());
 		final ExtendedArtemisProperties actualProperties = this.mergeProperties(properties);
 		return new JmsPoolConnectionFactoryFactory(actualProperties.getPool())
 				.createPooledConnectionFactory(this.createNativeJmsConnectionFactory(beanFactory, actualProperties));
@@ -344,6 +469,7 @@ public class JmsConfigurationHelper {
 
 	/**
 	 * Creates the JMS container factory builder.
+	 *
 	 * @return The JMS container factory builder.
 	 */
 	public JmsListenerContainerFactoryBuilder createJmsListenerContainerFactoryBuilder() {
@@ -376,9 +502,10 @@ public class JmsConfigurationHelper {
 			final Long backoffInitialInterval,
 			final Double backoffMultiplier,
 			final Long backoffMaxElapsedTime) {
-		return new JmsListenerContainerFactoryBuilder().taskExecutor(taskExecutor).maxMessagesPerTask(maxMessagesPerTask).destinationResolver(destinationResolver)
-				.messageConverter(messageConverter).errorHandler(errorHandler).cacheLevel(cacheLevel).connectionFactory(connectionFactory)
-				.sessionTransacted(true).autoStartup(true).backoff(backoffInitialInterval, backoffMultiplier, this.backoffMaxElapsedTime).build();
+		return new JmsListenerContainerFactoryBuilder().taskExecutor(taskExecutor).maxMessagesPerTask(maxMessagesPerTask)
+				.destinationResolver(destinationResolver).messageConverter(messageConverter).errorHandler(errorHandler).cacheLevel(cacheLevel)
+				.connectionFactory(connectionFactory).sessionTransacted(true).autoStartup(true)
+				.backoff(backoffInitialInterval, backoffMultiplier, this.backoffMaxElapsedTime).build();
 	}
 
 	/**

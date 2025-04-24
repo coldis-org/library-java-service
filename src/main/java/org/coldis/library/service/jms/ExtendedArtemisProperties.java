@@ -54,7 +54,7 @@ public class ExtendedArtemisProperties extends ArtemisProperties implements Arte
 
 	private Integer reconnectAttempts;
 
-	private Integer retryInterval;
+	private Long retryInterval;
 
 	private Double retryIntervalMultiplier;
 
@@ -443,7 +443,7 @@ public class ExtendedArtemisProperties extends ArtemisProperties implements Arte
 	 *
 	 * @return The retryInterval.
 	 */
-	public Integer getRetryInterval() {
+	public Long getRetryInterval() {
 		return this.retryInterval;
 	}
 
@@ -453,7 +453,7 @@ public class ExtendedArtemisProperties extends ArtemisProperties implements Arte
 	 * @param retryInterval New retryInterval.
 	 */
 	public void setRetryInterval(
-			final Integer retryInterval) {
+			final Long retryInterval) {
 		this.retryInterval = retryInterval;
 	}
 
