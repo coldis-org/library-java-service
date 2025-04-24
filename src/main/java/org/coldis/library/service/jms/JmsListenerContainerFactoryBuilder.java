@@ -155,9 +155,6 @@ public final class JmsListenerContainerFactoryBuilder {
 			factory.setSubscriptionDurable(this.topic);
 			factory.setSubscriptionShared(this.topic);
 		}
-		if (this.connectionFactory != null) {
-			factory.setConnectionFactory(this.connectionFactory);
-		}
 		if (this.transacted != null) {
 			factory.setSessionTransacted(this.transacted);
 		}

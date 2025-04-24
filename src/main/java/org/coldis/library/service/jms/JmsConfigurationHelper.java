@@ -200,7 +200,7 @@ public class JmsConfigurationHelper {
 			final Integer priority,
 			@Value("${org.coldis.library.service.jms.listener.executor.virtual:false}")
 			final Boolean virtual,
-			@Value("${org.coldis.library.service.jms.listener.executor.max-concurrency-cpu-multiplier:13}")
+			@Value("${org.coldis.library.service.jms.listener.executor.max-concurrency-cpu-multiplier:10}")
 			final Integer maxConcurrencyCpuMultiplier) {
 		if (useCustomPools) {
 			final Integer maxConcurrency = ((Double) (((Integer) Runtime.getRuntime().availableProcessors()).doubleValue() * maxConcurrencyCpuMultiplier))
