@@ -211,8 +211,8 @@ public class JmsConfigurationHelper {
 			@Value("${org.coldis.library.service.jms.listener.executor.max-concurrency-cpu-multiplier:10}")
 			final Integer maxConcurrencyCpuMultiplier) {
 		if (useCustomPools) {
-			final Integer maxConcurrency = ((Double) (((Integer) Runtime.getRuntime().availableProcessors()).doubleValue() * maxConcurrencyCpuMultiplier))
-					.intValue();
+			final Integer maxConcurrency = (maxConcurrencyCpuMultiplier == null ? null
+					: ((Double) (((Integer) Runtime.getRuntime().availableProcessors()).doubleValue() * maxConcurrencyCpuMultiplier)).intValue());
 			this.jmsListenerExecutor = (this.jmsListenerExecutor == null
 					? new SimpleAsyncTaskExecutorBuilder().threadNamePrefix(name).virtualThreads(virtual)
 							.additionalCustomizers(builder -> builder.setThreadPriority(priority)).concurrencyLimit(maxConcurrency).build()
