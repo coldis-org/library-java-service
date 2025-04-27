@@ -9,13 +9,18 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 
+import org.apache.commons.collections4.CollectionUtils;
 import org.apache.commons.lang3.ArrayUtils;
 import org.apache.commons.lang3.StringUtils;
 import org.apache.commons.lang3.reflect.MethodUtils;
 import org.coldis.library.exception.BusinessException;
 import org.coldis.library.exception.IntegrationException;
+import org.coldis.library.helper.ObjectHelper;
+import org.coldis.library.helper.RandomHelper;
+import org.coldis.library.helper.ReflectionHelper;
 import org.coldis.library.model.SimpleMessage;
 import org.coldis.library.service.client.GenericRestServiceClient;
+import org.coldis.library.service.client.generator.ServiceClientOperation;
 import org.coldis.library.service.jms.JmsTemplateHelper;
 import org.coldis.library.service.jms.JmsMessage;
 import org.springframework.beans.BeansException;
@@ -23,6 +28,8 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.beans.factory.config.ConfigurableBeanFactory;
+import org.springframework.context.ApplicationContext;
+import org.springframework.context.ApplicationContextAware;
 import org.springframework.context.ApplicationContext;
 import org.springframework.context.ApplicationContextAware;
 import org.springframework.context.EmbeddedValueResolverAware;
@@ -38,17 +45,39 @@ import org.springframework.util.MultiValueMap;
 import org.springframework.util.StringValueResolver;
 
 /**
-  * Exception handler service.
+ * Exception handler service.
   */
 @Service
 @SuppressWarnings({ "rawtypes", "unchecked" })
-public class ExceptionHandlerServiceClient implements EmbeddedValueResolverAware {
-	
-	/**
-	 * Value resolver.
-	 */
+public class ExceptionHandlerServiceClient implements ApplicationContextAware, EmbeddedValueResolverAware {
+
+	/** Application context. */
+	private ApplicationContext applicationContext;
+
+	/** Value resolver. */
 	private StringValueResolver valueResolver;
+
+	/**
+	 * Fixed endpoint.
+	 */
+	private String fixedEndpoint;
+
+	/**
+	 * Endpoint bean.
+	 */
+	private Object endpointBean;
+
+	/**
+	 * Endpoint bean property.
+	 */
+	private String endpointBeanProperty = "endpoint";
 	
+	/** 
+	 * Service path.
+	 */
+	@Value("")
+	private String servicePath;
+
 	/**
 	 * Always-sync.
 	 */
@@ -60,18 +89,19 @@ public class ExceptionHandlerServiceClient implements EmbeddedValueResolverAware
 	 */
 	@Autowired(required = false)
 	private JmsTemplate jmsTemplate;
-	
+
 	/**
 	 * JMS template helper.
 	 */
 	@Autowired(required = false)
 	private JmsTemplateHelper jmsTemplateHelper;
-	
+
 	/**
 	 * Service client.
 	 */
 	@Autowired
-@Qualifier(value = "restServiceClient")	private GenericRestServiceClient serviceClient;
+	@Qualifier(value = "restServiceClient")
+	private GenericRestServiceClient serviceClient;
 
 	/**
 	 * No arguments constructor.
@@ -79,7 +109,17 @@ public class ExceptionHandlerServiceClient implements EmbeddedValueResolverAware
 	public ExceptionHandlerServiceClient() {
 		super();
 	}
-	
+
+	/**
+	 * @see ApplicationContextAware#
+	 *     setApplicationContext(org.springframework.context.ApplicationContext)
+	 */
+	@Override
+	public void setApplicationContext(final ApplicationContext applicationContext) {
+		this.applicationContext = applicationContext;
+	}
+
+
 	/**
 	 * @see org.springframework.context.EmbeddedValueResolverAware#
 	 *      setEmbeddedValueResolver(org.springframework.util.StringValueResolver)
@@ -88,14 +128,72 @@ public class ExceptionHandlerServiceClient implements EmbeddedValueResolverAware
 	public void setEmbeddedValueResolver(final StringValueResolver resolver) {
 		valueResolver = resolver;
 	}
+
+	/**
+	 * Gets the fixed endpoint.
+	 * @return The fixed endpoint.
+	 */
+	private String getFixedEndpoint() {
+		this.fixedEndpoint = (this.fixedEndpoint == null ? this.valueResolver.resolveStringValue("http://localhost:${local.server.port}/exception") : this.fixedEndpoint);
+		this.fixedEndpoint = (this.fixedEndpoint == null ? "" : this.fixedEndpoint);
+		return this.fixedEndpoint;
+	}
+
+	/**
+	 * Gets the endpoint bean.
+	 * @return The endpoint bean.
+	 */
+	private Object getEndpointBean() {
+		this.endpointBean = (this.endpointBean == null && StringUtils.isEmpty(this.getFixedEndpoint()) ? this.applicationContext.getBean("") : this.endpointBean);
+		return this.endpointBean;
+	}
+
+	/**
+	 * Gets the dynamic endpoint.
+	 * @return The dynamic endpoint.
+	 */
+	private String getActualEndpoint() {
+		String endpoint = this.getFixedEndpoint();
+		final Object endpointBean = this.getEndpointBean();
+		if (endpointBean != null && StringUtils.isNotBlank(this.endpointBeanProperty)) {
+			endpoint = (String) ReflectionHelper.getAttribute(endpointBean, this.endpointBeanProperty);
+			endpoint = (endpoint != null && endpoint.contains("${") ? valueResolver.resolveStringValue(endpoint) : endpoint);
+		}
+		return endpoint;
+	}
+
+	/**
+	 * Gets all available endpoints.
+	 * @return All available endpoints.
+	 */
+	private List<String> getEndpoints() {
+		String endpoints = this.getActualEndpoint();
+		return (endpoints == null ? null : List.of(endpoints.split(",")));
+	}
+
+	/**
+	 * Gets one endpoint (balanced).
+	 * @return One endpoint (balanced).
+	 */
+	private String getEndpoint() {
+		List<String> endpoints = this.getEndpoints();
+		return (CollectionUtils.isEmpty(endpoints) ? "" : endpoints.get(RandomHelper.getPositiveRandomLong((long) (endpoints.size())).intValue()));
+	}
 	
+
+	/**
+	 * Endpoint for the operation.
+	 */
+	@Value("business")
+	private String endpointPath1;
+
 	/**
 	 * Test service.
 
  @param  code              Message code.
  @param  parameters        Parameters.
  @throws BusinessException Exception.
- 
+
 	 * @throws BusinessException Any expected errors.
 	 */
 	
@@ -104,8 +202,7 @@ java.lang.String code,
 java.lang.Object[] parameters
 			) throws BusinessException {
 		// Operation parameters.
-		StringBuilder path = new StringBuilder(this.valueResolver
-				.resolveStringValue("http://localhost:${local.server.port}/exception" + (StringUtils.isBlank("business") ? "" : "/business") + "?"));
+		StringBuilder path = new StringBuilder(this.getEndpoint() + servicePath + (StringUtils.isBlank(endpointPath1) ? "" : "/" + endpointPath1) + "?");
 		final HttpMethod method = HttpMethod.POST;
 		final MultiValueMap<String, String> headers = new LinkedMultiValueMap<>();
 		Object body = null;
@@ -175,13 +272,20 @@ this.serviceClient.executeOperation(path.toString(), method, headers,
 				
 	}
 	
+
+	/**
+	 * Endpoint for the operation.
+	 */
+	@Value("integration")
+	private String endpointPath2;
+
 	/**
 	 * Test service.
 
  @param  code                 Message code.
  @param  parameters           Parameters.
  @throws IntegrationException Exception.
- 
+
 	 * @throws BusinessException Any expected errors.
 	 */
 	
@@ -190,8 +294,7 @@ java.lang.String code,
 java.lang.Object[] parameters
 			) throws BusinessException {
 		// Operation parameters.
-		StringBuilder path = new StringBuilder(this.valueResolver
-				.resolveStringValue("http://localhost:${local.server.port}/exception" + (StringUtils.isBlank("integration") ? "" : "/integration") + "?"));
+		StringBuilder path = new StringBuilder(this.getEndpoint() + servicePath + (StringUtils.isBlank(endpointPath2) ? "" : "/" + endpointPath2) + "?");
 		final HttpMethod method = HttpMethod.POST;
 		final MultiValueMap<String, String> headers = new LinkedMultiValueMap<>();
 		Object body = null;
@@ -261,11 +364,18 @@ this.serviceClient.executeOperation(path.toString(), method, headers,
 				
 	}
 	
+
+	/**
+	 * Endpoint for the operation.
+	 */
+	@Value("constraint-violation")
+	private String endpointPath3;
+
 	/**
 	 * Test service.
 
  @param object Test object.
- 
+
 	 * @throws BusinessException Any expected errors.
 	 */
 	
@@ -273,8 +383,7 @@ this.serviceClient.executeOperation(path.toString(), method, headers,
 org.coldis.library.test.service.exception.ExceptionTestClass object
 			) throws BusinessException {
 		// Operation parameters.
-		StringBuilder path = new StringBuilder(this.valueResolver
-				.resolveStringValue("http://localhost:${local.server.port}/exception" + (StringUtils.isBlank("constraint-violation") ? "" : "/constraint-violation") + "?"));
+		StringBuilder path = new StringBuilder(this.getEndpoint() + servicePath + (StringUtils.isBlank(endpointPath3) ? "" : "/" + endpointPath3) + "?");
 		final HttpMethod method = HttpMethod.POST;
 		final MultiValueMap<String, String> headers = new LinkedMultiValueMap<>();
 		Object body = null;
