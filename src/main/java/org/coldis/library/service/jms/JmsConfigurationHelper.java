@@ -55,27 +55,6 @@ public class JmsConfigurationHelper {
 	/** JMS listener executor. */
 	private Executor jmsListenerExecutor;
 
-	/** Back-off initial interval. */
-
-	@Value("${org.coldis.library.service.jms.listener.max-messages-per-task:100}")
-	private Integer maxMessagesPerTask;
-
-	/** Back-off initial interval. */
-	@Value("${org.coldis.library.service.jms.listener.backoff-initial-interval:5000}")
-	private Long backoffInitialInterval;
-
-	/** Back-off multiplier. */
-	@Value("${org.coldis.library.service.jms.listener.backoff-multiplier:5}")
-	private Double backoffMultiplier;
-
-	/** Back-off max elapsed time. */
-	@Value("${org.coldis.library.service.jms.listener.backoff-max-elapsed-time:36000000}")
-	private Long backoffMaxElapsedTime;
-
-	/** Cache level. */
-	@Value("${org.coldis.library.service.jms.listener.cache-level:3}")
-	private Integer cacheLevel;
-
 	/**
 	 * Default Artemis properties.
 	 */
@@ -228,28 +207,39 @@ public class JmsConfigurationHelper {
 	 */
 	private ExtendedArtemisProperties mergeProperties(
 			final ArtemisProperties properties) {
-		final ExtendedArtemisProperties actualProperties = new ExtendedArtemisProperties();
+		final ExtendedArtemisProperties mergedProperties = new ExtendedArtemisProperties();
 		final JmsPoolConnectionFactoryProperties defaultJmsPoolConnectionFactoryProperties = new JmsPoolConnectionFactoryProperties();
-		ObjectHelper.copyAttributes(this.defaultProperties, actualProperties, true, true, null, (
+		ObjectHelper.copyAttributes(this.defaultProperties, mergedProperties, true, true, null, (
 				getter,
 				sourceValue,
 				targetValue) -> sourceValue != null);
-		ObjectHelper.copyAttributes(this.defaultProperties.getPool(), actualProperties.getPool(), true, true, null, (
+		ObjectHelper.copyAttributes(this.defaultProperties.getPool(), mergedProperties.getPool(), true, true, null, (
 				getter,
 				sourceValue,
 				targetValue) -> sourceValue != null);
-		ObjectHelper.copyAttributes(properties, actualProperties, true, true, null, (
+		ObjectHelper.copyAttributes(properties, mergedProperties, true, true, null, (
 				getter,
 				sourceValue,
 				targetValue) -> sourceValue != null);
 		// Only if the pool is not equal to the properties config.
 		if (!EqualsBuilder.reflectionEquals(properties.getPool(), defaultJmsPoolConnectionFactoryProperties, false)) {
-			ObjectHelper.copyAttributes(properties.getPool(), actualProperties.getPool(), true, true, null, (
+			ObjectHelper.copyAttributes(properties.getPool(), mergedProperties.getPool(), true, true, null, (
 					getter,
 					sourceValue,
 					targetValue) -> sourceValue != null);
 		}
-		return actualProperties;
+
+		// Copies everything back to the properties.
+		ObjectHelper.copyAttributes(mergedProperties, properties, true, true, null, (
+				getter,
+				sourceValue,
+				targetValue) -> true);
+		ObjectHelper.copyAttributes(mergedProperties.getPool(), properties.getPool(), true, true, null, (
+				getter,
+				sourceValue,
+				targetValue) -> true);
+
+		return mergedProperties;
 	}
 
 	/**
@@ -473,9 +463,8 @@ public class JmsConfigurationHelper {
 	 * @return The JMS container factory builder.
 	 */
 	public JmsListenerContainerFactoryBuilder createJmsListenerContainerFactoryBuilder() {
-		return new JmsListenerContainerFactoryBuilder().taskExecutor(this.jmsListenerExecutor).maxMessagesPerTask(this.maxMessagesPerTask)
-				.destinationResolver(this.destinationResolver).messageConverter(this.messageConverter).errorHandler(this.errorHandler)
-				.cacheLevel(this.cacheLevel).backoff(this.backoffInitialInterval, this.backoffMultiplier, this.backoffMaxElapsedTime);
+		return new JmsListenerContainerFactoryBuilder().taskExecutor(this.jmsListenerExecutor).destinationResolver(this.destinationResolver)
+				.messageConverter(this.messageConverter).errorHandler(this.errorHandler);
 	}
 
 	/**
@@ -502,10 +491,14 @@ public class JmsConfigurationHelper {
 			final Long backoffInitialInterval,
 			final Double backoffMultiplier,
 			final Long backoffMaxElapsedTime) {
-		return new JmsListenerContainerFactoryBuilder().taskExecutor(taskExecutor).maxMessagesPerTask(maxMessagesPerTask)
-				.destinationResolver(destinationResolver).messageConverter(messageConverter).errorHandler(errorHandler).cacheLevel(cacheLevel)
-				.connectionFactory(connectionFactory).sessionTransacted(true).autoStartup(true)
-				.backoff(backoffInitialInterval, backoffMultiplier, this.backoffMaxElapsedTime).build();
+		return new JmsListenerContainerFactoryBuilder().taskExecutor(taskExecutor).destinationResolver(destinationResolver).messageConverter(messageConverter)
+				.errorHandler(errorHandler).connectionFactory(connectionFactory).sessionTransacted(true).autoStartup(true)
+				.maxMessagesPerTask(maxMessagesPerTask == null ? this.defaultProperties.getMaxMessagesPerTask() : maxMessagesPerTask)
+				.cacheLevel(cacheLevel == null ? this.defaultProperties.getCacheLevel() : cacheLevel)
+				.backoff(backoffInitialInterval == null ? this.defaultProperties.getBackoffInitialInterval() : backoffInitialInterval,
+						backoffMultiplier == null ? this.defaultProperties.getBackoffMultiplier() : backoffMultiplier,
+						backoffMaxElapsedTime == null ? this.defaultProperties.getBackoffMaxElapsedTime() : backoffMaxElapsedTime)
+				.build();
 	}
 
 	/**
@@ -531,7 +524,6 @@ public class JmsConfigurationHelper {
 			final Long backoffInitialInterval,
 			final Double backoffMultiplier,
 			final Long backoffMaxElapsedTime) {
-
 		return this.createJmsContainerFactory(taskExecutor, connectionFactory, destinationResolver, messageConverter, null, cacheLevel, maxMessagesPerTask,
 				backoffInitialInterval, backoffMultiplier, backoffMaxElapsedTime);
 	}
@@ -552,7 +544,7 @@ public class JmsConfigurationHelper {
 	public DefaultJmsListenerContainerFactory createJmsContainerFactory(
 			final ConnectionFactory connectionFactory) {
 		return this.createJmsContainerFactory(this.jmsListenerExecutor, connectionFactory, this.destinationResolver, this.messageConverter, this.errorHandler,
-				this.cacheLevel, this.maxMessagesPerTask, this.backoffInitialInterval, this.backoffMultiplier, this.backoffMaxElapsedTime);
+				null, null, null, null, null);
 	}
 
 	/**
@@ -631,7 +623,7 @@ public class JmsConfigurationHelper {
 	public DefaultJmsListenerContainerFactory createJmsTopicContainerFactory(
 			final ConnectionFactory connectionFactory) {
 		return this.createJmsTopicContainerFactory(this.jmsListenerExecutor, connectionFactory, this.destinationResolver, this.messageConverter,
-				this.errorHandler, this.cacheLevel, this.maxMessagesPerTask, this.backoffInitialInterval, this.backoffMultiplier, this.backoffMaxElapsedTime);
+				this.errorHandler, null, null, null, null, null);
 	}
 
 	/**

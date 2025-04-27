@@ -2,9 +2,11 @@ package org.coldis.library.service.properties;
 
 import javax.sql.DataSource;
 
+import org.apache.activemq.artemis.jms.client.ActiveMQConnectionFactory;
 import org.coldis.library.exception.IntegrationException;
 import org.coldis.library.helper.ReflectionHelper;
 import org.coldis.library.model.SimpleMessage;
+import org.messaginghub.pooled.jms.JmsPoolConnectionFactory;
 import org.springframework.beans.BeansException;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 import org.springframework.context.ApplicationContext;
@@ -56,7 +58,8 @@ public class PropertiesService implements ApplicationContextAware {
 
 		// Validates it has @ConfigurationProperties annotation.
 		final ConfigurationProperties annotation = bean.getClass().getAnnotation(ConfigurationProperties.class);
-		if ((annotation == null) && !DataSource.class.isAssignableFrom(bean.getClass())) {
+		if ((annotation == null) && !DataSource.class.isAssignableFrom(bean.getClass()) && !JmsPoolConnectionFactory.class.isAssignableFrom(bean.getClass())
+				&& !ActiveMQConnectionFactory.class.isAssignableFrom(bean.getClass())) {
 			throw new IntegrationException(new SimpleMessage("Bean " + beanName + " does not have @ConfigurationProperties annotation."));
 		}
 

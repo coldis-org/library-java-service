@@ -11,12 +11,14 @@ import org.coldis.library.test.TestWithContainer;
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.messaginghub.pooled.jms.JmsPoolConnectionFactory;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.context.SpringBootTest.WebEnvironment;
+import org.springframework.jms.core.JmsTemplate;
 import org.springframework.web.client.RestTemplate;
 import org.testcontainers.containers.GenericContainer;
 
@@ -72,6 +74,16 @@ public class PropertiesServiceTest {
 	/** Datasource. */
 	@Autowired
 	private DataSource dataSource;
+	
+	/**
+	 * JMS connection factory.
+	 */
+	@Autowired
+	private JmsPoolConnectionFactory connectionFactory;
+	
+	/** Jms template. */
+	@Autowired
+	private JmsTemplate jmsTemplate;
 
 	/** Test properties update. */
 	@Test
@@ -148,6 +160,82 @@ public class PropertiesServiceTest {
 				return Boolean.TRUE;
 			}
 		}, valid -> valid, TestHelper.VERY_LONG_WAIT, TestHelper.VERY_SHORT_WAIT));
+		
+		// Updates property to a valid database connection.
+		this.restTemplate.put("http://localhost:" + this.port + "/properties/string/dataSource/pool.dataSource.jdbcUrl?fieldAccess=true", "jdbc:postgresql://localhost:"+POSTGRES_CONTAINER.getMappedPort(5432)+"/test",
+				Void.class);
+		
+		// Makes sure the connection is valid.
+		Assertions.assertTrue(TestHelper.waitUntilValid(() -> {
+			try {
+				LOGGER.info("Testing database connection...");
+				final Connection connection = this.dataSource.getConnection();
+				connection.prepareCall("SELECT 1").execute();
+				((HikariDataSource) this.dataSource).evictConnection(connection);
+				return Boolean.TRUE;
+			}
+			catch (final Exception exception) {
+				PropertiesServiceTest.LOGGER.error("Error while executing database connection test.", exception);
+				return Boolean.FALSE;
+			}
+		}, valid -> valid, TestHelper.VERY_LONG_WAIT, TestHelper.VERY_SHORT_WAIT));
+
+
+	}
+
+
+	/**
+	 * Tests updating Artemis connection.
+	 *
+	 * @throws Exception If the test fails.
+	 */
+	@Test
+	public void testArtemisConnectionUpdate() throws Exception {
+		// Validates initial property value.
+		jmsTemplate.convertAndSend("testQueue", "testMessage");
+		
+		// Updates property to an invalid database connection.
+		this.restTemplate.put("http://localhost:" + this.port + "/properties/string/pooledJmsConnectionFactory/connectionFactory.serverLocator.topologyArray.0.a.params.port?fieldAccess=true", "1234",
+				Void.class);
+		this.restTemplate.put("http://localhost:" + this.port + "/properties/string/pooledJmsConnectionFactory/connectionFactory.serverLocator.initialConnectors.0.params.port?fieldAccess=true", "1234",
+				Void.class);
+		connectionFactory.clear();
+
+		// Makes sure the connection is not valid.
+		Assertions.assertTrue(TestHelper.waitUntilValid(() -> {
+			try {
+				LOGGER.info("Testing Artemis connection...");
+				connectionFactory.clear();
+				jmsTemplate.convertAndSend("testQueue", "testMessage");
+				return Boolean.FALSE;
+			}
+			catch (final Exception exception) {
+				PropertiesServiceTest.LOGGER.error("Error while executing Artemis connection test.", exception);
+				return Boolean.TRUE;
+			}
+		}, valid -> valid, TestHelper.VERY_LONG_WAIT, TestHelper.VERY_SHORT_WAIT));
+		
+		// Updates property to a valid database connection.
+		this.restTemplate.put("http://localhost:" + this.port + "/properties/string/pooledJmsConnectionFactory/connectionFactory.serverLocator.topologyArray.0.a.params.port?fieldAccess=true", ARTEMIS_CONTAINER.getMappedPort(61616).toString(),
+				Void.class);
+		this.restTemplate.put("http://localhost:" + this.port + "/properties/string/pooledJmsConnectionFactory/connectionFactory.serverLocator.initialConnectors.0.params.port?fieldAccess=true", ARTEMIS_CONTAINER.getMappedPort(61616).toString(),
+				Void.class);
+		connectionFactory.clear();
+
+		
+		// Makes sure the connection is valid.
+		Assertions.assertTrue(TestHelper.waitUntilValid(() -> {
+			try {
+				LOGGER.info("Testing Artemis connection...");
+				jmsTemplate.convertAndSend("testQueue", "testMessage");
+				return Boolean.TRUE;
+			}
+			catch (final Exception exception) {
+				PropertiesServiceTest.LOGGER.error("Error while executing Artemis connection test.", exception);
+				return Boolean.FALSE;
+			}
+		}, valid -> valid, TestHelper.VERY_LONG_WAIT, TestHelper.VERY_SHORT_WAIT));
+
 
 	}
 

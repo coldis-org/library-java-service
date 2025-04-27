@@ -2,6 +2,7 @@ package org.coldis.library.service.jms;
 
 import java.util.concurrent.Executor;
 
+import org.coldis.library.helper.ReflectionHelper;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.boot.autoconfigure.jms.DefaultJmsListenerContainerFactoryConfigurer;
@@ -25,11 +26,6 @@ public final class JmsListenerContainerFactoryBuilder {
 	private static final Logger LOGGER = LoggerFactory.getLogger(JmsListenerContainerFactoryBuilder.class);
 
 	private DefaultJmsListenerContainerFactoryConfigurer configurer;
-	private Executor taskExecutor;
-	private ConnectionFactory connectionFactory;
-	private DestinationResolver destinationResolver;
-	private MessageConverter messageConverter;
-	private ErrorHandler errorHandler;
 	private Boolean autoStartup;
 	private Boolean sessionTransacted;
 	private Boolean topic;
@@ -38,6 +34,11 @@ public final class JmsListenerContainerFactoryBuilder {
 	private Long backoffInitialInterval;
 	private Double backoffMultiplier;
 	private Long backoffMaxElapsedTime;
+	private ConnectionFactory connectionFactory;
+	private Executor taskExecutor;
+	private DestinationResolver destinationResolver;
+	private MessageConverter messageConverter;
+	private ErrorHandler errorHandler;
 
 	public JmsListenerContainerFactoryBuilder() {
 	}
@@ -52,36 +53,6 @@ public final class JmsListenerContainerFactoryBuilder {
 	public JmsListenerContainerFactoryBuilder configurer(
 			final DefaultJmsListenerContainerFactoryConfigurer configurer) {
 		this.configurer = configurer;
-		return this;
-	}
-
-	public JmsListenerContainerFactoryBuilder taskExecutor(
-			final Executor executor) {
-		this.taskExecutor = executor;
-		return this;
-	}
-
-	public JmsListenerContainerFactoryBuilder connectionFactory(
-			final ConnectionFactory connectionFactory) {
-		this.connectionFactory = connectionFactory;
-		return this;
-	}
-
-	public JmsListenerContainerFactoryBuilder destinationResolver(
-			final DestinationResolver resolver) {
-		this.destinationResolver = resolver;
-		return this;
-	}
-
-	public JmsListenerContainerFactoryBuilder messageConverter(
-			final MessageConverter converter) {
-		this.messageConverter = converter;
-		return this;
-	}
-
-	public JmsListenerContainerFactoryBuilder errorHandler(
-			final ErrorHandler handler) {
-		this.errorHandler = handler;
 		return this;
 	}
 
@@ -128,6 +99,44 @@ public final class JmsListenerContainerFactoryBuilder {
 		this.backoffInitialInterval = initialInterval;
 		this.backoffMultiplier = multiplier;
 		this.backoffMaxElapsedTime = maxElapsedTime;
+		return this;
+	}
+
+	public JmsListenerContainerFactoryBuilder properties(
+			final ExtendedArtemisProperties properties) {
+		this.backoff(properties.getBackoffInitialInterval(), properties.getBackoffMultiplier(), properties.getBackoffMaxElapsedTime());
+		this.cacheLevel(properties.getCacheLevel());
+		this.maxMessagesPerTask(properties.getMaxMessagesPerTask());
+		return this;
+	}
+
+	public JmsListenerContainerFactoryBuilder connectionFactory(
+			final ConnectionFactory connectionFactory) {
+		this.connectionFactory = connectionFactory;
+		return this;
+	}
+
+	public JmsListenerContainerFactoryBuilder taskExecutor(
+			final Executor executor) {
+		this.taskExecutor = executor;
+		return this;
+	}
+
+	public JmsListenerContainerFactoryBuilder destinationResolver(
+			final DestinationResolver resolver) {
+		this.destinationResolver = resolver;
+		return this;
+	}
+
+	public JmsListenerContainerFactoryBuilder messageConverter(
+			final MessageConverter converter) {
+		this.messageConverter = converter;
+		return this;
+	}
+
+	public JmsListenerContainerFactoryBuilder errorHandler(
+			final ErrorHandler handler) {
+		this.errorHandler = handler;
 		return this;
 	}
 

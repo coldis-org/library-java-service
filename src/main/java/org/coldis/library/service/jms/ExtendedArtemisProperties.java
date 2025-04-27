@@ -58,6 +58,21 @@ public class ExtendedArtemisProperties extends ArtemisProperties implements Arte
 
 	private Double retryIntervalMultiplier;
 
+	/** Max messages per task. */
+	private Integer maxMessagesPerTask;
+
+	/** Back-off initial interval. */
+	private Long backoffInitialInterval;
+
+	/** Back-off multiplier. */
+	private Double backoffMultiplier;
+
+	/** Back-off max elapsed time. */
+	private Long backoffMaxElapsedTime;
+
+	/** Cache level. */
+	private Integer cacheLevel;
+
 	/**
 	 * Gets the useGlobalPools.
 	 *
@@ -459,21 +474,116 @@ public class ExtendedArtemisProperties extends ArtemisProperties implements Arte
 
 	/**
 	 * Gets the retryIntervalMultiplier.
+	 *
 	 * @return The retryIntervalMultiplier.
 	 */
 	public Double getRetryIntervalMultiplier() {
-		return retryIntervalMultiplier;
+		return this.retryIntervalMultiplier;
 	}
 
 	/**
 	 * Sets the retryIntervalMultiplier.
+	 *
 	 * @param retryIntervalMultiplier New retryIntervalMultiplier.
 	 */
 	public void setRetryIntervalMultiplier(
-			Double retryIntervalMultiplier) {
+			final Double retryIntervalMultiplier) {
 		this.retryIntervalMultiplier = retryIntervalMultiplier;
 	}
-	
-	
+
+	/**
+	 * Gets the maxMessagesPerTask.
+	 *
+	 * @return The maxMessagesPerTask.
+	 */
+	public Integer getMaxMessagesPerTask() {
+		return this.maxMessagesPerTask;
+	}
+
+	/**
+	 * Sets the maxMessagesPerTask.
+	 *
+	 * @param maxMessagesPerTask New maxMessagesPerTask.
+	 */
+	public void setMaxMessagesPerTask(
+			final Integer maxMessagesPerTask) {
+		this.maxMessagesPerTask = maxMessagesPerTask;
+	}
+
+	/**
+	 * Gets the backoffInitialInterval.
+	 *
+	 * @return The backoffInitialInterval.
+	 */
+	public Long getBackoffInitialInterval() {
+		return this.backoffInitialInterval;
+	}
+
+	/**
+	 * Sets the backoffInitialInterval.
+	 *
+	 * @param backoffInitialInterval New backoffInitialInterval.
+	 */
+	public void setBackoffInitialInterval(
+			final Long backoffInitialInterval) {
+		this.backoffInitialInterval = backoffInitialInterval;
+	}
+
+	/**
+	 * Gets the backoffMultiplier.
+	 *
+	 * @return The backoffMultiplier.
+	 */
+	public Double getBackoffMultiplier() {
+		return this.backoffMultiplier;
+	}
+
+	/**
+	 * Sets the backoffMultiplier.
+	 *
+	 * @param backoffMultiplier New backoffMultiplier.
+	 */
+	public void setBackoffMultiplier(
+			final Double backoffMultiplier) {
+		this.backoffMultiplier = backoffMultiplier;
+	}
+
+	/**
+	 * Gets the backoffMaxElapsedTime.
+	 *
+	 * @return The backoffMaxElapsedTime.
+	 */
+	public Long getBackoffMaxElapsedTime() {
+		return this.backoffMaxElapsedTime;
+	}
+
+	/**
+	 * Sets the backoffMaxElapsedTime.
+	 *
+	 * @param backoffMaxElapsedTime New backoffMaxElapsedTime.
+	 */
+	public void setBackoffMaxElapsedTime(
+			final Long backoffMaxElapsedTime) {
+		this.backoffMaxElapsedTime = backoffMaxElapsedTime;
+	}
+
+	/**
+	 * Gets the cacheLevel.
+	 *
+	 * @return The cacheLevel.
+	 */
+	public Integer getCacheLevel() {
+		return this.cacheLevel;
+	}
+
+	/**
+	 * Sets the cacheLevel.
+	 *
+	 * @param cacheLevel New cacheLevel.
+	 */
+	public void setCacheLevel(
+			final Integer cacheLevel) {
+		this.cacheLevel = cacheLevel;
+	}
 
 }
