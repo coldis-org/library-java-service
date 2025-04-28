@@ -24,8 +24,8 @@ public class EnhancedJmsErrorHandler implements ErrorHandler {
 	@Override
 	public void handleError(
 			final Throwable throwable) {
-		EnhancedJmsErrorHandler.LOGGER
-				.error(throwable.getLocalizedMessage() + ":\n\t" + (throwable.getCause() == null ? "Unknown error." : throwable.getCause().getLocalizedMessage()));
+		EnhancedJmsErrorHandler.LOGGER.error(
+				throwable.getLocalizedMessage() + ":\n\t" + (throwable.getCause() == null ? "Unknown error." : throwable.getCause().getLocalizedMessage()));
 		EnhancedJmsErrorHandler.LOGGER.debug(
 				throwable.getLocalizedMessage() + ":\n\t" + (throwable.getCause() == null ? "Unknown error." : throwable.getCause().getLocalizedMessage()),
 				throwable);
