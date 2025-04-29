@@ -185,16 +185,33 @@ public class JmsConfigurationHelper {
 			final String name,
 			@Value("${org.coldis.library.service.jms.listener.executor.priority:5}")
 			final Integer priority,
-			@Value("${org.coldis.library.service.jms.listener.executor.virtual:false}")
+			@Value("${org.coldis.library.service.jms.listener.executor.virtual:true}")
 			final Boolean virtual,
-			@Value("${org.coldis.library.service.jms.listener.executor.max-concurrency-cpu-multiplier:10}")
-			final Integer maxConcurrencyCpuMultiplier) {
+			@Value("${org.coldis.library.service.jms.listener.executor.parallelism:}")
+			final Integer parallelism,
+			@Value("${org.coldis.library.service.jms.listener.executor.parallelism-cpu-multiplier:}")
+			final Double parallelismCpuMultiplier,
+			@Value("${org.coldis.library.service.jms.listener.executor.min-runnable:}")
+			final Integer minRunnable,
+			@Value("${org.coldis.library.service.jms.listener.executor.min-runnable-cpu-multiplier:}")
+			final Double minRunnableCpuMultiplier,
+			@Value("${org.coldis.library.service.jms.listener.executor.core-size:}")
+			final Integer corePoolSize,
+			@Value("${org.coldis.library.service.jms.listener.executor.core-size-cpu-multiplier:10}")
+			final Double corePoolSizeCpuMultiplier,
+			@Value("${org.coldis.library.service.jms.listener.executor.max-size:}")
+			final Integer maxPoolSize,
+			@Value("${org.coldis.library.service.jms.listener.executor.max-size-cpu-multiplier:}")
+			final Double maxPoolSizeCpuMultiplier,
+			@Value("${org.coldis.library.service.jms.listener.executor.keep-alive-seconds:60}")
+			final Integer keepAliveSeconds) {
 		if (useCustomPools) {
-			final Integer maxConcurrency = (maxConcurrencyCpuMultiplier == null ? null
-					: ((Double) (((Integer) Runtime.getRuntime().availableProcessors()).doubleValue() * maxConcurrencyCpuMultiplier)).intValue());
 			this.jmsListenerExecutor = (this.jmsListenerExecutor == null
-					? new SimpleAsyncTaskExecutorBuilder().threadNamePrefix(name).virtualThreads(virtual)
-							.additionalCustomizers(builder -> builder.setThreadPriority(priority)).concurrencyLimit(maxConcurrency).build()
+					? (ExecutorService) new DynamicThreadPoolFactory().withName(name).withPriority(priority).withVirtual(virtual).withParallelism(parallelism)
+							.withParallelismCpuMultiplier(parallelismCpuMultiplier).withMinRunnable(minRunnable)
+							.withMinRunnableCpuMultiplier(minRunnableCpuMultiplier).withCorePoolSize(corePoolSize)
+							.withCorePoolSizeCpuMultiplier(corePoolSizeCpuMultiplier).withMaxPoolSize(maxPoolSize)
+							.withMaxPoolSizeCpuMultiplier(maxPoolSizeCpuMultiplier).withKeepAlive(Duration.ofSeconds(keepAliveSeconds)).build()
 					: this.jmsListenerExecutor);
 		}
 	}
