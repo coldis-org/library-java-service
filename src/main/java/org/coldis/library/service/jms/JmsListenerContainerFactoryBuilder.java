@@ -27,6 +27,7 @@ public final class JmsListenerContainerFactoryBuilder {
 
 	private DefaultJmsListenerContainerFactoryConfigurer configurer;
 	private Boolean autoStartup;
+	private Integer sessionAcknowledgeMode;
 	private Boolean sessionTransacted;
 	private Boolean topic;
 	private Integer cacheLevel;
@@ -59,6 +60,12 @@ public final class JmsListenerContainerFactoryBuilder {
 	public JmsListenerContainerFactoryBuilder autoStartup(
 			final boolean autoStartup) {
 		this.autoStartup = autoStartup;
+		return this;
+	}
+	
+	public JmsListenerContainerFactoryBuilder sessionAcknowledgeMode(
+			final int sessionAcknowledgeMode) {
+		this.sessionAcknowledgeMode = sessionAcknowledgeMode;
 		return this;
 	}
 
@@ -205,6 +212,11 @@ public final class JmsListenerContainerFactoryBuilder {
 		if (this.sessionTransacted != null) {
 			JmsListenerContainerFactoryBuilder.LOGGER.debug("Setting sessionTransacted → {}", this.sessionTransacted);
 			factory.setSessionTransacted(this.sessionTransacted);
+		}
+		// sessionAcknowledgeMode
+		else if (this.sessionAcknowledgeMode != null) {
+			JmsListenerContainerFactoryBuilder.LOGGER.debug("Setting sessionAcknowledgeMode → {}", this.sessionAcknowledgeMode);
+			factory.setSessionAcknowledgeMode(this.sessionAcknowledgeMode);
 		}
 
 		// autoStartup
