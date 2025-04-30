@@ -34,9 +34,9 @@ public class LocalCacheAutoConfiguration {
 	private static final Logger LOGGER = LoggerFactory.getLogger(LocalCacheAutoConfiguration.class);
 
 	/** Maximum cache size. */
-	@Value(value = "${org.coldis.configuration.cache.local.maximum-size:20000}")
+	@Value(value = "${org.coldis.configuration.cache.local.maximum-size:}")
 	private Long maximumSize;
-	
+
 	/** If stats should be recoreded. */
 	@Value(value = "${org.coldis.configuration.cache.local.record-stats:false}")
 	private Boolean stats;
@@ -71,24 +71,25 @@ public class LocalCacheAutoConfiguration {
 	 */
 	private CaffeineCacheManager daysExpirationLocalCacheManager;
 
-	
 	/**
 	 * Creates a cache manager with the given expiration.
-	 * @param expiration Expiration in milliseconds.
-	 * @return Cache manager.
+	 *
+	 * @param  expiration Expiration in milliseconds.
+	 * @return            Cache manager.
 	 */
-	private CacheManager getCacheManager(
+	private CaffeineCacheManager getCacheManager(
 			final Long expiration) {
-		this.millisExpirationLocalCacheManager = new CaffeineCacheManager();
-		Caffeine<Object, Object> caffeine = Caffeine.newBuilder().expireAfterWrite(Duration.ofMillis(expiration)).maximumSize(this.maximumSize);
+		final CaffeineCacheManager cacheManager = new CaffeineCacheManager();
+		Caffeine<Object, Object> caffeine = Caffeine.newBuilder().expireAfterWrite(Duration.ofMillis(expiration));
+		if (this.maximumSize != null) {
+			caffeine.maximumSize(this.maximumSize);
+		}
 		if (this.stats) {
 			caffeine = caffeine.recordStats();
 		}
-		this.millisExpirationLocalCacheManager
-				.setCaffeine(caffeine);
-		return this.millisExpirationLocalCacheManager;
+		cacheManager.setCaffeine(caffeine);
+		return cacheManager;
 	}
-
 
 	/**
 	 * Short lived cache.
@@ -99,7 +100,8 @@ public class LocalCacheAutoConfiguration {
 	public CacheManager millisExpirationLocalCacheManager(
 			@Value(value = "${org.coldis.configuration.cache.millis-expiration:3100}")
 			final Long expiration) {
-		return getCacheManager(expiration);
+		this.millisExpirationLocalCacheManager = this.getCacheManager(expiration);
+		return this.millisExpirationLocalCacheManager;
 	}
 
 	/**
@@ -111,7 +113,8 @@ public class LocalCacheAutoConfiguration {
 	public CacheManager secondsExpirationLocalCacheManager(
 			@Value(value = "${org.coldis.configuration.cache.seconds-expiration:23}")
 			final Long expiration) {
-		return getCacheManager(expiration);
+		this.secondsExpirationLocalCacheManager = this.getCacheManager(expiration);
+		return this.secondsExpirationLocalCacheManager;
 	}
 
 	/**
@@ -124,7 +127,8 @@ public class LocalCacheAutoConfiguration {
 	public CacheManager minutesExpirationLocalCacheManager(
 			@Value(value = "${org.coldis.configuration.cache.minutes-expiration:11}")
 			final Long expiration) {
-		return getCacheManager(expiration);
+		this.minutesExpirationLocalCacheManager = this.getCacheManager(expiration);
+		return this.minutesExpirationLocalCacheManager;
 	}
 
 	/**
@@ -136,7 +140,8 @@ public class LocalCacheAutoConfiguration {
 	public CacheManager hoursExpirationLocalCacheManager(
 			@Value(value = "${org.coldis.configuration.cache.hours-expiration:3}")
 			final Long expiration) {
-		return getCacheManager(expiration);
+		this.hoursExpirationLocalCacheManager = this.getCacheManager(expiration);
+		return this.hoursExpirationLocalCacheManager;
 	}
 
 	/**
@@ -148,7 +153,8 @@ public class LocalCacheAutoConfiguration {
 	public CacheManager dayExpirationLocalCacheManager(
 			@Value(value = "${org.coldis.configuration.cache.day-expiration:1}")
 			final Long expiration) {
-		return getCacheManager(expiration);
+		this.dayExpirationLocalCacheManager = this.getCacheManager(expiration);
+		return this.dayExpirationLocalCacheManager;
 	}
 
 	/**
@@ -160,7 +166,8 @@ public class LocalCacheAutoConfiguration {
 	public CacheManager daysExpirationLocalCacheManager(
 			@Value(value = "${org.coldis.configuration.cache.days-expiration:5}")
 			final Long expiration) {
-		return getCacheManager(expiration);
+		this.daysExpirationLocalCacheManager = this.getCacheManager(expiration);
+		return this.daysExpirationLocalCacheManager;
 	}
 
 	/**
@@ -172,8 +179,7 @@ public class LocalCacheAutoConfiguration {
 			havingValue = "true",
 			matchIfMissing = false
 	)
-	class LocalCacheStats  {
-
+	class LocalCacheStats {
 
 		/**
 		 * Logs stats.
