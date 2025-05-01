@@ -22,7 +22,6 @@ import org.springframework.boot.autoconfigure.jms.JmsPoolConnectionFactoryProper
 import org.springframework.boot.autoconfigure.jms.artemis.ArtemisProperties;
 import org.springframework.boot.autoconfigure.jms.artemis.ExtensibleArtemisConnectionFactoryFactory;
 import org.springframework.boot.context.properties.ConfigurationProperties;
-import org.springframework.boot.task.SimpleAsyncTaskExecutorBuilder;
 import org.springframework.jms.config.DefaultJmsListenerContainerFactory;
 import org.springframework.jms.core.JmsTemplate;
 import org.springframework.jms.support.converter.MessageConverter;

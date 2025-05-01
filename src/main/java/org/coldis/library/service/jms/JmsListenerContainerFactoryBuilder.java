@@ -2,7 +2,6 @@ package org.coldis.library.service.jms;
 
 import java.util.concurrent.Executor;
 
-import org.coldis.library.helper.ReflectionHelper;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.boot.autoconfigure.jms.DefaultJmsListenerContainerFactoryConfigurer;
@@ -62,7 +61,7 @@ public final class JmsListenerContainerFactoryBuilder {
 		this.autoStartup = autoStartup;
 		return this;
 	}
-	
+
 	public JmsListenerContainerFactoryBuilder sessionAcknowledgeMode(
 			final int sessionAcknowledgeMode) {
 		this.sessionAcknowledgeMode = sessionAcknowledgeMode;
