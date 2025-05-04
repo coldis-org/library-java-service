@@ -169,7 +169,7 @@ public final class JmsListenerContainerFactoryBuilder {
 			JmsListenerContainerFactoryBuilder.LOGGER.debug("Setting taskExecutor → {}", this.taskExecutor);
 			factory.setTaskExecutor(this.taskExecutor);
 		}
-
+		
 		// maxMessagesPerTask
 		if (this.maxMessagesPerTask != null) {
 			JmsListenerContainerFactoryBuilder.LOGGER.debug("Setting maxMessagesPerTask → {}", this.maxMessagesPerTask);

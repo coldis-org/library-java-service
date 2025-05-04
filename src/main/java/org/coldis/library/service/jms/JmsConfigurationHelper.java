@@ -178,8 +178,8 @@ public class JmsConfigurationHelper {
 	 */
 	@Autowired
 	public void setJmsListenerExecutor(
-			@Value("${org.coldis.library.service.jms.custom-pools:true}")
-			final Boolean useCustomPools,
+			@Value("${org.coldis.library.service.jms.custom-listener-executor:false}")
+			final Boolean useCustomPool,
 			@Value("${org.coldis.library.service.jms.listener.executor.name:jms-listener-thread}")
 			final String name,
 			@Value("${org.coldis.library.service.jms.listener.executor.priority:5}")
@@ -196,15 +196,15 @@ public class JmsConfigurationHelper {
 			final Double minRunnableCpuMultiplier,
 			@Value("${org.coldis.library.service.jms.listener.executor.core-size:}")
 			final Integer corePoolSize,
-			@Value("${org.coldis.library.service.jms.listener.executor.core-size-cpu-multiplier:5}")
+			@Value("${org.coldis.library.service.jms.listener.executor.core-size-cpu-multiplier:30}")
 			final Double corePoolSizeCpuMultiplier,
 			@Value("${org.coldis.library.service.jms.listener.executor.max-size:}")
 			final Integer maxPoolSize,
-			@Value("${org.coldis.library.service.jms.listener.executor.max-size-cpu-multiplier:15}")
+			@Value("${org.coldis.library.service.jms.listener.executor.max-size-cpu-multiplier:30}")
 			final Double maxPoolSizeCpuMultiplier,
 			@Value("${org.coldis.library.service.jms.listener.executor.keep-alive-seconds:60}")
 			final Integer keepAliveSeconds) {
-		if (useCustomPools) {
+		if (useCustomPool) {
 			this.jmsListenerExecutor = (this.jmsListenerExecutor == null
 					? (ExecutorService) new DynamicThreadPoolFactory().withName(name).withPriority(priority).withVirtual(virtual).withParallelism(parallelism)
 							.withParallelismCpuMultiplier(parallelismCpuMultiplier).withMinRunnable(minRunnable)
