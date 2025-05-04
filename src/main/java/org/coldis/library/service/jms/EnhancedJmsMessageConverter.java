@@ -11,6 +11,7 @@ import java.util.Set;
 
 import org.apache.commons.collections4.CollectionUtils;
 import org.apache.commons.collections4.EnumerationUtils;
+import org.apache.commons.collections4.MapUtils;
 import org.apache.commons.lang3.ObjectUtils;
 import org.apache.commons.lang3.StringUtils;
 import org.apache.fury.BaseFury;
@@ -97,7 +98,7 @@ public class EnhancedJmsMessageConverter extends SimpleMessageConverter {
 	/** Alternative class names (or parts). */
 	private SequencedMap<String, String> alternativeClassNames;
 
-	private final Map<String, Class<?>> preferredClassesCache = new HashMap<>();
+	private final Map<String, Class<?>> preferredClassesCache = MapUtils.synchronizedMap(new HashMap<>());
 
 	/** Constructor. */
 	public EnhancedJmsMessageConverter(
