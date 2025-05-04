@@ -226,16 +226,16 @@ public class RedisCacheAutoConfiguration {
 	 * Evict all caches.
 	 */
 	public void evictAll() {
-		this.millisExpirationCentralCacheManager.getCacheNames().parallelStream()
+		this.millisExpirationCentralCacheManager.getCacheNames().stream()
 				.forEach(name -> this.millisExpirationCentralCacheManager.getCache(name).clear());
-		this.secondsExpirationCentralCacheManager.getCacheNames().parallelStream()
+		this.secondsExpirationCentralCacheManager.getCacheNames().stream()
 				.forEach(name -> this.secondsExpirationCentralCacheManager.getCache(name).clear());
-		this.minutesExpirationCentralCacheManager.getCacheNames().parallelStream()
+		this.minutesExpirationCentralCacheManager.getCacheNames().stream()
 				.forEach(name -> this.minutesExpirationCentralCacheManager.getCache(name).clear());
-		this.hoursExpirationCentralCacheManager.getCacheNames().parallelStream()
+		this.hoursExpirationCentralCacheManager.getCacheNames().stream()
 				.forEach(name -> this.hoursExpirationCentralCacheManager.getCache(name).clear());
-		this.dayExpirationCentralCacheManager.getCacheNames().parallelStream().forEach(name -> this.dayExpirationCentralCacheManager.getCache(name).clear());
-		this.daysExpirationCentralCacheManager.getCacheNames().parallelStream().forEach(name -> this.daysExpirationCentralCacheManager.getCache(name).clear());
+		this.dayExpirationCentralCacheManager.getCacheNames().stream().forEach(name -> this.dayExpirationCentralCacheManager.getCache(name).clear());
+		this.daysExpirationCentralCacheManager.getCacheNames().stream().forEach(name -> this.daysExpirationCentralCacheManager.getCache(name).clear());
 	}
 
 }

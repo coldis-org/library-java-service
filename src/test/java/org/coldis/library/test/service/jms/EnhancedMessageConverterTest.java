@@ -5,6 +5,7 @@ import java.util.Objects;
 
 import org.coldis.library.helper.RandomHelper;
 import org.coldis.library.serialization.ObjectMapperHelper;
+import org.coldis.library.service.cache.CacheHelper;
 import org.coldis.library.service.helper.MultiLayerSessionHelper;
 import org.coldis.library.service.jms.EnhancedJmsMessageConverter;
 import org.coldis.library.service.jms.JmsConverterProperties;
@@ -118,8 +119,10 @@ public class EnhancedMessageConverterTest extends SpringTestHelper {
 		EnhancedMessageConverterTest.currentTestMessage = null;
 		EnhancedMessageConverterTest.asyncHops = 0L;
 		this.jmsTemplate.setMessageConverter(this.enhancedJmsMessageConverter);
+		enhancedJmsMessageConverter.clearPreferredClassesCache();
 		this.jmsConverterProperties.setMaximumAsyncHops(103L);
 		this.jmsConverterProperties.setOriginalTypePrecedence(true);
+
 	}
 
 	/**

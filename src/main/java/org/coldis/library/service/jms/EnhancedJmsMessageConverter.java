@@ -1,6 +1,7 @@
 package org.coldis.library.service.jms;
 
 import java.util.Arrays;
+import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -96,6 +97,8 @@ public class EnhancedJmsMessageConverter extends SimpleMessageConverter {
 	/** Alternative class names (or parts). */
 	private SequencedMap<String, String> alternativeClassNames;
 
+	private final Map<String, Class<?>> preferredClassesCache = new HashMap<>();
+
 	/** Constructor. */
 	public EnhancedJmsMessageConverter(
 			final JmsConverterProperties jmsConverterProperties,
@@ -118,6 +121,11 @@ public class EnhancedJmsMessageConverter extends SimpleMessageConverter {
 			final BaseFury optimizedSerializer,
 			final Set<String> includeSessionAttributesAsMessageHeaders) {
 		this(jmsConverterProperties, objectMapper, optimizedSerializer, false, includeSessionAttributesAsMessageHeaders);
+	}
+
+	/** Clear preferred classes cache. */
+	public void clearPreferredClassesCache() {
+		this.preferredClassesCache.clear();
 	}
 
 	/**
@@ -379,24 +387,34 @@ public class EnhancedJmsMessageConverter extends SimpleMessageConverter {
 	 * @throws LinkageError           If the preferred class cannot be loaded.
 	 */
 	private Class<?> getPreferedClassFromMessage(
-			final Message message) throws JMSException, ClassNotFoundException, LinkageError {
-		// Parses preferred classes.
-		final String preferedClassesNamesAttribute = message.getStringProperty(EnhancedJmsMessageConverter.PREFERED_TYPE_PARAMETER);
-		List<String> preferedClassesNames = (StringUtils.isBlank(preferedClassesNamesAttribute) ? List.of()
-				: List.of(preferedClassesNamesAttribute.split(",")));
+			final String preferedClassesNamesAttribute) throws JMSException, ClassNotFoundException, LinkageError {
+		Class<?> preferedClass = null;
 
-		// Adds alternatives classes names to preferred classes.
-		preferedClassesNames = preferedClassesNames.stream().flatMap(className -> this.getAlternativeClassNames().entrySet().stream()
-				.map(alternative -> className.replace(alternative.getKey(), alternative.getValue()))).distinct().toList();
-
-		// Checks for available classes, and get the first available.
-		final List<String> availablePreferedClasses = preferedClassesNames.stream()
-				.filter(className -> ClassUtils.isPresent(className, message.getClass().getClassLoader())).toList();
-		final Class<?> preferedClass = (CollectionUtils.isEmpty(availablePreferedClasses) ? null
-				: ClassUtils.forName(availablePreferedClasses.getFirst(), message.getClass().getClassLoader()));
-		if (preferedClass == null) {
-			EnhancedJmsMessageConverter.LOGGER.error("Prefered class could not be loaded from name: " + preferedClassesNames);
+		// Checks if the preferred class was already cached.
+		if (this.preferredClassesCache.containsKey(preferedClassesNamesAttribute)) {
+			preferedClass = this.preferredClassesCache.get(preferedClassesNamesAttribute);
 		}
+		else {
+			// Parses preferred classes.
+			List<String> preferedClassesNames = (StringUtils.isBlank(preferedClassesNamesAttribute) ? List.of()
+					: List.of(preferedClassesNamesAttribute.split(",")));
+
+			// Adds alternatives classes names to preferred classes.
+			preferedClassesNames = preferedClassesNames.stream().flatMap(className -> this.getAlternativeClassNames().entrySet().stream()
+					.map(alternative -> className.replace(alternative.getKey(), alternative.getValue()))).distinct().toList();
+
+			// Checks for available classes, and get the first available.
+			final List<String> availablePreferedClasses = preferedClassesNames.stream()
+					.filter(className -> ClassUtils.isPresent(className, Thread.currentThread().getContextClassLoader())).toList();
+			preferedClass = (CollectionUtils.isEmpty(availablePreferedClasses) ? null
+					: ClassUtils.forName(availablePreferedClasses.getFirst(), Thread.currentThread().getContextClassLoader()));
+			if (preferedClass == null) {
+				EnhancedJmsMessageConverter.LOGGER.error("Prefered class could not be loaded from name: " + preferedClassesNames);
+			}
+			// Caches the preferred class.
+			this.preferredClassesCache.put(preferedClassesNamesAttribute, preferedClass);
+		}
+
 		return preferedClass;
 	}
 
@@ -411,7 +429,7 @@ public class EnhancedJmsMessageConverter extends SimpleMessageConverter {
 		Object object = null;
 		try {
 			// Converts the message to the preferred class if available.
-			final Class<?> preferedClass = this.getPreferedClassFromMessage(message);
+			final Class<?> preferedClass = this.getPreferedClassFromMessage(message.getStringProperty(EnhancedJmsMessageConverter.PREFERED_TYPE_PARAMETER));
 			if (preferedClass != null) {
 				if (message instanceof final TextMessage textMessage) {
 					object = this.objectMapper.readValue(textMessage.getText(), preferedClass);
