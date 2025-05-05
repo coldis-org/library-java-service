@@ -187,7 +187,7 @@ public class JmsConfigurationHelper {
 			final Boolean virtual,
 			@Value("${org.coldis.library.service.jms.listener.executor.concurrency:}")
 			final Integer concurrency,
-			@Value("${org.coldis.library.service.jms.listener.executor.concurrency-cpu-multiplier:8}")
+			@Value("${org.coldis.library.service.jms.listener.executor.concurrency-cpu-multiplier:}")
 			final Double concurrencyCpuMultiplier,
 			@Value("${org.coldis.library.service.jms.listener.executor.parallelism:}")
 			final Integer parallelism,
@@ -199,12 +199,8 @@ public class JmsConfigurationHelper {
 			final Double minRunnableCpuMultiplier,
 			@Value("${org.coldis.library.service.jms.listener.executor.core-size:}")
 			final Integer corePoolSize,
-			@Value("${org.coldis.library.service.jms.listener.executor.core-size-cpu-multiplier:30}")
+			@Value("${org.coldis.library.service.jms.listener.executor.core-size-cpu-multiplier:8}")
 			final Double corePoolSizeCpuMultiplier,
-			@Value("${org.coldis.library.service.jms.listener.executor.max-size:}")
-			final Integer maxPoolSize,
-			@Value("${org.coldis.library.service.jms.listener.executor.max-size-cpu-multiplier:30}")
-			final Double maxPoolSizeCpuMultiplier,
 			@Value("${org.coldis.library.service.jms.listener.executor.keep-alive-seconds:60}")
 			final Integer keepAliveSeconds) {
 		if ((concurrency == null) && (concurrencyCpuMultiplier == null)) {
@@ -212,8 +208,8 @@ public class JmsConfigurationHelper {
 					? (ExecutorService) new DynamicThreadPoolFactory().withName(name).withPriority(priority).withVirtual(virtual).withParallelism(parallelism)
 							.withParallelismCpuMultiplier(parallelismCpuMultiplier).withMinRunnable(minRunnable)
 							.withMinRunnableCpuMultiplier(minRunnableCpuMultiplier).withCorePoolSize(corePoolSize)
-							.withCorePoolSizeCpuMultiplier(corePoolSizeCpuMultiplier).withMaxPoolSize(maxPoolSize)
-							.withMaxPoolSizeCpuMultiplier(maxPoolSizeCpuMultiplier).withKeepAlive(Duration.ofSeconds(keepAliveSeconds)).build()
+							.withCorePoolSizeCpuMultiplier(corePoolSizeCpuMultiplier).withMaxPoolSize(corePoolSize)
+							.withMaxPoolSizeCpuMultiplier(corePoolSizeCpuMultiplier).withKeepAlive(Duration.ofSeconds(keepAliveSeconds)).build()
 					: this.jmsListenerExecutor);
 		}
 		else {
@@ -224,6 +220,8 @@ public class JmsConfigurationHelper {
 			((SimpleAsyncTaskExecutor) this.jmsListenerExecutor).setThreadNamePrefix(name);
 			((SimpleAsyncTaskExecutor) this.jmsListenerExecutor).setVirtualThreads(virtual);
 			((SimpleAsyncTaskExecutor) this.jmsListenerExecutor).setThreadPriority(priority);
+			LOGGER.info("JMS listener executor created with concurrency limit of {} and thread name prefix of {}",
+					actualConcurrency, name);
 		}
 	}
 
