@@ -7,6 +7,8 @@ import org.coldis.library.exception.IntegrationException;
 import org.coldis.library.helper.ReflectionHelper;
 import org.coldis.library.model.SimpleMessage;
 import org.messaginghub.pooled.jms.JmsPoolConnectionFactory;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.BeansException;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 import org.springframework.context.ApplicationContext;
@@ -24,6 +26,11 @@ import org.springframework.web.bind.annotation.RestController;
 @RestController
 @RequestMapping("/properties")
 public class PropertiesService implements ApplicationContextAware {
+
+	/**
+	 * Logger.
+	 */
+	private static final Logger LOGGER = LoggerFactory.getLogger(PropertiesService.class);
 
 	/**
 	 * Application context.
@@ -52,8 +59,10 @@ public class PropertiesService implements ApplicationContextAware {
 			final Object value,
 			final Boolean ignoreEmptyValue) {
 
-		if ((value != null) || !ignoreEmptyValue) {
-
+		if ((value == null) && ignoreEmptyValue) {
+			PropertiesService.LOGGER.info("Property " + name + " is null and ignoreEmptyValue is set to true, so it will not be set.");
+		}
+		else {
 			final String actualName = name;
 
 			// Tries getting the bean.
@@ -68,7 +77,6 @@ public class PropertiesService implements ApplicationContextAware {
 
 			// Sets the property.
 			ReflectionHelper.setAttribute(bean, fieldAccess, actualName, value);
-
 		}
 
 	}
