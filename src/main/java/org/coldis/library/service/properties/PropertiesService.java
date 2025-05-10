@@ -49,22 +49,27 @@ public class PropertiesService implements ApplicationContextAware {
 			final String beanName,
 			final Boolean fieldAccess,
 			final String name,
-			final Object value) {
+			final Object value,
+			final Boolean ignoreEmptyValue) {
 
-		final String actualName = name;
+		if ((value != null) || !ignoreEmptyValue) {
 
-		// Tries getting the bean.
-		final Object bean = this.applicationContext.getBean(beanName);
+			final String actualName = name;
 
-		// Validates it has @ConfigurationProperties annotation.
-		final ConfigurationProperties annotation = bean.getClass().getAnnotation(ConfigurationProperties.class);
-		if ((annotation == null) && !DataSource.class.isAssignableFrom(bean.getClass()) && !JmsPoolConnectionFactory.class.isAssignableFrom(bean.getClass())
-				&& !ActiveMQConnectionFactory.class.isAssignableFrom(bean.getClass())) {
-			throw new IntegrationException(new SimpleMessage("Bean " + beanName + " does not have @ConfigurationProperties annotation."));
+			// Tries getting the bean.
+			final Object bean = this.applicationContext.getBean(beanName);
+
+			// Validates it has @ConfigurationProperties annotation.
+			final ConfigurationProperties annotation = bean.getClass().getAnnotation(ConfigurationProperties.class);
+			if ((annotation == null) && !DataSource.class.isAssignableFrom(bean.getClass()) && !JmsPoolConnectionFactory.class.isAssignableFrom(bean.getClass())
+					&& !ActiveMQConnectionFactory.class.isAssignableFrom(bean.getClass())) {
+				throw new IntegrationException(new SimpleMessage("Bean " + beanName + " does not have @ConfigurationProperties annotation."));
+			}
+
+			// Sets the property.
+			ReflectionHelper.setAttribute(bean, fieldAccess, actualName, value);
+
 		}
-
-		// Sets the property.
-		ReflectionHelper.setAttribute(bean, fieldAccess, actualName, value);
 
 	}
 
@@ -85,9 +90,11 @@ public class PropertiesService implements ApplicationContextAware {
 			final Boolean fieldAccess,
 			@PathVariable
 			final String name,
-			@RequestBody
-			final String value) {
-		this.setProperty(beanName, fieldAccess, name, value);
+			@RequestBody(required = false)
+			final String value,
+			@RequestParam(defaultValue = "true")
+			final Boolean ignoreEmptyValue) {
+		this.setProperty(beanName, fieldAccess, name, value, ignoreEmptyValue);
 	}
 
 	/**
@@ -107,9 +114,11 @@ public class PropertiesService implements ApplicationContextAware {
 			final Boolean fieldAccess,
 			@PathVariable
 			final String name,
-			@RequestBody
-			final Integer value) {
-		this.setProperty(beanName, fieldAccess, name, value);
+			@RequestBody(required = false)
+			final Integer value,
+			@RequestParam(defaultValue = "true")
+			final Boolean ignoreEmptyValue) {
+		this.setProperty(beanName, fieldAccess, name, value, ignoreEmptyValue);
 	}
 
 	/**
@@ -129,9 +138,11 @@ public class PropertiesService implements ApplicationContextAware {
 			final Boolean fieldAccess,
 			@PathVariable
 			final String name,
-			@RequestBody
-			final Long value) {
-		this.setProperty(beanName, fieldAccess, name, value);
+			@RequestBody(required = false)
+			final Long value,
+			@RequestParam(defaultValue = "true")
+			final Boolean ignoreEmptyValue) {
+		this.setProperty(beanName, fieldAccess, name, value, ignoreEmptyValue);
 	}
 
 	/**
@@ -151,9 +162,11 @@ public class PropertiesService implements ApplicationContextAware {
 			final Boolean fieldAccess,
 			@PathVariable
 			final String name,
-			@RequestBody
-			final Float value) {
-		this.setProperty(beanName, fieldAccess, name, value);
+			@RequestBody(required = false)
+			final Float value,
+			@RequestParam(defaultValue = "true")
+			final Boolean ignoreEmptyValue) {
+		this.setProperty(beanName, fieldAccess, name, value, ignoreEmptyValue);
 	}
 
 	/**
@@ -173,9 +186,11 @@ public class PropertiesService implements ApplicationContextAware {
 			final Boolean fieldAccess,
 			@PathVariable
 			final String name,
-			@RequestBody
-			final Double value) {
-		this.setProperty(beanName, fieldAccess, name, value);
+			@RequestBody(required = false)
+			final Double value,
+			@RequestParam(defaultValue = "true")
+			final Boolean ignoreEmptyValue) {
+		this.setProperty(beanName, fieldAccess, name, value, ignoreEmptyValue);
 	}
 
 	/**
@@ -195,9 +210,11 @@ public class PropertiesService implements ApplicationContextAware {
 			final Boolean fieldAccess,
 			@PathVariable
 			final String name,
-			@RequestBody
-			final Boolean value) {
-		this.setProperty(beanName, fieldAccess, name, value);
+			@RequestBody(required = false)
+			final Boolean value,
+			@RequestParam(defaultValue = "true")
+			final Boolean ignoreEmptyValue) {
+		this.setProperty(beanName, fieldAccess, name, value, ignoreEmptyValue);
 	}
 
 }
