@@ -60,11 +60,9 @@ public class PropertiesService implements ApplicationContextAware {
 			final Boolean ignoreEmptyValue) {
 
 		if ((value == null) && ignoreEmptyValue) {
-			PropertiesService.LOGGER.info("Property " + name + " is null and ignoreEmptyValue is set to true, so it will not be set.");
+			PropertiesService.LOGGER.info("Not setting property " + name + " to " + value + " in bean " + beanName + " because value is null.");
 		}
 		else {
-			final String actualName = name;
-
 			// Tries getting the bean.
 			final Object bean = this.applicationContext.getBean(beanName);
 
@@ -76,8 +74,8 @@ public class PropertiesService implements ApplicationContextAware {
 			}
 
 			// Sets the property.
-			LOGGER.info("Setting property " + actualName + " to " + value + " in bean " + beanName + ".");
-			ReflectionHelper.setAttribute(bean, fieldAccess, actualName, value);
+			PropertiesService.LOGGER.info("Setting property " + name + " to " + value + " in bean " + beanName + ".");
+			ReflectionHelper.setAttribute(bean, fieldAccess, name, value);
 		}
 
 	}
