@@ -77,6 +77,7 @@ public class PropertiesService implements ApplicationContextAware {
 
 			// Sets the property.
 			ReflectionHelper.setAttribute(bean, fieldAccess, actualName, value);
+			LOGGER.info("Property " + actualName + " set to " + value + " in bean " + beanName + ".");
 		}
 
 	}
