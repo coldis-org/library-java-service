@@ -60,7 +60,7 @@ public class PropertiesService implements ApplicationContextAware {
 			final Boolean ignoreEmptyValue) {
 
 		if ((value == null) && ignoreEmptyValue) {
-			PropertiesService.LOGGER.info("Not setting property " + name + " to " + value + " in bean " + beanName + " because value is null.");
+			PropertiesService.LOGGER.info("Not setting property " + name + " in bean " + beanName + ", because value is null.");
 		}
 		else {
 			// Tries getting the bean.
