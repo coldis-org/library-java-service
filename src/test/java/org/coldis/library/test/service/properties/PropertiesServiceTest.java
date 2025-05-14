@@ -195,6 +195,10 @@ public class PropertiesServiceTest {
 		jmsTemplate.convertAndSend("testQueue", "testMessage");
 		
 		// Updates property to an invalid database connection.
+		this.restTemplate.put("http://localhost:" + this.port + "/properties/string/pooledJmsConnectionFactory/connectionFactory.serverLocator.topologyArray.0.a.params.host?fieldAccess=true", "192.168.0.200",
+				Void.class);
+		this.restTemplate.put("http://localhost:" + this.port + "/properties/string/pooledJmsConnectionFactory/connectionFactory.serverLocator.initialConnectors.0.params.host?fieldAccess=true", "192.168.0.200",
+				Void.class);
 		this.restTemplate.put("http://localhost:" + this.port + "/properties/string/pooledJmsConnectionFactory/connectionFactory.serverLocator.topologyArray.0.a.params.port?fieldAccess=true", "1234",
 				Void.class);
 		this.restTemplate.put("http://localhost:" + this.port + "/properties/string/pooledJmsConnectionFactory/connectionFactory.serverLocator.initialConnectors.0.params.port?fieldAccess=true", "1234",
@@ -216,6 +220,10 @@ public class PropertiesServiceTest {
 		}, valid -> valid, TestHelper.VERY_LONG_WAIT, TestHelper.VERY_SHORT_WAIT));
 		
 		// Updates property to a valid database connection.
+		this.restTemplate.put("http://localhost:" + this.port + "/properties/string/pooledJmsConnectionFactory/connectionFactory.serverLocator.topologyArray.0.a.params.host?fieldAccess=true", "127.0.0.1",
+				Void.class);
+		this.restTemplate.put("http://localhost:" + this.port + "/properties/string/pooledJmsConnectionFactory/connectionFactory.serverLocator.initialConnectors.0.params.host?fieldAccess=true", "127.0.0.1",
+				Void.class);
 		this.restTemplate.put("http://localhost:" + this.port + "/properties/string/pooledJmsConnectionFactory/connectionFactory.serverLocator.topologyArray.0.a.params.port?fieldAccess=true", ARTEMIS_CONTAINER.getMappedPort(61616).toString(),
 				Void.class);
 		this.restTemplate.put("http://localhost:" + this.port + "/properties/string/pooledJmsConnectionFactory/connectionFactory.serverLocator.initialConnectors.0.params.port?fieldAccess=true", ARTEMIS_CONTAINER.getMappedPort(61616).toString(),
