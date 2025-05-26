@@ -158,8 +158,15 @@ public class DataInstaller implements ApplicationListener<ApplicationReadyEvent>
 			final DataInstallerSearchStrategy searchStrategy,
 			final String[] searchProperties,
 			final Map<String, Object> dataObject) {
+
+		// Removes multiple addresses from the URL.
+		final String[] splitServiceOperationBaseUrl = serviceOperationBaseUrl.split(",");
+		final String actualServiceOperationBaseUrl = (splitServiceOperationBaseUrl.length > 1)
+				? splitServiceOperationBaseUrl[0] + splitServiceOperationBaseUrl[splitServiceOperationBaseUrl.length - 1]
+				: splitServiceOperationBaseUrl[0];
+
 		// Service operation URL.
-		final StringBuffer serviceOperationUrl = new StringBuffer(serviceOperationBaseUrl);
+		final StringBuffer serviceOperationUrl = new StringBuffer(actualServiceOperationBaseUrl);
 		// If the search uses parameter strategy.
 		if (DataInstallerSearchStrategy.PARAMETER.equals(searchStrategy)) {
 			// Appends the search context.
