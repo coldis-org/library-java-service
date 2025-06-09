@@ -39,5 +39,8 @@ public class StaticResourceConfiguration implements WebMvcConfigurer {
 		registry.addResourceHandler("/**").addResourceLocations("classpath:/static/", "classpath:/public/")
 				.setCacheControl(CacheControl.maxAge(this.cacheDuration).cachePublic()).resourceChain(this.isProductionEnvironment());
 	}
+	
+	
+	
 
 }
