@@ -2,6 +2,7 @@ package org.coldis.library.service.batch;
 
 import java.time.Duration;
 import java.time.LocalDateTime;
+import java.time.temporal.ChronoUnit;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -62,12 +63,17 @@ public class BatchExecutor<Type> implements Typable {
 	/**
 	 * Batch size.
 	 */
-	private Long size = 13000L;
+	private Long size;
 
 	/**
-	 * Last processed.
+	 * Expected processing count.
 	 */
-	private Type lastProcessed;
+	private Long expectedCount;
+
+	/**
+	 * Tries finishing within.
+	 */
+	private Duration tryToFinishWithin;
 
 	/**
 	 * Delay to add between runs.
@@ -83,11 +89,6 @@ public class BatchExecutor<Type> implements Typable {
 	 * Maximum interval to keep the batch persisted.
 	 */
 	private Duration cleansWithin;
-
-	/**
-	 * Arguments used to get next batch.
-	 */
-	private Map<String, String> arguments;
 
 	/**
 	 * Action bean name.
@@ -110,12 +111,22 @@ public class BatchExecutor<Type> implements Typable {
 	private Map<BatchAction, String> slackChannels;
 
 	/**
+	 * Arguments used to get next batch.
+	 */
+	private Map<String, String> arguments;
+
+	/**
 	 * Last started at.
 	 */
 	private LocalDateTime lastStartedAt;
 
+	/**
+	 * Last processed.
+	 */
+	private Type lastProcessed;
+
 	/** Last batch finished at. */
-	private LocalDateTime lastStepFinishedAt;
+	private LocalDateTime lastBatchFinishedAt;
 
 	/**
 	 * Last finished at.
@@ -133,6 +144,11 @@ public class BatchExecutor<Type> implements Typable {
 	private Long lastProcessedCount;
 
 	/**
+	 * Last total processing time.
+	 */
+	private Duration lastTotalProcessingTime;
+
+	/**
 	 * No arguments constructor.
 	 */
 	protected BatchExecutor() {
@@ -147,52 +163,46 @@ public class BatchExecutor<Type> implements Typable {
 		this.itemTypeName = itemType.getName();
 	}
 
-	/**
-	 * Default constructor.
-	 *
-	 * @param keySuffix     Key suffix.
-	 * @param size          Size.
-	 * @param lastProcessed Last processed.
-	 * @param finishWithin  Maximum interval to finish the batch.
-	 */
-	public BatchExecutor(final Class<Type> itemType, final String keySuffix, final Long size, final Type lastProcessed, final Duration finishWithin) {
-		super();
-		this.itemTypeName = itemType.getName();
-		this.keySuffix = keySuffix;
-		this.size = size;
-		this.lastProcessed = lastProcessed;
-		this.finishWithin = finishWithin;
-	}
-
-	/**
-	 * Complete constructor.
-	 *
-	 * @param keySuffix             Key suffix.Factory
-	 * @param size                  Size.
-	 * @param lastProcessed         Last processed.
-	 * @param finishWithin          Maximum interval to finish the batch.
-	 * @param actionBeanName        Action bean name.
-	 * @param actionDelegateMethods Action delegate methods.
-	 * @param messagesTemplates     Messages templates.
-	 * @param slackChannels         Slack channels.
-	 */
 	public BatchExecutor(
-			final Class<Type> itemType,
+			final String itemTypeName,
 			final String keySuffix,
 			final Long size,
-			final Type lastProcessed,
+			final Long expectedCount,
+			final Duration tryToFinishWithin,
+			final String actionBeanName,
+			final Map<BatchAction, String> actionDelegateMethods,
+			final Map<String, String> arguments) {
+		super();
+		this.itemTypeName = itemTypeName;
+		this.keySuffix = keySuffix;
+		this.size = size;
+		this.expectedCount = expectedCount;
+		this.tryToFinishWithin = tryToFinishWithin;
+		this.actionBeanName = actionBeanName;
+		this.actionDelegateMethods = actionDelegateMethods;
+		this.arguments = arguments;
+	}
+
+	public BatchExecutor(
+			final String itemTypeName,
+			final String keySuffix,
+			final Long size,
+			final Long expectedCount,
+			final Duration tryToFinishWithin,
 			final Duration delayBetweenRuns,
 			final Duration finishWithin,
 			final Duration cleansWithin,
 			final String actionBeanName,
 			final Map<BatchAction, String> actionDelegateMethods,
 			final Map<BatchAction, String> messagesTemplates,
-			final Map<BatchAction, String> slackChannels) {
+			final Map<BatchAction, String> slackChannels,
+			final Map<String, String> arguments) {
 		super();
-		this.itemTypeName = itemType.getName();
+		this.itemTypeName = itemTypeName;
 		this.keySuffix = keySuffix;
 		this.size = size;
-		this.lastProcessed = lastProcessed;
+		this.expectedCount = expectedCount;
+		this.tryToFinishWithin = tryToFinishWithin;
 		this.delayBetweenRuns = delayBetweenRuns;
 		this.finishWithin = finishWithin;
 		this.cleansWithin = cleansWithin;
@@ -200,6 +210,7 @@ public class BatchExecutor<Type> implements Typable {
 		this.actionDelegateMethods = actionDelegateMethods;
 		this.messagesTemplates = messagesTemplates;
 		this.slackChannels = slackChannels;
+		this.arguments = arguments;
 	}
 
 	/**
@@ -265,6 +276,7 @@ public class BatchExecutor<Type> implements Typable {
 	 */
 	@JsonView({ ModelView.Persistent.class, ModelView.Public.class })
 	public Long getSize() {
+		this.size = Math.max(Objects.requireNonNullElse(this.size, 10_000L), 1L);
 		return this.size;
 	}
 
@@ -279,25 +291,44 @@ public class BatchExecutor<Type> implements Typable {
 	}
 
 	/**
-	 * Gets the lastProcessed.
+	 * Gets the expectedCount.
 	 *
-	 * @return The lastProcessed.
+	 * @return The expectedCount.
 	 */
 	@JsonView({ ModelView.Persistent.class, ModelView.Public.class })
-	public Type getLastProcessed() {
-		this.lastProcessed = (((this.getType() == null) || this.getType().isInstance(this.lastProcessed)) ? this.lastProcessed
-				: ObjectMapperHelper.convert(BatchExecutor.OBJECT_MAPPER, this.lastProcessed, this.getType(), false));
-		return this.lastProcessed;
+	public Long getExpectedCount() {
+		return this.expectedCount;
 	}
 
 	/**
-	 * Sets the lastProcessed.
+	 * Sets the expectedCount.
 	 *
-	 * @param lastProcessed New lastProcessed.
+	 * @param expectedCount New expectedCount.
 	 */
-	public void setLastProcessed(
-			final Type lastProcessed) {
-		this.lastProcessed = lastProcessed;
+	public void setExpectedCount(
+			final Long expectedCount) {
+		this.expectedCount = expectedCount;
+	}
+
+	/**
+	 * Gets the tryToFinishWithin.
+	 *
+	 * @return The tryToFinishWithin.
+	 */
+	@JsonView({ ModelView.Persistent.class, ModelView.Public.class })
+	public Duration getTryToFinishWithin() {
+		this.tryToFinishWithin = Objects.requireNonNullElse(Objects.requireNonNullElse(this.tryToFinishWithin, this.finishWithin), Duration.ofHours(12L));
+		return this.tryToFinishWithin;
+	}
+
+	/**
+	 * Sets the tryToFinishWithin.
+	 *
+	 * @param tryToFinishWithin New tryToFinishWithin.
+	 */
+	public void setTryToFinishWithin(
+			final Duration tryToFinishWithin) {
+		this.tryToFinishWithin = tryToFinishWithin;
 	}
 
 	/**
@@ -307,7 +338,7 @@ public class BatchExecutor<Type> implements Typable {
 	 */
 	@JsonView({ ModelView.Persistent.class, ModelView.Public.class })
 	public Duration getDelayBetweenRuns() {
-		this.delayBetweenRuns = (this.delayBetweenRuns == null ? Duration.ofSeconds(2) : this.delayBetweenRuns);
+		this.delayBetweenRuns = Objects.requireNonNullElse(this.delayBetweenRuns, Duration.ofSeconds(2));
 		return this.delayBetweenRuns;
 	}
 
@@ -328,7 +359,7 @@ public class BatchExecutor<Type> implements Typable {
 	 */
 	@JsonView({ ModelView.Persistent.class, ModelView.Public.class })
 	public Duration getFinishWithin() {
-		this.finishWithin = (this.finishWithin == null ? Duration.ofDays(1) : this.finishWithin);
+		this.finishWithin = Objects.requireNonNullElse(this.finishWithin, this.getTryToFinishWithin().multipliedBy(2L));
 		return this.finishWithin;
 	}
 
@@ -349,7 +380,7 @@ public class BatchExecutor<Type> implements Typable {
 	 */
 	@JsonView({ ModelView.Persistent.class, ModelView.Public.class })
 	public Duration getCleansWithin() {
-		this.cleansWithin = (this.cleansWithin == null ? this.getFinishWithin().multipliedBy(5) : this.cleansWithin);
+		this.cleansWithin = Objects.requireNonNullElse(this.cleansWithin, this.getFinishWithin().multipliedBy(5));
 		return this.cleansWithin;
 	}
 
@@ -361,28 +392,6 @@ public class BatchExecutor<Type> implements Typable {
 	public void setCleansWithin(
 			final Duration cleansWithin) {
 		this.cleansWithin = cleansWithin;
-	}
-
-	/**
-	 * Gets the arguments.
-	 *
-	 * @return The arguments.
-	 */
-	@JsonView({ ModelView.Persistent.class, ModelView.Public.class })
-	public Map<String, String> getArguments() {
-		this.arguments = (this.arguments == null ? new HashMap<>() : this.arguments);
-		return this.arguments;
-	}
-
-	/**
-	 * Sets the arguments.
-	 *
-	 * @param arguments New arguments.
-	 */
-	@JsonView({ ModelView.Persistent.class, ModelView.Public.class })
-	public void setArguments(
-			final Map<String, String> getArguments) {
-		this.arguments = getArguments;
 	}
 
 	/**
@@ -495,7 +504,7 @@ public class BatchExecutor<Type> implements Typable {
 	 */
 	@JsonView({ ModelView.Persistent.class, ModelView.Public.class })
 	public Map<BatchAction, String> getSlackChannels() {
-		this.slackChannels = (this.slackChannels == null ? new HashMap<>() : this.slackChannels);
+		this.slackChannels = Objects.requireNonNullElse(this.slackChannels, new HashMap<>());
 		return this.slackChannels;
 	}
 
@@ -510,13 +519,35 @@ public class BatchExecutor<Type> implements Typable {
 	}
 
 	/**
+	 * Gets the arguments.
+	 *
+	 * @return The arguments.
+	 */
+	@JsonView({ ModelView.Persistent.class, ModelView.Public.class })
+	public Map<String, String> getArguments() {
+		this.arguments = Objects.requireNonNullElse(this.arguments, new HashMap<>());
+		return this.arguments;
+	}
+
+	/**
+	 * Sets the arguments.
+	 *
+	 * @param arguments New arguments.
+	 */
+	@JsonView({ ModelView.Persistent.class, ModelView.Public.class })
+	public void setArguments(
+			final Map<String, String> getArguments) {
+		this.arguments = getArguments;
+	}
+
+	/**
 	 * Gets the lastStartedAt.
 	 *
 	 * @return The lastStartedAt.
 	 */
 	@JsonView({ ModelView.Persistent.class, ModelView.Public.class })
 	public LocalDateTime getLastStartedAt() {
-		this.lastStartedAt = (this.lastStartedAt == null ? DateTimeHelper.getCurrentLocalDateTime() : this.lastStartedAt);
+		this.lastStartedAt = Objects.requireNonNullElse(this.lastStartedAt, DateTimeHelper.getCurrentLocalDateTime());
 		return this.lastStartedAt;
 	}
 
@@ -531,23 +562,45 @@ public class BatchExecutor<Type> implements Typable {
 	}
 
 	/**
-	 * Gets the lastStepFinishedAt.
+	 * Gets the lastProcessed.
 	 *
-	 * @return The lastStepFinishedAt.
+	 * @return The lastProcessed.
 	 */
 	@JsonView({ ModelView.Persistent.class, ModelView.Public.class })
-	public LocalDateTime getLastStepFinishedAt() {
-		return this.lastStepFinishedAt;
+	public Type getLastProcessed() {
+		this.lastProcessed = (((this.getType() == null) || this.getType().isInstance(this.lastProcessed)) ? this.lastProcessed
+				: ObjectMapperHelper.convert(BatchExecutor.OBJECT_MAPPER, this.lastProcessed, this.getType(), false));
+		return this.lastProcessed;
 	}
 
 	/**
-	 * Sets the lastStepFinishedAt.
+	 * Sets the lastProcessed.
 	 *
-	 * @param lastStepFinishedAt New lastStepFinishedAt.
+	 * @param lastProcessed New lastProcessed.
 	 */
-	public void setLastStepFinishedAt(
-			final LocalDateTime lastStepFinishedAt) {
-		this.lastStepFinishedAt = lastStepFinishedAt;
+	public void setLastProcessed(
+			final Type lastProcessed) {
+		this.lastProcessed = lastProcessed;
+	}
+
+	/**
+	 * Gets the lastBatchFinishedAt.
+	 *
+	 * @return The lastBatchFinishedAt.
+	 */
+	@JsonView({ ModelView.Persistent.class, ModelView.Public.class })
+	public LocalDateTime getLastBatchFinishedAt() {
+		return this.lastBatchFinishedAt;
+	}
+
+	/**
+	 * Sets the lastBatchFinishedAt.
+	 *
+	 * @param lastBatchFinishedAt New lastBatchFinishedAt.
+	 */
+	public void setLastBatchFinishedAt(
+			final LocalDateTime lastBatchFinishedAt) {
+		this.lastBatchFinishedAt = lastBatchFinishedAt;
 	}
 
 	/**
@@ -607,7 +660,7 @@ public class BatchExecutor<Type> implements Typable {
 	 */
 	@JsonView({ ModelView.Persistent.class, ModelView.Public.class })
 	public LocalDateTime getExpiredAt() {
-		return (this.getLastCancelledAt() == null ? this.getLastStartedAt().plus(this.getFinishWithin()) : this.getLastCancelledAt());
+		return Objects.requireNonNullElse(this.getLastCancelledAt(), this.getLastStartedAt().plus(this.getFinishWithin()));
 	}
 
 	/**
@@ -621,23 +674,13 @@ public class BatchExecutor<Type> implements Typable {
 	}
 
 	/**
-	 * Gets the next batch start time.
-	 *
-	 */
-	@JsonView({ ModelView.Persistent.class, ModelView.Public.class })
-	public LocalDateTime getNextBatchStartingAt() {
-		return (this.getLastStepFinishedAt() == null ? (this.isExpired() || this.isFinished() ? null : DateTimeHelper.getCurrentLocalDateTime())
-				: this.getLastStepFinishedAt().plus(this.getDelayBetweenRuns()));
-	}
-
-	/**
 	 * Gets the lastProcessedCount.
 	 *
 	 * @return The lastProcessedCount.
 	 */
 	@JsonView({ ModelView.Persistent.class, ModelView.Public.class })
 	public Long getLastProcessedCount() {
-		this.lastProcessedCount = (this.lastProcessedCount == null ? 0 : this.lastProcessedCount);
+		this.lastProcessedCount = Objects.requireNonNullElse(this.lastProcessedCount, 0L);
 		return this.lastProcessedCount;
 	}
 
@@ -649,6 +692,57 @@ public class BatchExecutor<Type> implements Typable {
 	public void setLastProcessedCount(
 			final Long lastProcessedCount) {
 		this.lastProcessedCount = lastProcessedCount;
+	}
+
+	/**
+	 * Gets the lastTotalProcessingTime.
+	 *
+	 * @return The lastTotalProcessingTime.
+	 */
+	@JsonView({ ModelView.Persistent.class, ModelView.Public.class })
+	public Duration getLastTotalProcessingTime() {
+		this.lastTotalProcessingTime = Objects.requireNonNullElse(this.lastTotalProcessingTime, Duration.ZERO);
+		return this.lastTotalProcessingTime;
+	}
+
+	/**
+	 * Sets the lastTotalProcessingTime.
+	 *
+	 * @param lastTotalProcessingTime New lastTotalProcessingTime.
+	 */
+	public void setLastTotalProcessingTime(
+			final Duration lastTotalProcessingTime) {
+		this.lastTotalProcessingTime = lastTotalProcessingTime;
+	}
+
+	/**
+	 * Gets the delayBetweenRuns.
+	 *
+	 * @return The delayBetweenRuns.
+	 */
+	@JsonView({ ModelView.Persistent.class, ModelView.Public.class })
+	public Duration getActualDelayBetweenRuns() {
+		Duration actualDelayBetweenRuns = this.getDelayBetweenRuns();
+		if (this.getExpectedCount() != null) {
+			final Long expectedLeftCount = this.getExpectedCount() - this.getLastProcessedCount();
+			final Long expectedLeftBatchCount = expectedLeftCount / this.getSize();
+			final Duration expectedLeftProcessingDuration = this.getLastTotalProcessingTime().multipliedBy(expectedLeftCount)
+					.dividedBy(this.getLastProcessedCount() <= 0 ? 1 : this.getLastProcessedCount());
+			actualDelayBetweenRuns = (expectedLeftCount <= 0 ? Duration.ofMillis(100)
+					: this.getTryToFinishWithin().minusMillis(this.getLastStartedAt().until(DateTimeHelper.getCurrentLocalDateTime(), ChronoUnit.MILLIS))
+							.minus(expectedLeftProcessingDuration).dividedBy(expectedLeftBatchCount));
+		}
+		return actualDelayBetweenRuns;
+	}
+
+	/**
+	 * Gets the next batch start time.
+	 *
+	 */
+	@JsonView({ ModelView.Persistent.class, ModelView.Public.class })
+	public LocalDateTime getNextBatchStartingAt() {
+		return (this.getLastBatchFinishedAt() == null ? (this.isExpired() || this.isFinished() ? null : DateTimeHelper.getCurrentLocalDateTime())
+				: this.getLastBatchFinishedAt().plus(this.getActualDelayBetweenRuns()));
 	}
 
 	/**
@@ -673,12 +767,17 @@ public class BatchExecutor<Type> implements Typable {
 	/**
 	 * Resets the batch record.
 	 */
-	public void reset() {
+	public void reset(
+			final Boolean useLastCountAsExpected) {
+		if (useLastCountAsExpected && (this.getLastFinishedAt() != null)) {
+			this.setExpectedCount(this.getLastProcessedCount());
+		}
 		this.setLastStartedAt(null);
-		this.setLastStepFinishedAt(null);
+		this.setLastBatchFinishedAt(null);
 		this.setLastCancelledAt(null);
 		this.setLastProcessed(null);
 		this.setLastProcessedCount(null);
+		this.setLastTotalProcessingTime(null);
 		this.getLastStartedAt();
 		this.getLastProcessedCount();
 	}
@@ -697,9 +796,10 @@ public class BatchExecutor<Type> implements Typable {
 	 */
 	@Override
 	public int hashCode() {
-		return Objects.hash(this.actionBeanName, this.actionDelegateMethods, this.arguments, this.cleansWithin, this.delayBetweenRuns, this.finishWithin,
-				this.itemTypeName, this.keySuffix, this.lastStepFinishedAt, this.lastCancelledAt, this.lastFinishedAt, this.lastProcessed,
-				this.lastProcessedCount, this.lastStartedAt, this.messagesTemplates, this.size, this.slackChannels);
+		return Objects.hash(this.actionBeanName, this.actionDelegateMethods, this.arguments, this.cleansWithin, this.delayBetweenRuns, this.expectedCount,
+				this.finishWithin, this.itemTypeName, this.keySuffix, this.lastBatchFinishedAt, this.lastCancelledAt, this.lastFinishedAt, this.lastProcessed,
+				this.lastProcessedCount, this.lastStartedAt, this.lastTotalProcessingTime, this.messagesTemplates, this.size, this.slackChannels,
+				this.tryToFinishWithin);
 	}
 
 	/**
@@ -717,13 +817,14 @@ public class BatchExecutor<Type> implements Typable {
 		final BatchExecutor other = (BatchExecutor) obj;
 		return Objects.equals(this.actionBeanName, other.actionBeanName) && Objects.equals(this.actionDelegateMethods, other.actionDelegateMethods)
 				&& Objects.equals(this.arguments, other.arguments) && Objects.equals(this.cleansWithin, other.cleansWithin)
-				&& Objects.equals(this.delayBetweenRuns, other.delayBetweenRuns) && Objects.equals(this.finishWithin, other.finishWithin)
-				&& Objects.equals(this.itemTypeName, other.itemTypeName) && Objects.equals(this.keySuffix, other.keySuffix)
-				&& Objects.equals(this.lastStepFinishedAt, other.lastStepFinishedAt) && Objects.equals(this.lastCancelledAt, other.lastCancelledAt)
-				&& Objects.equals(this.lastFinishedAt, other.lastFinishedAt) && Objects.equals(this.lastProcessed, other.lastProcessed)
-				&& Objects.equals(this.lastProcessedCount, other.lastProcessedCount) && Objects.equals(this.lastStartedAt, other.lastStartedAt)
+				&& Objects.equals(this.delayBetweenRuns, other.delayBetweenRuns) && Objects.equals(this.expectedCount, other.expectedCount)
+				&& Objects.equals(this.finishWithin, other.finishWithin) && Objects.equals(this.itemTypeName, other.itemTypeName)
+				&& Objects.equals(this.keySuffix, other.keySuffix) && Objects.equals(this.lastBatchFinishedAt, other.lastBatchFinishedAt)
+				&& Objects.equals(this.lastCancelledAt, other.lastCancelledAt) && Objects.equals(this.lastFinishedAt, other.lastFinishedAt)
+				&& Objects.equals(this.lastProcessed, other.lastProcessed) && Objects.equals(this.lastProcessedCount, other.lastProcessedCount)
+				&& Objects.equals(this.lastStartedAt, other.lastStartedAt) && Objects.equals(this.lastTotalProcessingTime, other.lastTotalProcessingTime)
 				&& Objects.equals(this.messagesTemplates, other.messagesTemplates) && Objects.equals(this.size, other.size)
-				&& Objects.equals(this.slackChannels, other.slackChannels);
+				&& Objects.equals(this.slackChannels, other.slackChannels) && Objects.equals(this.tryToFinishWithin, other.tryToFinishWithin);
 	}
 
 	/**

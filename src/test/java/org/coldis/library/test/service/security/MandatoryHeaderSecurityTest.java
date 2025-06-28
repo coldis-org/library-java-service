@@ -21,6 +21,7 @@ import org.springframework.boot.test.context.SpringBootTest.WebEnvironment;
 import org.springframework.core.ParameterizedTypeReference;
 import org.springframework.http.HttpMethod;
 import org.springframework.http.HttpStatus;
+import org.springframework.test.annotation.DirtiesContext;
 import org.springframework.util.LinkedMultiValueMap;
 import org.springframework.util.StringValueResolver;
 import org.testcontainers.containers.GenericContainer;
@@ -35,6 +36,7 @@ import org.testcontainers.containers.GenericContainer;
 		properties = { "org.coldis.library.service.security.mandatory-headers=x-mandatory1,x-mandatory2=abc" }
 )
 @ExtendWith(StopTestWithContainerExtension.class)
+@DirtiesContext(classMode = DirtiesContext.ClassMode.AFTER_CLASS)
 public class MandatoryHeaderSecurityTest extends SpringTestHelper {
 
 	/**

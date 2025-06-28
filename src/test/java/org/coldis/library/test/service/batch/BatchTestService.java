@@ -7,6 +7,7 @@ import java.util.Objects;
 import java.util.Random;
 
 import org.coldis.library.exception.IntegrationException;
+import org.coldis.library.helper.DateTimeHelper;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
@@ -60,16 +61,11 @@ public class BatchTestService {
 			final Map<String, String> arguments) {
 		return BatchTestService.processedLatestCompleteBatch < 100 ? List.of(
 
-				new BatchObject(Objects.toString(BatchTestService.RANDOM.nextLong())),
-				new BatchObject(Objects.toString(BatchTestService.RANDOM.nextLong())),
-				new BatchObject(Objects.toString(BatchTestService.RANDOM.nextLong())),
-				new BatchObject(Objects.toString(BatchTestService.RANDOM.nextLong())),
-				new BatchObject(Objects.toString(BatchTestService.RANDOM.nextLong())),
-				new BatchObject(Objects.toString(BatchTestService.RANDOM.nextLong())),
-				new BatchObject(Objects.toString(BatchTestService.RANDOM.nextLong())),
-				new BatchObject(Objects.toString(BatchTestService.RANDOM.nextLong())),
-				new BatchObject(Objects.toString(BatchTestService.RANDOM.nextLong())),
-				new BatchObject(Objects.toString(BatchTestService.RANDOM.nextLong()))
+				new BatchObject(Objects.toString(BatchTestService.RANDOM.nextLong())), new BatchObject(Objects.toString(BatchTestService.RANDOM.nextLong())),
+				new BatchObject(Objects.toString(BatchTestService.RANDOM.nextLong())), new BatchObject(Objects.toString(BatchTestService.RANDOM.nextLong())),
+				new BatchObject(Objects.toString(BatchTestService.RANDOM.nextLong())), new BatchObject(Objects.toString(BatchTestService.RANDOM.nextLong())),
+				new BatchObject(Objects.toString(BatchTestService.RANDOM.nextLong())), new BatchObject(Objects.toString(BatchTestService.RANDOM.nextLong())),
+				new BatchObject(Objects.toString(BatchTestService.RANDOM.nextLong())), new BatchObject(Objects.toString(BatchTestService.RANDOM.nextLong()))
 
 		) : List.of();
 	}
@@ -85,6 +81,7 @@ public class BatchTestService {
 	 */
 	public void execute(
 			final BatchObject object) {
+		BatchTestService.LOGGER.info("Starting batch from '{}' at {}.", object, DateTimeHelper.getCurrentLocalDateTime());
 		if (BatchTestService.processedLatestPartialBatch >= 10) {
 			throw new IntegrationException();
 		}
@@ -95,6 +92,7 @@ public class BatchTestService {
 		}
 		catch (final Exception exception) {
 		}
-		BatchTestService.LOGGER.info("Batch item processed: " + BatchTestService.processedLatestCompleteBatch);
+		BatchTestService.LOGGER.info("Batch item processed. Total of {} items processed.", 
+				BatchTestService.processedLatestCompleteBatch);
 	}
 }

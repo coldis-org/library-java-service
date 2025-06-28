@@ -3,8 +3,8 @@ package org.coldis.library.test.service.batch;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.LocalDateTime;
+import java.time.temporal.ChronoUnit;
 import java.util.List;
-import java.util.Random;
 
 import org.coldis.library.exception.BusinessException;
 import org.coldis.library.helper.DateTimeHelper;
@@ -25,6 +25,7 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.context.SpringBootTest.WebEnvironment;
+import org.springframework.test.annotation.DirtiesContext;
 import org.testcontainers.containers.GenericContainer;
 
 /**
@@ -34,6 +35,7 @@ import org.testcontainers.containers.GenericContainer;
 @ExtendWith(StartTestWithContainerExtension.class)
 @SpringBootTest(webEnvironment = WebEnvironment.RANDOM_PORT)
 @ExtendWith(StopTestWithContainerExtension.class)
+@DirtiesContext(classMode = DirtiesContext.ClassMode.AFTER_CLASS)
 public class BatchServiceTest extends SpringTestHelper {
 
 	/**
@@ -55,11 +57,6 @@ public class BatchServiceTest extends SpringTestHelper {
 	 * Regular clock.
 	 */
 	public static final Clock REGULAR_CLOCK = DateTimeHelper.getClock();
-
-	/**
-	 * Random.
-	 */
-	public static final Random RANDOM = new Random();
 
 	/**
 	 * Key/value service.
@@ -133,7 +130,7 @@ public class BatchServiceTest extends SpringTestHelper {
 
 		// Starts the batch and makes sure it has started.
 		this.batchService.checkAll();
-		this.batchService.start(testBatchExecutor, false);
+		this.batchService.start(testBatchExecutor, false, false);
 		this.batchService.checkAll();
 
 		TestHelper.waitUntilValid(() -> {
@@ -182,8 +179,8 @@ public class BatchServiceTest extends SpringTestHelper {
 	public void testBatchInTime() throws Exception {
 
 		// Makes sure the batch is not started.
-		final BatchExecutor<BatchObject> testBatchExecutor = new BatchExecutor<>(BatchObject.class, "testBatchInTime", 10L, null, Duration.ofMillis(100),
-				Duration.ofMinutes(1), Duration.ofMinutes(15), "batchTestService", null, null, null);
+		final BatchExecutor<BatchObject> testBatchExecutor = new BatchExecutor<>(BatchObject.class.getName(), "testBatchInTime", 10L, null, null,
+				Duration.ofMillis(100), Duration.ofMinutes(1), Duration.ofMinutes(15), "batchTestService", null, null, null, null);
 		final String batchKey = this.batchService.getKey(testBatchExecutor.getKeySuffix());
 
 		// Record should not exist.
@@ -229,8 +226,8 @@ public class BatchServiceTest extends SpringTestHelper {
 	public void testBatchNotInTime() throws Exception {
 
 		// Makes sure the batch is not started.
-		final BatchExecutor<BatchObject> testBatchExecutor = new BatchExecutor<>(BatchObject.class, "testBatchNotInTime", 10L, null, Duration.ofMillis(100),
-				Duration.ofMillis(500), Duration.ofMinutes(15), "batchTestService", null, null, null);
+		final BatchExecutor<BatchObject> testBatchExecutor = new BatchExecutor<>(BatchObject.class.getName(), "testBatchNotInTime", 10L, null, null,
+				Duration.ofMillis(100), Duration.ofMillis(500), Duration.ofMinutes(15), "batchTestService", null, null, null, null);
 		final String batchKey = this.batchService.getKey(testBatchExecutor.getKeySuffix());
 
 		// Record should not exist.
@@ -244,7 +241,7 @@ public class BatchServiceTest extends SpringTestHelper {
 		// Runs the clock forward and executes the batch again (now with a bigger delay
 		// so it should not finish in time).
 		this.batchService.checkAll();
-		this.batchService.start(testBatchExecutor, false);
+		this.batchService.start(testBatchExecutor, false, false);
 		this.batchService.checkAll();
 
 		// Waits for a while (this batch should not reach the end).
@@ -295,8 +292,8 @@ public class BatchServiceTest extends SpringTestHelper {
 	public void testBatchCancel() throws Exception {
 
 		// Makes sure the batch is not started.
-		final BatchExecutor<BatchObject> testBatchExecutor = new BatchExecutor<>(BatchObject.class, "testBatchCancel", 10L, null, Duration.ofMillis(100),
-				Duration.ofMinutes(1), Duration.ofMinutes(15), "batchTestService", null, null, null);
+		final BatchExecutor<BatchObject> testBatchExecutor = new BatchExecutor<>(BatchObject.class.getName(), "testBatchCancel", 10L, null, null,
+				Duration.ofMillis(100), Duration.ofMinutes(1), Duration.ofMinutes(15), "batchTestService", null, null, null, null);
 		final String batchKey = this.batchService.getKey(testBatchExecutor.getKeySuffix());
 
 		// Record should not exist.
@@ -310,7 +307,7 @@ public class BatchServiceTest extends SpringTestHelper {
 		// Runs the clock forward and executes the batch again (now with a bigger delay
 		// so it should not finish in time).
 		this.batchService.checkAll();
-		this.batchService.start(testBatchExecutor, false);
+		this.batchService.start(testBatchExecutor, false, false);
 		this.batchService.checkAll();
 
 		// Waits a bit and cancels.
@@ -344,6 +341,41 @@ public class BatchServiceTest extends SpringTestHelper {
 		}
 		catch (final Exception exception) {
 		}
+
+	}
+
+	/** Tests executing the batch within a specific time. */
+	@Test
+	@SuppressWarnings("unchecked")
+	public void testBatchWithExpectedSize() throws Exception {
+
+		// Starts the batch.
+		final BatchExecutor<BatchObject> testBatchExecutor = new BatchExecutor<>(BatchObject.class.getName(), "testBatchCancel", 10L, 100L,
+				Duration.ofSeconds(20), "batchTestService", null, null);
+		final String batchKey = this.batchService.getKey(testBatchExecutor.getKeySuffix());
+		this.batchService.start(testBatchExecutor, false, false);
+
+		// Waits until batch is finished.
+		TestHelper.waitUntilValid(() -> {
+			try {
+				return (BatchExecutor<BatchObject>) this.keyValueService.findById(batchKey, LockBehavior.NO_LOCK, false).getValue();
+			}
+			catch (final BusinessException exception) {
+				return null;
+			}
+		}, record -> (record != null) && (record.getLastFinishedAt() != null),
+				((Long) testBatchExecutor.getTryToFinishWithin().plusSeconds(1L).toMillis()).intValue(), TestHelper.VERY_SHORT_WAIT);
+		final BatchExecutor<BatchObject> batchRecord = (BatchExecutor<BatchObject>) this.keyValueService.findById(batchKey, LockBehavior.NO_LOCK, false)
+				.getValue();
+		Assertions.assertNotNull(batchRecord.getLastStartedAt());
+		Assertions.assertNotNull(batchRecord.getLastProcessed());
+		Assertions.assertNotNull(batchRecord.getLastFinishedAt());
+		Assertions.assertTrue(batchRecord.isFinished());
+
+		// Validates the batch was finished close enough to specified time.
+		final Long absoluteMillisDifferenceFromExpected = Math.abs(
+				batchRecord.getLastStartedAt().until(batchRecord.getLastFinishedAt(), ChronoUnit.MILLIS) - testBatchExecutor.getTryToFinishWithin().toMillis());
+		Assertions.assertTrue(absoluteMillisDifferenceFromExpected < 150);
 
 	}
 

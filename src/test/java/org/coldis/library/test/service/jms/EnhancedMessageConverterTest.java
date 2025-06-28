@@ -5,7 +5,6 @@ import java.util.Objects;
 
 import org.coldis.library.helper.RandomHelper;
 import org.coldis.library.serialization.ObjectMapperHelper;
-import org.coldis.library.service.cache.CacheHelper;
 import org.coldis.library.service.helper.MultiLayerSessionHelper;
 import org.coldis.library.service.jms.EnhancedJmsMessageConverter;
 import org.coldis.library.service.jms.JmsConverterProperties;
@@ -25,6 +24,7 @@ import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.context.SpringBootTest.WebEnvironment;
 import org.springframework.jms.annotation.JmsListener;
 import org.springframework.jms.core.JmsTemplate;
+import org.springframework.test.annotation.DirtiesContext;
 import org.testcontainers.containers.GenericContainer;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -38,6 +38,7 @@ import jakarta.jms.Message;
 @ExtendWith(StartTestWithContainerExtension.class)
 @SpringBootTest(webEnvironment = WebEnvironment.RANDOM_PORT)
 @ExtendWith(StopTestWithContainerExtension.class)
+@DirtiesContext(classMode = DirtiesContext.ClassMode.AFTER_CLASS)
 public class EnhancedMessageConverterTest extends SpringTestHelper {
 
 	/**
@@ -119,7 +120,7 @@ public class EnhancedMessageConverterTest extends SpringTestHelper {
 		EnhancedMessageConverterTest.currentTestMessage = null;
 		EnhancedMessageConverterTest.asyncHops = 0L;
 		this.jmsTemplate.setMessageConverter(this.enhancedJmsMessageConverter);
-		enhancedJmsMessageConverter.clearPreferredClassesCache();
+		this.enhancedJmsMessageConverter.clearPreferredClassesCache();
 		this.jmsConverterProperties.setMaximumAsyncHops(103L);
 		this.jmsConverterProperties.setOriginalTypePrecedence(true);
 

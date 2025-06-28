@@ -60,7 +60,7 @@ public class DtoTestObjectDto implements Serializable {
 	 */
 	
 	public java.lang.Long getId() {
-		return id;
+		return  id ;
 	}
 	
 	/**
@@ -90,7 +90,7 @@ public class DtoTestObjectDto implements Serializable {
 	 */
 	
 	public static java.lang.String getTest5() {
-		return test5;
+		return  test5 ;
 	}
 	
 	/**
@@ -99,7 +99,7 @@ public class DtoTestObjectDto implements Serializable {
 	 */
 	
 	public int getTest7() {
-		return test7;
+		return  test7 ;
 	}
 	
 	/**
@@ -129,7 +129,7 @@ public class DtoTestObjectDto implements Serializable {
 	 */
 	
 	public int[] getTest88() {
-		return test88;
+		return  test88 ;
 	}
 	
 	/**
@@ -159,7 +159,7 @@ public class DtoTestObjectDto implements Serializable {
 	 */
 	
 	public java.lang.Integer getTest9() {
-		return test9;
+		return  test9 ;
 	}
 	
 	/**
@@ -189,7 +189,7 @@ public class DtoTestObjectDto implements Serializable {
 	 */
 	
 	public java.lang.String getTypeName() {
-		return typeName;
+		return  typeName ;
 	}
 	
 

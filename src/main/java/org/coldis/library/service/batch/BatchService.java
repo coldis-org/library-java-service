@@ -163,7 +163,7 @@ public class BatchService {
 			propagation = Propagation.REQUIRED,
 			timeout = 360
 	)
-	protected <Type> Type executeStep(
+	protected <Type> Type executeBatch(
 			final BatchExecutor<Type> batchExecutorValue) throws BusinessException {
 
 		// Last processed.
@@ -272,8 +272,11 @@ public class BatchService {
 					}
 
 					// Runs the batch until the next id does not change.
-					final Type nextLastProcessed = this.executeStep(batchExecutorValue);
-					batchExecutorValue.setLastStepFinishedAt(DateTimeHelper.getCurrentLocalDateTime());
+					final LocalDateTime batchStartedAt = DateTimeHelper.getCurrentLocalDateTime();
+					final Type nextLastProcessed = this.executeBatch(batchExecutorValue);
+					final LocalDateTime batchFinishedAt = DateTimeHelper.getCurrentLocalDateTime();
+					batchExecutorValue.setLastTotalProcessingTime(Duration.ofMillis(batchStartedAt.until(batchFinishedAt, ChronoUnit.MILLIS)));
+					batchExecutorValue.setLastBatchFinishedAt(batchFinishedAt);
 					batchExecutorValue.setLastProcessed(nextLastProcessed);
 					previousLastProcessed = currentLastProcessed;
 					currentLastProcessed = nextLastProcessed;
@@ -297,7 +300,7 @@ public class BatchService {
 					BatchService.LOGGER.error("Error processing batch '" + key + "': " + throwable.getLocalizedMessage());
 					BatchService.LOGGER.debug("Error processing batch '" + key + "'.", throwable);
 					if (!(throwable instanceof BatchExpiredException)) {
-						this.queueResumeAsync(keySuffix, batchExecutorValue.getNextBatchStartingAt().plus(batchExecutorValue.getDelayBetweenRuns()));
+						this.queueResumeAsync(keySuffix, DateTimeHelper.getCurrentLocalDateTime().plus(batchExecutorValue.getActualDelayBetweenRuns()));
 					}
 					throw throwable;
 				}
@@ -358,7 +361,9 @@ public class BatchService {
 			@RequestBody
 			final BatchExecutor<Type> executor,
 			@RequestParam(defaultValue = "false")
-			final Boolean restart) throws BusinessException {
+			final Boolean restart,
+			@RequestParam(defaultValue = "true")
+			final Boolean useLastCountAsExpected) throws BusinessException {
 
 		// Gets (and locks) the executor.
 		final String key = this.getKey(executor.getKeySuffix());
@@ -369,14 +374,13 @@ public class BatchService {
 			batchExecutor.setValue(new BatchExecutor<>());
 		}
 		// Updates fields.
-		BeanUtils.copyProperties(executor, batchExecutor.getValue(), "lastProcessed", "lastStartedAt", "lastFinishedAt", "lastCancelledAt",
+		BeanUtils.copyProperties(executor, batchExecutor.getValue(), "lastStartedAt", "lastProcessed", "lastFinishedAt", "lastCancelledAt",
 				"lastProcessedCount");
-
 		// If the executor should be restarted, resets it.
 		@SuppressWarnings("unchecked")
 		final BatchExecutor<Type> batchExecutorValue = (BatchExecutor<Type>) batchExecutor.getValue();
 		if (restart || batchExecutorValue.isExpired() || batchExecutorValue.isFinished()) {
-			batchExecutorValue.reset();
+			batchExecutorValue.reset(useLastCountAsExpected);
 		}
 
 		// Saves and resumes the batch.
