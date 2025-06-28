@@ -351,7 +351,7 @@ public class BatchServiceTest extends SpringTestHelper {
 
 		// Starts the batch.
 		final BatchExecutor<BatchObject> testBatchExecutor = new BatchExecutor<>(BatchObject.class.getName(), "testBatchCancel", 10L, 100L,
-				Duration.ofSeconds(20), "batchTestService", null, null);
+				Duration.ofSeconds(20), null, "batchTestService", null, null);
 		final String batchKey = this.batchService.getKey(testBatchExecutor.getKeySuffix());
 		this.batchService.start(testBatchExecutor, false, false);
 

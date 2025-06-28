@@ -163,12 +163,26 @@ public class BatchExecutor<Type> implements Typable {
 		this.itemTypeName = itemType.getName();
 	}
 
+	/**
+	 * Constructor with arguments.
+	 *
+	 * @param itemTypeName        Item type name.
+	 * @param keySuffix           Key suffix.
+	 * @param size                Batch size.
+	 * @param expectedCount       Expected processing count.
+	 * @param tryToFinishWithin   Tries finishing within.
+	 * @param delayBetweenRuns    Delay to add between runs.
+	 * @param actionBeanName      Action bean name.
+	 * @param actionDelegateMethods Action delegate methods.
+	 * @param arguments           Arguments used to get next batch.
+	 */
 	public BatchExecutor(
 			final String itemTypeName,
 			final String keySuffix,
 			final Long size,
 			final Long expectedCount,
 			final Duration tryToFinishWithin,
+			final Duration delayBetweenRuns,
 			final String actionBeanName,
 			final Map<BatchAction, String> actionDelegateMethods,
 			final Map<String, String> arguments) {
@@ -178,11 +192,29 @@ public class BatchExecutor<Type> implements Typable {
 		this.size = size;
 		this.expectedCount = expectedCount;
 		this.tryToFinishWithin = tryToFinishWithin;
+		this.delayBetweenRuns = delayBetweenRuns;
 		this.actionBeanName = actionBeanName;
 		this.actionDelegateMethods = actionDelegateMethods;
 		this.arguments = arguments;
 	}
 
+	/**
+	 * Constructor with arguments.
+	 *
+	 * @param itemTypeName        Item type name.
+	 * @param keySuffix           Key suffix.
+	 * @param size                Batch size.
+	 * @param expectedCount       Expected processing count.
+	 * @param tryToFinishWithin   Tries finishing within.
+	 * @param delayBetweenRuns    Delay to add between runs.
+	 * @param finishWithin        Maximum interval to finish the batch.
+	 * @param cleansWithin        Maximum interval to keep the batch persisted.
+	 * @param actionBeanName      Action bean name.
+	 * @param actionDelegateMethods Action delegate methods.
+	 * @param messagesTemplates   Messages templates.
+	 * @param slackChannels       Slack channels to communicate.
+	 * @param arguments           Arguments used to get next batch.
+	 */
 	public BatchExecutor(
 			final String itemTypeName,
 			final String keySuffix,
