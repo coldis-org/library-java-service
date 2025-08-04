@@ -166,15 +166,15 @@ public class BatchExecutor<Type> implements Typable {
 	/**
 	 * Constructor with arguments.
 	 *
-	 * @param itemTypeName        Item type name.
-	 * @param keySuffix           Key suffix.
-	 * @param size                Batch size.
-	 * @param expectedCount       Expected processing count.
-	 * @param tryToFinishWithin   Tries finishing within.
-	 * @param delayBetweenRuns    Delay to add between runs.
-	 * @param actionBeanName      Action bean name.
+	 * @param itemTypeName          Item type name.
+	 * @param keySuffix             Key suffix.
+	 * @param size                  Batch size.
+	 * @param expectedCount         Expected processing count.
+	 * @param tryToFinishWithin     Tries finishing within.
+	 * @param delayBetweenRuns      Delay to add between runs.
+	 * @param actionBeanName        Action bean name.
 	 * @param actionDelegateMethods Action delegate methods.
-	 * @param arguments           Arguments used to get next batch.
+	 * @param arguments             Arguments used to get next batch.
 	 */
 	public BatchExecutor(
 			final String itemTypeName,
@@ -201,19 +201,19 @@ public class BatchExecutor<Type> implements Typable {
 	/**
 	 * Constructor with arguments.
 	 *
-	 * @param itemTypeName        Item type name.
-	 * @param keySuffix           Key suffix.
-	 * @param size                Batch size.
-	 * @param expectedCount       Expected processing count.
-	 * @param tryToFinishWithin   Tries finishing within.
-	 * @param delayBetweenRuns    Delay to add between runs.
-	 * @param finishWithin        Maximum interval to finish the batch.
-	 * @param cleansWithin        Maximum interval to keep the batch persisted.
-	 * @param actionBeanName      Action bean name.
+	 * @param itemTypeName          Item type name.
+	 * @param keySuffix             Key suffix.
+	 * @param size                  Batch size.
+	 * @param expectedCount         Expected processing count.
+	 * @param tryToFinishWithin     Tries finishing within.
+	 * @param delayBetweenRuns      Delay to add between runs.
+	 * @param finishWithin          Maximum interval to finish the batch.
+	 * @param cleansWithin          Maximum interval to keep the batch persisted.
+	 * @param actionBeanName        Action bean name.
 	 * @param actionDelegateMethods Action delegate methods.
-	 * @param messagesTemplates   Messages templates.
-	 * @param slackChannels       Slack channels to communicate.
-	 * @param arguments           Arguments used to get next batch.
+	 * @param messagesTemplates     Messages templates.
+	 * @param slackChannels         Slack channels to communicate.
+	 * @param arguments             Arguments used to get next batch.
 	 */
 	public BatchExecutor(
 			final String itemTypeName,
@@ -762,7 +762,7 @@ public class BatchExecutor<Type> implements Typable {
 					.dividedBy(this.getLastProcessedCount() <= 0 ? 1 : this.getLastProcessedCount());
 			actualDelayBetweenRuns = (expectedLeftCount <= 0 ? Duration.ofMillis(100)
 					: this.getTryToFinishWithin().minusMillis(this.getLastStartedAt().until(DateTimeHelper.getCurrentLocalDateTime(), ChronoUnit.MILLIS))
-							.minus(expectedLeftProcessingDuration).dividedBy(expectedLeftBatchCount));
+							.minus(expectedLeftProcessingDuration).dividedBy(expectedLeftBatchCount <= 0 ? 10 : expectedLeftBatchCount));
 		}
 		return actualDelayBetweenRuns;
 	}
