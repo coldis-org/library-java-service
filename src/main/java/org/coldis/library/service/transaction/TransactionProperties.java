@@ -46,6 +46,19 @@ public class TransactionProperties {
 	private Integer longestTimeout;
 
 	/**
+	 * Minutes timeout.
+	 */
+	private Integer minutesTimeout;
+
+	/** Hour timeout. */
+	private Integer hourTimeout;
+
+	/**
+	 * Hours timeout.
+	 */
+	private Integer hoursTimeout;
+
+	/**
 	 * Gets the shortestTimeout.
 	 *
 	 * @return The shortestTimeout.
@@ -176,6 +189,63 @@ public class TransactionProperties {
 	public void setLongestTimeout(
 			final Integer longestTimeout) {
 		this.longestTimeout = longestTimeout;
+	}
+
+	/**
+	 * Gets the minutesTimeout.
+	 *
+	 * @return The minutesTimeout.
+	 */
+	public Integer getMinutesTimeout() {
+		return this.minutesTimeout;
+	}
+
+	/**
+	 * Sets the minutesTimeout.
+	 *
+	 * @param minutesTimeout New minutesTimeout.
+	 */
+	public void setMinutesTimeout(
+			final Integer minutesTimeout) {
+		this.minutesTimeout = minutesTimeout;
+	}
+
+	/**
+	 * Gets the hourTimeout.
+	 *
+	 * @return The hourTimeout.
+	 */
+	public Integer getHourTimeout() {
+		return this.hourTimeout;
+	}
+
+	/**
+	 * Sets the hourTimeout.
+	 *
+	 * @param hourTimeout New hourTimeout.
+	 */
+	public void setHourTimeout(
+			final Integer hourTimeout) {
+		this.hourTimeout = hourTimeout;
+	}
+
+	/**
+	 * Gets the hoursTimeout.
+	 *
+	 * @return The hoursTimeout.
+	 */
+	public Integer getHoursTimeout() {
+		return this.hoursTimeout;
+	}
+
+	/**
+	 * Sets the hoursTimeout.
+	 *
+	 * @param hoursTimeout New hoursTimeout.
+	 */
+	public void setHoursTimeout(
+			final Integer hoursTimeout) {
+		this.hoursTimeout = hoursTimeout;
 	}
 
 }
