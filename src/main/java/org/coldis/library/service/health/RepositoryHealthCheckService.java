@@ -33,7 +33,7 @@ public class RepositoryHealthCheckService {
 	 */
 	@Transactional(
 			propagation = Propagation.REQUIRED,
-			timeout = 5
+			timeoutString = "${org.coldis.library.service.transaction.longer-timeout}"
 	)
 	public HealthCheckValue touch() throws BusinessException {
 		KeyValue<Typable> healthCheckKeyValue = null;

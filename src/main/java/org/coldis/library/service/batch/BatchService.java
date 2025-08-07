@@ -161,7 +161,7 @@ public class BatchService {
 	 */
 	@Transactional(
 			propagation = Propagation.REQUIRED,
-			timeout = 360
+			timeoutString = "${org.coldis.library.service.transaction.longest-timeout}"
 	)
 	protected <Type> Type executeBatch(
 			final BatchExecutor<Type> batchExecutorValue) throws BusinessException {
@@ -194,7 +194,10 @@ public class BatchService {
 	 * @param  key               The key.
 	 * @throws BusinessException If the batch cannot be found.
 	 */
-	@Transactional(propagation = Propagation.REQUIRED)
+	@Transactional(
+			propagation = Propagation.REQUIRED,
+			timeoutString = "${org.coldis.library.service.transaction.hour-timeout}"
+	)
 	@JmsListener(
 			destination = BatchService.DELETE_QUEUE,
 			concurrency = "1-3"
@@ -233,7 +236,7 @@ public class BatchService {
 	@Transactional(
 			propagation = Propagation.REQUIRED,
 			noRollbackFor = Throwable.class,
-			timeout = 3600
+			timeoutString = "${org.coldis.library.service.transaction.hour-timeout}"
 	)
 	@RequestMapping(
 			method = RequestMethod.PUT,
@@ -315,7 +318,10 @@ public class BatchService {
 	 * @param  executor          Executor.
 	 * @throws BusinessException If the batch fails.
 	 */
-	@Transactional(propagation = Propagation.REQUIRED)
+	@Transactional(
+			propagation = Propagation.REQUIRED,
+			timeoutString = "${org.coldis.library.service.transaction.hour-timeout}"
+	)
 	@JmsListener(
 			destination = BatchService.RESUME_QUEUE,
 			concurrency = "${org.coldis.configuration.service.batch-concurrency:1-17}"
@@ -354,7 +360,7 @@ public class BatchService {
 	@Transactional(
 			propagation = Propagation.REQUIRED,
 			noRollbackFor = Throwable.class,
-			timeout = 3600
+			timeoutString = "${org.coldis.library.service.transaction.hour-timeout}"
 	)
 	@RequestMapping(method = RequestMethod.POST)
 	public <Type> void start(
@@ -397,7 +403,7 @@ public class BatchService {
 	@Transactional(
 			propagation = Propagation.REQUIRED,
 			noRollbackFor = Throwable.class,
-			timeout = 3600
+			timeoutString = "${org.coldis.library.service.transaction.hour-timeout}"
 	)
 	@RequestMapping(
 			method = RequestMethod.DELETE,
