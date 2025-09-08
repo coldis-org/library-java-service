@@ -3,11 +3,10 @@ package org.coldis.library.test.service.security;
 import org.coldis.library.exception.BusinessException;
 import org.coldis.library.exception.IntegrationException;
 import org.coldis.library.service.client.GenericRestServiceClient;
-import org.coldis.library.test.SpringTestHelper;
 import org.coldis.library.test.StartTestWithContainerExtension;
-import org.coldis.library.test.StopTestWithContainerExtension;
 import org.coldis.library.test.TestHelper;
 import org.coldis.library.test.TestWithContainer;
+import org.coldis.library.test.service.ContainerTestHelper;
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -26,16 +25,15 @@ import org.testcontainers.containers.GenericContainer;
 /**
  * Security test.
  */
-@TestWithContainer
+@TestWithContainer(reuse = true)
 @ExtendWith(StartTestWithContainerExtension.class)
 @SpringBootTest(
 		webEnvironment = WebEnvironment.RANDOM_PORT,
 		properties = { "org.coldis.library.service.security.deny-non-browser-requests=true",
 				"org.coldis.library.service.security.ignore-non-browser-requests-paths=/exception/business" }
 )
-@ExtendWith(StopTestWithContainerExtension.class)
 @DirtiesContext(classMode = DirtiesContext.ClassMode.AFTER_CLASS)
-public class BrowserRequestSecurityTest extends SpringTestHelper {
+public class BrowserRequestSecurityTest extends ContainerTestHelper {
 
 	/**
 	 * Redis container.
@@ -89,11 +87,11 @@ public class BrowserRequestSecurityTest extends SpringTestHelper {
 		// Non-ignored paths should be unauthorized if a non-browser request.
 		try {
 			exception = null;
-			this.genericRestServiceClient.executeOperation(
-					this.valueResolver.resolveStringValue("http://localhost:${local.server.port:9090}") + "/exception/integration", HttpMethod.POST,
-					GenericRestServiceClient.addHeaders(null, true, HttpHeaders.USER_AGENT,
-							"insomnia/10.1.1"),
-					null, null, new ParameterizedTypeReference<Void>() {}).getBody();
+			this.genericRestServiceClient
+					.executeOperation(this.valueResolver.resolveStringValue("http://localhost:${local.server.port:9090}") + "/exception/integration",
+							HttpMethod.POST, GenericRestServiceClient.addHeaders(null, true, HttpHeaders.USER_AGENT, "insomnia/10.1.1"), null, null,
+							new ParameterizedTypeReference<Void>() {})
+					.getBody();
 		}
 		catch (final Exception thrownException) {
 			exception = thrownException;

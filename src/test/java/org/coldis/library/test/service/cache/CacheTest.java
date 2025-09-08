@@ -1,10 +1,10 @@
 package org.coldis.library.test.service.cache;
 
-import org.coldis.library.test.SpringTestHelper;
 import org.coldis.library.test.StartTestWithContainerExtension;
 import org.coldis.library.test.StopTestWithContainerExtension;
 import org.coldis.library.test.TestHelper;
 import org.coldis.library.test.TestWithContainer;
+import org.coldis.library.test.service.ContainerTestHelper;
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -18,12 +18,11 @@ import org.testcontainers.containers.GenericContainer;
 /**
  * Test.
  */
-@TestWithContainer
+@TestWithContainer(reuse = true)
 @ExtendWith(StartTestWithContainerExtension.class)
 @SpringBootTest(webEnvironment = WebEnvironment.RANDOM_PORT)
-@ExtendWith(StopTestWithContainerExtension.class)
 @DirtiesContext(classMode = DirtiesContext.ClassMode.AFTER_CLASS)
-public class CacheTest extends SpringTestHelper {
+public class CacheTest extends ContainerTestHelper {
 
 	/**
 	 * Redis container.

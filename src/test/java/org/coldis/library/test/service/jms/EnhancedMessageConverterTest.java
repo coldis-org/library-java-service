@@ -8,11 +8,10 @@ import org.coldis.library.serialization.ObjectMapperHelper;
 import org.coldis.library.service.helper.MultiLayerSessionHelper;
 import org.coldis.library.service.jms.EnhancedJmsMessageConverter;
 import org.coldis.library.service.jms.JmsConverterProperties;
-import org.coldis.library.test.SpringTestHelper;
 import org.coldis.library.test.StartTestWithContainerExtension;
-import org.coldis.library.test.StopTestWithContainerExtension;
 import org.coldis.library.test.TestHelper;
 import org.coldis.library.test.TestWithContainer;
+import org.coldis.library.test.service.ContainerTestHelper;
 import org.coldis.library.thread.ThreadMapContextHolder;
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.BeforeEach;
@@ -34,12 +33,11 @@ import jakarta.jms.Message;
 /**
  * JMS message converter test.
  */
-@TestWithContainer
+@TestWithContainer(reuse = true)
 @ExtendWith(StartTestWithContainerExtension.class)
 @SpringBootTest(webEnvironment = WebEnvironment.RANDOM_PORT)
-@ExtendWith(StopTestWithContainerExtension.class)
 @DirtiesContext(classMode = DirtiesContext.ClassMode.AFTER_CLASS)
-public class EnhancedMessageConverterTest extends SpringTestHelper {
+public class EnhancedMessageConverterTest extends ContainerTestHelper {
 
 	/**
 	 * Redis container.

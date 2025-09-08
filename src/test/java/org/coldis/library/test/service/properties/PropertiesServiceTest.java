@@ -4,11 +4,10 @@ import java.sql.Connection;
 
 import javax.sql.DataSource;
 
-import org.coldis.library.test.SpringTestHelper;
 import org.coldis.library.test.StartTestWithContainerExtension;
-import org.coldis.library.test.StopTestWithContainerExtension;
 import org.coldis.library.test.TestHelper;
 import org.coldis.library.test.TestWithContainer;
+import org.coldis.library.test.service.ContainerTestHelper;
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -29,12 +28,11 @@ import com.zaxxer.hikari.HikariDataSource;
 /**
  * Properties service test.
  */
-@TestWithContainer
+@TestWithContainer(reuse = true)
 @ExtendWith(StartTestWithContainerExtension.class)
 @SpringBootTest(webEnvironment = WebEnvironment.RANDOM_PORT)
-@ExtendWith(StopTestWithContainerExtension.class)
 @DirtiesContext(classMode = DirtiesContext.ClassMode.AFTER_CLASS)
-public class PropertiesServiceTest extends SpringTestHelper {
+public class PropertiesServiceTest extends ContainerTestHelper {
 
 	/**
 	 * Logger.
@@ -77,13 +75,13 @@ public class PropertiesServiceTest extends SpringTestHelper {
 	/** Datasource. */
 	@Autowired
 	private DataSource dataSource;
-	
+
 	/**
 	 * JMS connection factory.
 	 */
 	@Autowired
 	private JmsPoolConnectionFactory connectionFactory;
-	
+
 	/** Jms template. */
 	@Autowired
 	private JmsTemplate jmsTemplate;
@@ -146,13 +144,13 @@ public class PropertiesServiceTest extends SpringTestHelper {
 		final boolean execute = this.dataSource.getConnection().prepareCall("SELECT 1").execute();
 
 		// Updates property to an invalid database connection.
-		this.restTemplate.put("http://localhost:" + this.port + "/properties/string/dataSource/pool.dataSource.jdbcUrl?fieldAccess=true", "jdbc:postgresql://localhost:1234/test",
-				Void.class);
+		this.restTemplate.put("http://localhost:" + this.port + "/properties/string/dataSource/pool.dataSource.jdbcUrl?fieldAccess=true",
+				"jdbc:postgresql://localhost:1234/test", Void.class);
 
 		// Makes sure the connection is not valid.
 		Assertions.assertTrue(TestHelper.waitUntilValid(() -> {
 			try {
-				LOGGER.info("Testing database connection...");
+				PropertiesServiceTest.LOGGER.info("Testing database connection...");
 				final Connection connection = this.dataSource.getConnection();
 				connection.prepareCall("SELECT 1").execute();
 				((HikariDataSource) this.dataSource).evictConnection(connection);
@@ -163,15 +161,15 @@ public class PropertiesServiceTest extends SpringTestHelper {
 				return Boolean.TRUE;
 			}
 		}, valid -> valid, TestHelper.VERY_LONG_WAIT, TestHelper.VERY_SHORT_WAIT));
-		
+
 		// Updates property to a valid database connection.
-		this.restTemplate.put("http://localhost:" + this.port + "/properties/string/dataSource/pool.dataSource.jdbcUrl?fieldAccess=true", "jdbc:postgresql://localhost:"+POSTGRES_CONTAINER.getMappedPort(5432)+"/test",
-				Void.class);
-		
+		this.restTemplate.put("http://localhost:" + this.port + "/properties/string/dataSource/pool.dataSource.jdbcUrl?fieldAccess=true",
+				"jdbc:postgresql://localhost:" + PropertiesServiceTest.POSTGRES_CONTAINER.getMappedPort(5432) + "/test", Void.class);
+
 		// Makes sure the connection is valid.
 		Assertions.assertTrue(TestHelper.waitUntilValid(() -> {
 			try {
-				LOGGER.info("Testing database connection...");
+				PropertiesServiceTest.LOGGER.info("Testing database connection...");
 				final Connection connection = this.dataSource.getConnection();
 				connection.prepareCall("SELECT 1").execute();
 				((HikariDataSource) this.dataSource).evictConnection(connection);
@@ -183,9 +181,7 @@ public class PropertiesServiceTest extends SpringTestHelper {
 			}
 		}, valid -> valid, TestHelper.VERY_LONG_WAIT, TestHelper.VERY_SHORT_WAIT));
 
-
 	}
-
 
 	/**
 	 * Tests updating Artemis connection.
@@ -195,25 +191,33 @@ public class PropertiesServiceTest extends SpringTestHelper {
 	@Test
 	public void testArtemisConnectionUpdate() throws Exception {
 		// Validates initial property value.
-		jmsTemplate.convertAndSend("testQueue", "testMessage");
-		
+		this.jmsTemplate.convertAndSend("testQueue", "testMessage");
+
 		// Updates property to an invalid database connection.
-		this.restTemplate.put("http://localhost:" + this.port + "/properties/string/pooledJmsConnectionFactory/connectionFactory.serverLocator.topologyArray.0.a.params.host?fieldAccess=true", "192.168.0.200",
-				Void.class);
-		this.restTemplate.put("http://localhost:" + this.port + "/properties/string/pooledJmsConnectionFactory/connectionFactory.serverLocator.initialConnectors.0.params.host?fieldAccess=true", "192.168.0.200",
-				Void.class);
-		this.restTemplate.put("http://localhost:" + this.port + "/properties/string/pooledJmsConnectionFactory/connectionFactory.serverLocator.topologyArray.0.a.params.port?fieldAccess=true", "1234",
-				Void.class);
-		this.restTemplate.put("http://localhost:" + this.port + "/properties/string/pooledJmsConnectionFactory/connectionFactory.serverLocator.initialConnectors.0.params.port?fieldAccess=true", "1234",
-				Void.class);
-		connectionFactory.clear();
+		this.restTemplate.put(
+				"http://localhost:" + this.port
+						+ "/properties/string/pooledJmsConnectionFactory/connectionFactory.serverLocator.topologyArray.0.a.params.host?fieldAccess=true",
+				"192.168.0.200", Void.class);
+		this.restTemplate.put(
+				"http://localhost:" + this.port
+						+ "/properties/string/pooledJmsConnectionFactory/connectionFactory.serverLocator.initialConnectors.0.params.host?fieldAccess=true",
+				"192.168.0.200", Void.class);
+		this.restTemplate.put(
+				"http://localhost:" + this.port
+						+ "/properties/string/pooledJmsConnectionFactory/connectionFactory.serverLocator.topologyArray.0.a.params.port?fieldAccess=true",
+				"1234", Void.class);
+		this.restTemplate.put(
+				"http://localhost:" + this.port
+						+ "/properties/string/pooledJmsConnectionFactory/connectionFactory.serverLocator.initialConnectors.0.params.port?fieldAccess=true",
+				"1234", Void.class);
+		this.connectionFactory.clear();
 
 		// Makes sure the connection is not valid.
 		Assertions.assertTrue(TestHelper.waitUntilValid(() -> {
 			try {
-				LOGGER.info("Testing Artemis connection...");
-				connectionFactory.clear();
-				jmsTemplate.convertAndSend("testQueue", "testMessage");
+				PropertiesServiceTest.LOGGER.info("Testing Artemis connection...");
+				this.connectionFactory.clear();
+				this.jmsTemplate.convertAndSend("testQueue", "testMessage");
 				return Boolean.FALSE;
 			}
 			catch (final Exception exception) {
@@ -221,24 +225,31 @@ public class PropertiesServiceTest extends SpringTestHelper {
 				return Boolean.TRUE;
 			}
 		}, valid -> valid, TestHelper.VERY_LONG_WAIT, TestHelper.VERY_SHORT_WAIT));
-		
-		// Updates property to a valid database connection.
-		this.restTemplate.put("http://localhost:" + this.port + "/properties/string/pooledJmsConnectionFactory/connectionFactory.serverLocator.topologyArray.0.a.params.host?fieldAccess=true", "127.0.0.1",
-				Void.class);
-		this.restTemplate.put("http://localhost:" + this.port + "/properties/string/pooledJmsConnectionFactory/connectionFactory.serverLocator.initialConnectors.0.params.host?fieldAccess=true", "127.0.0.1",
-				Void.class);
-		this.restTemplate.put("http://localhost:" + this.port + "/properties/string/pooledJmsConnectionFactory/connectionFactory.serverLocator.topologyArray.0.a.params.port?fieldAccess=true", ARTEMIS_CONTAINER.getMappedPort(61616).toString(),
-				Void.class);
-		this.restTemplate.put("http://localhost:" + this.port + "/properties/string/pooledJmsConnectionFactory/connectionFactory.serverLocator.initialConnectors.0.params.port?fieldAccess=true", ARTEMIS_CONTAINER.getMappedPort(61616).toString(),
-				Void.class);
-		connectionFactory.clear();
 
-		
+		// Updates property to a valid database connection.
+		this.restTemplate.put(
+				"http://localhost:" + this.port
+						+ "/properties/string/pooledJmsConnectionFactory/connectionFactory.serverLocator.topologyArray.0.a.params.host?fieldAccess=true",
+				"127.0.0.1", Void.class);
+		this.restTemplate.put(
+				"http://localhost:" + this.port
+						+ "/properties/string/pooledJmsConnectionFactory/connectionFactory.serverLocator.initialConnectors.0.params.host?fieldAccess=true",
+				"127.0.0.1", Void.class);
+		this.restTemplate.put(
+				"http://localhost:" + this.port
+						+ "/properties/string/pooledJmsConnectionFactory/connectionFactory.serverLocator.topologyArray.0.a.params.port?fieldAccess=true",
+				PropertiesServiceTest.ARTEMIS_CONTAINER.getMappedPort(61616).toString(), Void.class);
+		this.restTemplate.put(
+				"http://localhost:" + this.port
+						+ "/properties/string/pooledJmsConnectionFactory/connectionFactory.serverLocator.initialConnectors.0.params.port?fieldAccess=true",
+				PropertiesServiceTest.ARTEMIS_CONTAINER.getMappedPort(61616).toString(), Void.class);
+		this.connectionFactory.clear();
+
 		// Makes sure the connection is valid.
 		Assertions.assertTrue(TestHelper.waitUntilValid(() -> {
 			try {
-				LOGGER.info("Testing Artemis connection...");
-				jmsTemplate.convertAndSend("testQueue", "testMessage");
+				PropertiesServiceTest.LOGGER.info("Testing Artemis connection...");
+				this.jmsTemplate.convertAndSend("testQueue", "testMessage");
 				return Boolean.TRUE;
 			}
 			catch (final Exception exception) {
@@ -246,7 +257,6 @@ public class PropertiesServiceTest extends SpringTestHelper {
 				return Boolean.FALSE;
 			}
 		}, valid -> valid, TestHelper.VERY_LONG_WAIT, TestHelper.VERY_SHORT_WAIT));
-
 
 	}
 

@@ -6,11 +6,10 @@ import java.util.Map;
 import org.coldis.library.exception.BusinessException;
 import org.coldis.library.exception.IntegrationException;
 import org.coldis.library.service.client.GenericRestServiceClient;
-import org.coldis.library.test.SpringTestHelper;
 import org.coldis.library.test.StartTestWithContainerExtension;
-import org.coldis.library.test.StopTestWithContainerExtension;
 import org.coldis.library.test.TestHelper;
 import org.coldis.library.test.TestWithContainer;
+import org.coldis.library.test.service.ContainerTestHelper;
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -29,15 +28,14 @@ import org.testcontainers.containers.GenericContainer;
 /**
  * Security test.
  */
-@TestWithContainer
+@TestWithContainer(reuse = true)
 @ExtendWith(StartTestWithContainerExtension.class)
 @SpringBootTest(
 		webEnvironment = WebEnvironment.RANDOM_PORT,
 		properties = { "org.coldis.library.service.security.mandatory-headers=x-mandatory1,x-mandatory2=abc" }
 )
-@ExtendWith(StopTestWithContainerExtension.class)
 @DirtiesContext(classMode = DirtiesContext.ClassMode.AFTER_CLASS)
-public class MandatoryHeaderSecurityTest extends SpringTestHelper {
+public class MandatoryHeaderSecurityTest extends ContainerTestHelper {
 
 	/**
 	 * Redis container.

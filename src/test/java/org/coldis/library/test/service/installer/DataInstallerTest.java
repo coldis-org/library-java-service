@@ -6,11 +6,10 @@ import java.util.Objects;
 import org.apache.commons.lang3.ArrayUtils;
 import org.coldis.library.helper.DateTimeHelper;
 import org.coldis.library.service.installer.DataInstaller;
-import org.coldis.library.test.SpringTestHelper;
 import org.coldis.library.test.StartTestWithContainerExtension;
-import org.coldis.library.test.StopTestWithContainerExtension;
 import org.coldis.library.test.TestHelper;
 import org.coldis.library.test.TestWithContainer;
+import org.coldis.library.test.service.ContainerTestHelper;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.Test;
@@ -25,12 +24,11 @@ import org.testcontainers.containers.GenericContainer;
 /**
  * Data installer test.
  */
-@TestWithContainer
+@TestWithContainer(reuse = true)
 @ExtendWith(StartTestWithContainerExtension.class)
 @SpringBootTest(webEnvironment = WebEnvironment.RANDOM_PORT)
-@ExtendWith(StopTestWithContainerExtension.class)
 @DirtiesContext(classMode = DirtiesContext.ClassMode.AFTER_CLASS)
-public class DataInstallerTest extends SpringTestHelper {
+public class DataInstallerTest extends ContainerTestHelper {
 
 	/**
 	 * Redis container.
