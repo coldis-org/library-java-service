@@ -1,6 +1,7 @@
 package org.coldis.library.service.serialization;
 
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
 import java.util.stream.Collectors;
 
@@ -13,12 +14,12 @@ import org.coldis.library.service.localization.LocalizedMessageServiceComponent;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.util.LinkedMultiValueMap;
 import org.springframework.web.bind.annotation.ControllerAdvice;
 import org.springframework.web.bind.annotation.ExceptionHandler;
-import org.springframework.web.bind.annotation.ResponseBody;
-import org.springframework.web.bind.annotation.ResponseStatus;
 
 import jakarta.validation.ConstraintViolationException;
 
@@ -38,7 +39,7 @@ public class ControllerExceptionHandler {
 	 */
 	@Autowired
 	private LocalizedMessageServiceComponent messageService;
-	
+
 	/**
 	 * Enriches a message by its code and arguments.
 	 *
@@ -62,10 +63,8 @@ public class ControllerExceptionHandler {
 	 * @param  exception The exception to be processed.
 	 * @return           Response with the exception message.
 	 */
-	@ResponseBody
-	@ResponseStatus(HttpStatus.BAD_REQUEST)
 	@ExceptionHandler(ConstraintViolationException.class)
-	public SimpleMessage[] processValidationError(
+	public ResponseEntity<SimpleMessage[]> processValidationError(
 			final ConstraintViolationException exception) {
 		// Enriches the violation messages.
 		final List<SimpleMessage> violations = exception.getConstraintViolations().stream().map(violation -> {
@@ -88,7 +87,8 @@ public class ControllerExceptionHandler {
 						message,
 						messages) -> messages + message + "\n"),
 				exception);
-		return violations.toArray(new SimpleMessage[] {});
+		return new ResponseEntity<>(violations.toArray(new SimpleMessage[] {}), new LinkedMultiValueMap<>(Map.of(HttpHeaders.RETRY_AFTER, List.of("-1"))),
+				HttpStatus.BAD_REQUEST);
 	}
 
 	/**
@@ -104,7 +104,10 @@ public class ControllerExceptionHandler {
 		exception.getMessages().forEach(this::enrichMessage);
 		// Returns the message with the exception status code.
 		ControllerExceptionHandler.LOGGER.debug("Business exception returned.", exception);
-		return new ResponseEntity<>(exception.getMessages().toArray(new SimpleMessage[] {}), HttpStatus.valueOf(exception.getStatusCode()));
+		return new ResponseEntity<>(exception.getMessages().toArray(new SimpleMessage[] {}),
+				new LinkedMultiValueMap<>(
+						Map.of(HttpHeaders.RETRY_AFTER, List.of(exception.getRetryIn() == null ? "-1" : Objects.toString(exception.getRetryIn().toSeconds())))),
+				HttpStatus.valueOf(exception.getStatusCode()));
 	}
 
 	/**
@@ -120,7 +123,10 @@ public class ControllerExceptionHandler {
 		this.enrichMessage(exception.getInternalMessage());
 		// Returns the messages with the exception status code.
 		ControllerExceptionHandler.LOGGER.error("Integration exception returned.", exception);
-		return new ResponseEntity<>(new SimpleMessage[] { exception.getInternalMessage() }, HttpStatus.valueOf(exception.getStatusCode()));
+		return new ResponseEntity<>(new SimpleMessage[] { exception.getInternalMessage() },
+				new LinkedMultiValueMap<>(
+						Map.of(HttpHeaders.RETRY_AFTER, List.of(exception.getRetryIn() == null ? "-1" : Objects.toString(exception.getRetryIn().toSeconds())))),
+				HttpStatus.valueOf(exception.getStatusCode()));
 	}
 
 	/**
@@ -129,14 +135,14 @@ public class ControllerExceptionHandler {
 	 * @param  exception The exception to be processed.
 	 * @return           Response with the exception message.
 	 */
-	@ResponseBody
 	@ExceptionHandler(Throwable.class)
-	@ResponseStatus(HttpStatus.INTERNAL_SERVER_ERROR)
-	public SimpleMessage[] processOtherException(
+	public ResponseEntity<SimpleMessage[]> processOtherException(
 			final Throwable exception) {
 		// Returns a generic message.
 		ControllerExceptionHandler.LOGGER.error("Exception returned.", exception);
-		return new SimpleMessage[] { new SimpleMessage("error.unexpected", exception.getMessage()) };
+		return new ResponseEntity<>(new SimpleMessage[] { new SimpleMessage("error.unexpected", exception.getMessage()) },
+				new LinkedMultiValueMap<>(Map.of(HttpHeaders.RETRY_AFTER, List.of(Objects.toString(IntegrationException.DEFAULT_RETRY_IN.toSeconds())))),
+				HttpStatus.INTERNAL_SERVER_ERROR);
 	}
 
 }
