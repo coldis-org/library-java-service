@@ -1,8 +1,6 @@
 package org.coldis.library.service.jms;
 
-import java.util.Objects;
-
-import org.coldis.library.exception.BusinessException;
+import org.coldis.library.model.RetriableIn;
 import org.coldis.library.thread.ThreadMapContextHolder;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -36,11 +34,19 @@ public class ExtendedMessagingMessageListenerAdapter extends MessagingMessageLis
 		// Drops message on business exception.
 		catch (final ListenerExecutionFailedException exception) {
 			final Throwable exceptionCause = exception.getCause();
-			if (exceptionCause instanceof final BusinessException businessException && Objects.equals(400, businessException.getStatusCode())) {
-				ExtendedMessagingMessageListenerAdapter.LOGGER.warn("Dropping message due to business error '" + exception.getLocalizedMessage()
-						+ "' and nested error '" + exceptionCause.getLocalizedMessage() + "'.");
-				ExtendedMessagingMessageListenerAdapter.LOGGER.debug("Dropping message due to business error '" + exception.getLocalizedMessage()
-						+ "' and nested error '" + exceptionCause.getLocalizedMessage() + "'.", exception);
+			// Ignores exceptions that should not be retried.
+			if (exceptionCause instanceof final RetriableIn retriableException) {
+				if (retriableException.getRetryIn() == null) {
+					ExtendedMessagingMessageListenerAdapter.LOGGER
+							.warn("Dropping message due to non-retriable error '" + exception.getClass() + ": " + exception.getLocalizedMessage()
+									+ "' and nested error '" + exceptionCause.getClass() + ": " + exceptionCause.getLocalizedMessage() + "'.");
+					ExtendedMessagingMessageListenerAdapter.LOGGER
+							.debug("Dropped message due to non-retriable error '" + exception.getClass() + ": " + exception.getLocalizedMessage()
+									+ "' and nested error '" + exceptionCause.getClass() + ": " + exceptionCause.getLocalizedMessage() + "'.", exception);
+				}
+				else {
+					throw exception;
+				}
 			}
 			else {
 				throw exception;
