@@ -58,6 +58,23 @@ public class JmsConfiguration {
 		return this.jmsConfigurationHelper.createJmsListenerContainerFactoryBuilder().configurer(configurer)
 				.connectionFactory(ConnectionFactoryUnwrapper.unwrap(connectionFactory)).build();
 	}
+	
+
+	/**
+	 * Creates the JMS container factory.
+	 *
+	 * @param  connectionFactory Connection factory.
+	 * @return                   The JMS container factory.
+	 */
+	@Bean
+	@Qualifier("jmsListenerTopicContainerFactory")
+	public DefaultJmsListenerContainerFactory jmsListenerTopicContainerFactory(
+			final DefaultJmsListenerContainerFactoryConfigurer configurer,
+			final ConnectionFactory connectionFactory) {
+		return this.jmsConfigurationHelper.createJmsListenerContainerFactoryBuilder().configurer(configurer)
+				.connectionFactory(ConnectionFactoryUnwrapper.unwrap(connectionFactory)).topic(true).build();
+	}
+
 
 	/**
 	 * Creates the JMS template.
@@ -70,6 +87,19 @@ public class JmsConfiguration {
 	public JmsTemplate jmsTemplate(
 			final ConnectionFactory connectionFactory) {
 		return this.jmsConfigurationHelper.createJmsTemplate(connectionFactory);
+	}
+
+	/**
+	 * Creates the JMS template.
+	 *
+	 * @param  connectionFactory Connection factory.
+	 * @return                   The JMS template.
+	 */
+	@Bean
+	@Qualifier("jmsTopicTemplate")
+	public JmsTemplate jmsTopicTemplate(
+			final ConnectionFactory connectionFactory) {
+		return this.jmsConfigurationHelper.createJmsTopicTemplate(connectionFactory);
 	}
 
 }

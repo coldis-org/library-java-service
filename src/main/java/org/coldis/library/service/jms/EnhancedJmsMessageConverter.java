@@ -18,9 +18,7 @@ import org.apache.fury.BaseFury;
 import org.coldis.library.dto.DtoOrigin;
 import org.coldis.library.dto.DtoType;
 import org.coldis.library.dto.DtoTypeMetadata;
-import org.coldis.library.exception.IntegrationException;
 import org.coldis.library.helper.ReflectionHelper;
-import org.coldis.library.model.SimpleMessage;
 import org.coldis.library.service.helper.MultiLayerSessionHelper;
 import org.coldis.library.thread.ThreadMapContextHolder;
 import org.slf4j.Logger;
@@ -56,11 +54,6 @@ public class EnhancedJmsMessageConverter extends SimpleMessageConverter {
 	 * Origin queue attribute.
 	 */
 	public static final String ORIGIN_DESTINATION_ATTRIBUTE = "originDestination";
-
-	/**
-	 * Current async hop parameter.
-	 */
-	private static final String CURRENT_ASYNC_HOP_PARAMETER = "asyncHop";
 
 	/**
 	 * Prefered type parameter.
@@ -153,28 +146,6 @@ public class EnhancedJmsMessageConverter extends SimpleMessageConverter {
 	}
 
 	/**
-	 * Gets the current async hop from the request.
-	 *
-	 * @return Current async hop.
-	 */
-	private Long getCurrentAsyncHop() {
-		final Long currentAsyncHop = (Long) ThreadMapContextHolder.getAttribute(EnhancedJmsMessageConverter.CURRENT_ASYNC_HOP_PARAMETER);
-		return (currentAsyncHop == null ? 1 : currentAsyncHop);
-	}
-
-	/**
-	 * Validates if the maximum number of async hops was exceeded.
-	 */
-	private void validateAsyncHops(
-			final Object payload) {
-		final Long maximumAsyncHops = this.jmsConverterProperties.getMaximumAsyncHops();
-		if ((maximumAsyncHops > 0) && (this.getCurrentAsyncHop() > maximumAsyncHops)) {
-			throw new IntegrationException(
-					new SimpleMessage("jms.async.hops.exceeded", "The maximum number of async hops was exceeded for message '" + payload + "'."));
-		}
-	}
-
-	/**
 	 * Checks if the object is primitive.
 	 *
 	 * @param  object Object.
@@ -198,13 +169,23 @@ public class EnhancedJmsMessageConverter extends SimpleMessageConverter {
 	}
 
 	/**
+	 * Gets the current async hop from the request.
+	 *
+	 * @return Current async hop.
+	 */
+	private Long getCurrentAsyncHop() {
+		final Long currentAsyncHop = (Long) ThreadMapContextHolder.getAttribute(ExtendedMessagingMessageListenerAdapter.CURRENT_ASYNC_HOP_PARAMETER);
+		return (currentAsyncHop == null ? 1 : currentAsyncHop);
+	}
+
+	/**
 	 * Adds parameters to the JMS message.
 	 */
 	private void addParametersToMessage(
 			final Message message) throws JMSException {
 
 		// Adds current async hop to message.
-		message.setLongProperty(EnhancedJmsMessageConverter.CURRENT_ASYNC_HOP_PARAMETER, this.getCurrentAsyncHop());
+		message.setLongProperty(ExtendedMessagingMessageListenerAdapter.CURRENT_ASYNC_HOP_PARAMETER, this.getCurrentAsyncHop());
 
 		// Sets session headers.
 		if (CollectionUtils.isNotEmpty(this.includeSessionAttributesAsMessageHeaders)) {
@@ -349,9 +330,6 @@ public class EnhancedJmsMessageConverter extends SimpleMessageConverter {
 			final Object payload,
 			final Session session) throws JMSException, MessageConversionException {
 
-		// Validates async hops.
-		this.validateAsyncHops(payload);
-
 		// Tries creating a message with DTO information.
 		final Message message = this.toDynamicMessage(payload, session);
 
@@ -488,9 +466,10 @@ public class EnhancedJmsMessageConverter extends SimpleMessageConverter {
 	@SuppressWarnings("unchecked")
 	private Long incrementCurrentAsyncHopOnRequest(
 			final Message message) throws JMSException {
-		Long currentAsyncHop = (EnumerationUtils.toList(message.getPropertyNames()).contains(EnhancedJmsMessageConverter.CURRENT_ASYNC_HOP_PARAMETER)
-				? message.getLongProperty(EnhancedJmsMessageConverter.CURRENT_ASYNC_HOP_PARAMETER)
-				: null);
+		Long currentAsyncHop = (EnumerationUtils.toList(message.getPropertyNames())
+				.contains(ExtendedMessagingMessageListenerAdapter.CURRENT_ASYNC_HOP_PARAMETER)
+						? message.getLongProperty(ExtendedMessagingMessageListenerAdapter.CURRENT_ASYNC_HOP_PARAMETER)
+						: 0L);
 
 		// Resets the hops if queue is ignored.
 		final String destination = Objects.toString(message.getJMSDestination());
@@ -506,7 +485,7 @@ public class EnhancedJmsMessageConverter extends SimpleMessageConverter {
 		}
 
 		// Sets the message attribute.
-		ThreadMapContextHolder.setAttribute(EnhancedJmsMessageConverter.CURRENT_ASYNC_HOP_PARAMETER, currentAsyncHop);
+		ThreadMapContextHolder.setAttribute(ExtendedMessagingMessageListenerAdapter.CURRENT_ASYNC_HOP_PARAMETER, currentAsyncHop);
 		return currentAsyncHop;
 	}
 

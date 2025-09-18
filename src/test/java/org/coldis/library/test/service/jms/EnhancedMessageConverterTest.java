@@ -92,6 +92,11 @@ public class EnhancedMessageConverterTest extends ContainerTestHelper {
 	 */
 	@Autowired
 	private JmsTemplate jmsTemplate;
+	
+	/** JMS topic template. */
+	@Autowired
+	@Qualifier("jmsTopicTemplate")
+	private JmsTemplate jmsTopicTemplate;
 
 	/** Test service. */
 	@Autowired
@@ -161,7 +166,9 @@ public class EnhancedMessageConverterTest extends ContainerTestHelper {
 	 * @throws InterruptedException If the test fails.
 	 */
 	@JmsListener(
+			containerFactory = "jmsListenerTopicContainerFactory",
 			destination = "message/loop",
+			subscription = "message/loop/test",
 			concurrency = "100"
 	)
 	public void consumeMessageLoop(
@@ -169,7 +176,7 @@ public class EnhancedMessageConverterTest extends ContainerTestHelper {
 		if (Objects.equals(this.asyncHopsMessageId, message.getId())) {
 			EnhancedMessageConverterTest.asyncHops++;
 		}
-		this.jmsTemplate.convertAndSend("message/loop", message);
+		this.jmsTopicTemplate.convertAndSend("message/loop", message);
 	}
 
 	/**
@@ -183,7 +190,7 @@ public class EnhancedMessageConverterTest extends ContainerTestHelper {
 			EnhancedMessageConverterTest.asyncHops = 0L;
 			this.asyncHopsMessageId = RandomHelper.getPositiveRandomLong(Long.MAX_VALUE);
 			final DtoTestObject testMessage = new DtoTestObject(this.asyncHopsMessageId, "2", "3", 4, new int[] { 5, 6 }, 7);
-			this.jmsTemplate.convertAndSend("message/loop", testMessage);
+			this.jmsTopicTemplate.convertAndSend("message/loop", testMessage);
 			TestHelper.waitUntilValid(() -> EnhancedMessageConverterTest.asyncHops, asyncHops -> asyncHops > this.jmsConverterProperties.getMaximumAsyncHops(),
 					TestHelper.REGULAR_WAIT, TestHelper.SHORT_WAIT);
 			Assertions.assertEquals(this.jmsConverterProperties.getMaximumAsyncHops(), EnhancedMessageConverterTest.asyncHops);

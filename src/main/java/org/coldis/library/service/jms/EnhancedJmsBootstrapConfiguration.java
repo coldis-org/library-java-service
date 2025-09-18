@@ -36,8 +36,9 @@ public class EnhancedJmsBootstrapConfiguration implements BeanDefinitionRegistry
 	 */
 	@Bean
 	@Role(BeanDefinition.ROLE_INFRASTRUCTURE)
-	public JmsListenerAnnotationBeanPostProcessor enhancedJmsListenerAnnotationProcessor() {
-		return new JmsListenerAnnotationBeanPostProcessor(  ) {
+	public JmsListenerAnnotationBeanPostProcessor enhancedJmsListenerAnnotationProcessor(
+			final JmsConverterProperties jmsConverterProperties) {
+		return new JmsListenerAnnotationBeanPostProcessor() {
 
 			/**
 			 * @see org.springframework.jms.annotation.JmsListenerAnnotationBeanPostProcessor#createMethodJmsListenerEndpoint()
@@ -51,7 +52,7 @@ public class EnhancedJmsBootstrapConfiguration implements BeanDefinitionRegistry
 					 */
 					@Override
 					protected MessagingMessageListenerAdapter createMessageListenerInstance() {
-						return new ExtendedMessagingMessageListenerAdapter();
+						return new ExtendedMessagingMessageListenerAdapter(jmsConverterProperties);
 					}
 				};
 			}
