@@ -86,8 +86,7 @@ public class ExtendedMessagingMessageListenerAdapter extends MessagingMessageLis
 			try (MessageProducer producer = session.createProducer(session.createQueue("async-hops/exceeded"))) {
 				producer.send(copiedMessage);
 			}
-			ExtendedMessagingMessageListenerAdapter.LOGGER.warn(exception.getLocalizedMessage());
-			ExtendedMessagingMessageListenerAdapter.LOGGER.warn("Sending message to 'async-hops/exceeded' queue.");
+			ExtendedMessagingMessageListenerAdapter.LOGGER.warn(exception.getLocalizedMessage() + "Sending message to 'async-hops/exceeded' queue.");
 		}
 		// Drops message on business exception.
 		catch (final ListenerExecutionFailedException exception) {

@@ -194,13 +194,13 @@ public class BatchService {
 	 * @param  key               The key.
 	 * @throws BusinessException If the batch cannot be found.
 	 */
-	@Transactional(
-			propagation = Propagation.REQUIRED,
-			timeoutString = "${org.coldis.library.service.transaction.hour-timeout}"
-	)
 	@JmsListener(
 			destination = BatchService.DELETE_QUEUE,
 			concurrency = "1-3"
+	)
+	@Transactional(
+			propagation = Propagation.REQUIRED,
+			timeoutString = "${org.coldis.library.service.transaction.hour-timeout}"
 	)
 	private void deleteAsync(
 			final Map<String, Object> message) throws BusinessException {
@@ -318,13 +318,13 @@ public class BatchService {
 	 * @param  executor          Executor.
 	 * @throws BusinessException If the batch fails.
 	 */
-	@Transactional(
-			propagation = Propagation.REQUIRED,
-			timeoutString = "${org.coldis.library.service.transaction.hour-timeout}"
-	)
 	@JmsListener(
 			destination = BatchService.RESUME_QUEUE,
 			concurrency = "${org.coldis.configuration.service.batch-concurrency:1-17}"
+	)
+	@Transactional(
+			propagation = Propagation.REQUIRED,
+			timeoutString = "${org.coldis.library.service.transaction.hour-timeout}"
 	)
 	public <Type> void resumeAsync(
 			final String keySuffix) throws BusinessException {
@@ -335,7 +335,7 @@ public class BatchService {
 			BatchService.LOGGER.debug("Error processing batch '" + keySuffix + "'.", exception);
 		}
 	}
-
+	
 	/**
 	 * Processes a complete batch.
 	 *
