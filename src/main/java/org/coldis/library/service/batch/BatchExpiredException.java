@@ -9,19 +9,11 @@ public class BatchExpiredException extends BusinessException {
 	 * Serial.
 	 */
 	private static final long serialVersionUID = -8968252851096665636L;
-	
+
 	/**
 	 * Batch expired message.
 	 */
-	private static final SimpleMessage BATCH_EXPIRED_MESSAGE = new SimpleMessage("batch.expired");
-
-
-	/**
-	 * Default constructor.
-	 */
-	public BatchExpiredException() {
-		super();
-	}
+	private static final SimpleMessage BATCH_EXPIRED_MESSAGE = new SimpleMessage("batch.expired", "The batch has expired.");
 
 	/**
 	 * Message, status and cause constructor.
@@ -31,7 +23,7 @@ public class BatchExpiredException extends BusinessException {
 	 * @param cause      Cause.
 	 */
 	public BatchExpiredException(final Integer statusCode, final Throwable cause) {
-		super(BATCH_EXPIRED_MESSAGE, statusCode, cause);
+		super(BatchExpiredException.BATCH_EXPIRED_MESSAGE, statusCode, cause);
 	}
 
 	/**
@@ -40,8 +32,8 @@ public class BatchExpiredException extends BusinessException {
 	 * @param message    Message.
 	 * @param statusCode Status code.
 	 */
-	public BatchExpiredException( final Integer statusCode) {
-		super(BATCH_EXPIRED_MESSAGE, statusCode);
+	public BatchExpiredException(final Integer statusCode) {
+		this(statusCode, null);
 	}
 
 	/**
@@ -51,7 +43,14 @@ public class BatchExpiredException extends BusinessException {
 	 * @param cause   Cause.
 	 */
 	public BatchExpiredException(final Throwable cause) {
-		super(BATCH_EXPIRED_MESSAGE, cause);
+		this(BusinessException.DEFAULT_STATUS_CODE, cause);
+	}
+
+	/**
+	 * Default constructor.
+	 */
+	public BatchExpiredException() {
+		this(BusinessException.DEFAULT_STATUS_CODE);
 	}
 
 	/**

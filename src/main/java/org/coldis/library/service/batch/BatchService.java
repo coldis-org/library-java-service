@@ -11,6 +11,7 @@ import java.util.Properties;
 import org.apache.commons.lang3.StringUtils;
 import org.coldis.library.exception.BusinessException;
 import org.coldis.library.helper.DateTimeHelper;
+import org.coldis.library.model.RetriableIn;
 import org.coldis.library.model.Typable;
 import org.coldis.library.persistence.LockBehavior;
 import org.coldis.library.persistence.keyvalue.KeyValue;
@@ -302,7 +303,7 @@ public class BatchService {
 				catch (final Throwable throwable) {
 					BatchService.LOGGER.error("Error processing batch '" + key + "': " + throwable.getLocalizedMessage());
 					BatchService.LOGGER.debug("Error processing batch '" + key + "'.", throwable);
-					if (!(throwable instanceof BatchExpiredException)) {
+					if (!(throwable instanceof final RetriableIn retriableException) || (retriableException.getRetryIn() != null)) {
 						this.queueResumeAsync(keySuffix, DateTimeHelper.getCurrentLocalDateTime().plus(batchExecutorValue.getActualDelayBetweenRuns()));
 					}
 					throw throwable;
@@ -335,7 +336,7 @@ public class BatchService {
 			BatchService.LOGGER.debug("Error processing batch '" + keySuffix + "'.", exception);
 		}
 	}
-	
+
 	/**
 	 * Processes a complete batch.
 	 *
