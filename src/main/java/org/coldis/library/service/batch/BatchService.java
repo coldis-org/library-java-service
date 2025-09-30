@@ -162,7 +162,7 @@ public class BatchService {
 	 */
 	@Transactional(
 			propagation = Propagation.REQUIRES_NEW,
-			timeoutString = "${org.coldis.library.service.transaction.longest-timeout}"
+			timeoutString = "${org.coldis.library.service.transaction.minutes-timeout}"
 	)
 	protected <Type> Type executeBatch(
 			final BatchExecutor<Type> batchExecutorValue) throws BusinessException {
