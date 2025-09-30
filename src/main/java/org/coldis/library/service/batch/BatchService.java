@@ -161,7 +161,7 @@ public class BatchService {
 	 * @throws BusinessException If the batch could not be processed.
 	 */
 	@Transactional(
-			propagation = Propagation.REQUIRED,
+			propagation = Propagation.REQUIRES_NEW,
 			timeoutString = "${org.coldis.library.service.transaction.longest-timeout}"
 	)
 	protected <Type> Type executeBatch(
