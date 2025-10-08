@@ -391,7 +391,7 @@ public class BatchExecutor<Type> implements Typable {
 	 */
 	@JsonView({ ModelView.Persistent.class, ModelView.Public.class })
 	public Duration getFinishWithin() {
-		this.finishWithin = Objects.requireNonNullElse(this.finishWithin, this.getTryToFinishWithin().multipliedBy(2L));
+		this.finishWithin = Objects.requireNonNullElse(this.finishWithin, this.getTryToFinishWithin().multipliedBy(3L));
 		return this.finishWithin;
 	}
 
