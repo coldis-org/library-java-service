@@ -1,7 +1,8 @@
 package org.coldis.library.test.service.cache;
 
+import java.io.Serializable;
+
 import org.coldis.library.test.StartTestWithContainerExtension;
-import org.coldis.library.test.StopTestWithContainerExtension;
 import org.coldis.library.test.TestHelper;
 import org.coldis.library.test.TestWithContainer;
 import org.coldis.library.test.service.ContainerTestHelper;
@@ -51,6 +52,46 @@ public class CacheTest extends ContainerTestHelper {
 	@Autowired
 	private CachedService cachedService;
 
+	public class TestData implements Serializable {
+
+		/**
+		 * Serial.
+		 */
+		private static final long serialVersionUID = 5374869661899804799L;
+
+		private String testAttribute1;
+
+		private Integer testAttribute2;
+
+		public TestData() {
+			super();
+		}
+
+		public TestData(final String testAttribute1, final Integer testAttribute2) {
+			super();
+			this.testAttribute1 = testAttribute1;
+			this.testAttribute2 = testAttribute2;
+		}
+
+		public String getTestAttribute1() {
+			return this.testAttribute1;
+		}
+
+		public void setTestAttribute1(
+				final String testAttribute1) {
+			this.testAttribute1 = testAttribute1;
+		}
+
+		public Integer getTestAttribute2() {
+			return this.testAttribute2;
+		}
+
+		public void setTestAttribute2(
+				final Integer testAttribute2) {
+			this.testAttribute2 = testAttribute2;
+		}
+	}
+
 	/**
 	 * Tests the local cache.
 	 *
@@ -58,14 +99,15 @@ public class CacheTest extends ContainerTestHelper {
 	 */
 	@Test
 	public void testCentralCache() throws Exception {
-		final Integer attr1 = this.cachedService.getFromCentralCache1();
-		Assertions.assertEquals(attr1, this.cachedService.getFromCentralCache1());
-		Assertions.assertEquals(attr1, this.cachedService.getFromCentralCache1());
-		Assertions.assertEquals(attr1, this.cachedService.getFromCentralCache1());
+		final TestData test = new TestData("test1", 1);
+		final Integer attr1 = this.cachedService.getFromCentralCache1(test);
+		Assertions.assertEquals(attr1, this.cachedService.getFromCentralCache1(test));
+		Assertions.assertEquals(attr1, this.cachedService.getFromCentralCache1(test));
+		Assertions.assertEquals(attr1, this.cachedService.getFromCentralCache1(test));
 		Thread.sleep(this.expiration);
-		Assertions.assertEquals(attr1 + 1, this.cachedService.getFromCentralCache1());
-		Assertions.assertEquals(attr1 + 1, this.cachedService.getFromCentralCache1());
-		Assertions.assertEquals(attr1 + 1, this.cachedService.getFromCentralCache1());
+		Assertions.assertEquals(attr1 + 1, this.cachedService.getFromCentralCache1(test));
+		Assertions.assertEquals(attr1 + 1, this.cachedService.getFromCentralCache1(test));
+		Assertions.assertEquals(attr1 + 1, this.cachedService.getFromCentralCache1(test));
 
 		final Integer attr2 = this.cachedService.getFromCentralCache2().getAttribute();
 		Assertions.assertEquals(attr2, this.cachedService.getFromCentralCache2().getAttribute());

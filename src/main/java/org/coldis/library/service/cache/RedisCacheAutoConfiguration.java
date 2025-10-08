@@ -1,7 +1,11 @@
 package org.coldis.library.service.cache;
 
+import java.security.MessageDigest;
 import java.time.Duration;
+import java.util.HexFormat;
 
+import org.coldis.library.exception.IntegrationException;
+import org.coldis.library.model.SimpleMessage;
 import org.coldis.library.service.serialization.JsonMapperAutoConfiguration;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -13,6 +17,8 @@ import org.springframework.context.annotation.AdviceMode;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.context.annotation.DependsOn;
+import org.springframework.core.convert.converter.Converter;
+import org.springframework.data.redis.cache.CacheKeyPrefix;
 import org.springframework.data.redis.cache.RedisCacheConfiguration;
 import org.springframework.data.redis.cache.RedisCacheManager;
 import org.springframework.data.redis.connection.RedisConnectionFactory;
@@ -23,7 +29,9 @@ import org.springframework.http.converter.json.Jackson2ObjectMapperBuilder;
 import com.fasterxml.jackson.annotation.JsonInclude;
 import com.fasterxml.jackson.annotation.JsonTypeInfo;
 import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.MapperFeature;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.SerializationFeature;
 import com.fasterxml.jackson.databind.cfg.MapperConfig;
 import com.fasterxml.jackson.databind.introspect.Annotated;
 import com.fasterxml.jackson.databind.introspect.AnnotatedClass;
@@ -42,6 +50,9 @@ public class RedisCacheAutoConfiguration {
 	 * Logger.
 	 */
 	private static final Logger LOGGER = LoggerFactory.getLogger(RedisCacheAutoConfiguration.class);
+
+	/** Key converter. */
+	private final Converter<Object, String> keyConverter;
 
 	/**
 	 * Serialization pair.
@@ -110,6 +121,50 @@ public class RedisCacheAutoConfiguration {
 	}
 
 	/**
+	 * Hash cache key converter.
+	 */
+	class HashCacheKeyConverter implements Converter<Object, String> {
+
+		/**
+		 * Object mapper.
+		 */
+		private final ObjectMapper objectMapper;
+
+		/** Message digest. */
+		private final MessageDigest messageDigest;
+
+		/** Constructor. */
+		public HashCacheKeyConverter(final ObjectMapper objectMapper, final String algorithm) {
+			this.objectMapper = objectMapper;
+			try {
+				this.messageDigest = MessageDigest.getInstance(algorithm);
+			}
+			catch (final Exception exception) {
+				throw new IntegrationException(new SimpleMessage("Could not create message digest."), exception);
+			}
+		}
+
+		/**
+		 * @see org.springframework.core.convert.converter.Converter#convert(java.lang.Object)
+		 */
+		@Override
+		public String convert(
+				final Object source) {
+			byte[] payload;
+			try {
+				payload = this.objectMapper.writeValueAsBytes(source);
+				final byte[] digest = this.messageDigest.digest(payload);
+				return HexFormat.of().formatHex(digest);
+			}
+			catch (final JsonProcessingException exception) {
+				throw new IntegrationException(new SimpleMessage("Could not convert cache key."), exception);
+			}
+
+		}
+
+	}
+
+	/**
 	 * Default constructor.
 	 *
 	 * @throws JsonProcessingException
@@ -117,8 +172,11 @@ public class RedisCacheAutoConfiguration {
 	public RedisCacheAutoConfiguration(final JsonMapperAutoConfiguration jsonMapperAutoConfiguration, final Jackson2ObjectMapperBuilder builder)
 			throws JsonProcessingException {
 		final ObjectMapper objectMapper = jsonMapperAutoConfiguration.genericMapper(builder);
+		objectMapper.configure(MapperFeature.SORT_PROPERTIES_ALPHABETICALLY, true);
+		objectMapper.configure(SerializationFeature.ORDER_MAP_ENTRIES_BY_KEYS, true);
 		objectMapper.setDefaultPropertyInclusion(JsonInclude.Include.NON_NULL);
 		objectMapper.setAnnotationIntrospector(new IgnoreTypeInfoIntrospector());
+		this.keyConverter = new HashCacheKeyConverter(objectMapper, "SHA-256");
 		final GenericJackson2JsonRedisSerializer serializer = GenericJackson2JsonRedisSerializer.builder().objectMapper(objectMapper).defaultTyping(true)
 				.registerNullValueSerializer(false).build();
 		this.serializationPair = SerializationPair.fromSerializer(serializer);
@@ -134,9 +192,10 @@ public class RedisCacheAutoConfiguration {
 			final RedisConnectionFactory redisConnectionFactory,
 			@Value(value = "${org.coldis.configuration.cache.millis-expiration:3100}")
 			final Long expiration) {
-		this.millisExpirationCentralCacheManager = RedisCacheManager.builder(redisConnectionFactory)
-				.cacheDefaults(RedisCacheConfiguration.defaultCacheConfig().entryTtl(Duration.ofMillis(expiration)).serializeValuesWith(this.serializationPair))
-				.build();
+		final RedisCacheConfiguration cacheConfiguration = RedisCacheConfiguration.defaultCacheConfig().entryTtl(Duration.ofMillis(expiration))
+				.serializeValuesWith(this.serializationPair).computePrefixWith(CacheKeyPrefix.simple());
+		cacheConfiguration.addCacheKeyConverter(this.keyConverter);
+		this.millisExpirationCentralCacheManager = RedisCacheManager.builder(redisConnectionFactory).cacheDefaults(cacheConfiguration).build();
 		return this.millisExpirationCentralCacheManager;
 	}
 
@@ -150,10 +209,10 @@ public class RedisCacheAutoConfiguration {
 			final RedisConnectionFactory redisConnectionFactory,
 			@Value(value = "${org.coldis.configuration.cache.seconds-expiration:23}")
 			final Long expiration) {
-		this.secondsExpirationCentralCacheManager = RedisCacheManager.builder(redisConnectionFactory)
-				.cacheDefaults(
-						RedisCacheConfiguration.defaultCacheConfig().entryTtl(Duration.ofSeconds(expiration)).serializeValuesWith(this.serializationPair))
-				.build();
+		final RedisCacheConfiguration cacheConfiguration = RedisCacheConfiguration.defaultCacheConfig().entryTtl(Duration.ofSeconds(expiration))
+				.serializeValuesWith(this.serializationPair).computePrefixWith(CacheKeyPrefix.simple());
+		cacheConfiguration.addCacheKeyConverter(this.keyConverter);
+		this.millisExpirationCentralCacheManager = RedisCacheManager.builder(redisConnectionFactory).cacheDefaults(cacheConfiguration).build();
 		return this.secondsExpirationCentralCacheManager;
 	}
 
@@ -167,10 +226,10 @@ public class RedisCacheAutoConfiguration {
 			final RedisConnectionFactory redisConnectionFactory,
 			@Value(value = "${org.coldis.configuration.cache.minutes-expiration:11}")
 			final Long expiration) {
-		this.minutesExpirationCentralCacheManager = RedisCacheManager.builder(redisConnectionFactory)
-				.cacheDefaults(
-						RedisCacheConfiguration.defaultCacheConfig().entryTtl(Duration.ofMinutes(expiration)).serializeValuesWith(this.serializationPair))
-				.build();
+		final RedisCacheConfiguration cacheConfiguration = RedisCacheConfiguration.defaultCacheConfig().entryTtl(Duration.ofMinutes(expiration))
+				.serializeValuesWith(this.serializationPair).computePrefixWith(CacheKeyPrefix.simple());
+		cacheConfiguration.addCacheKeyConverter(this.keyConverter);
+		this.minutesExpirationCentralCacheManager = RedisCacheManager.builder(redisConnectionFactory).cacheDefaults(cacheConfiguration).build();
 		return this.minutesExpirationCentralCacheManager;
 	}
 
@@ -184,9 +243,10 @@ public class RedisCacheAutoConfiguration {
 			final RedisConnectionFactory redisConnectionFactory,
 			@Value(value = "${org.coldis.configuration.cache.hours-expiration:3}")
 			final Long expiration) {
-		this.hoursExpirationCentralCacheManager = RedisCacheManager.builder(redisConnectionFactory)
-				.cacheDefaults(RedisCacheConfiguration.defaultCacheConfig().entryTtl(Duration.ofHours(expiration)).serializeValuesWith(this.serializationPair))
-				.build();
+		final RedisCacheConfiguration cacheConfiguration = RedisCacheConfiguration.defaultCacheConfig().entryTtl(Duration.ofHours(expiration))
+				.serializeValuesWith(this.serializationPair).computePrefixWith(CacheKeyPrefix.simple());
+		cacheConfiguration.addCacheKeyConverter(this.keyConverter);
+		this.hoursExpirationCentralCacheManager = RedisCacheManager.builder(redisConnectionFactory).cacheDefaults(cacheConfiguration).build();
 		return this.hoursExpirationCentralCacheManager;
 	}
 
@@ -200,9 +260,10 @@ public class RedisCacheAutoConfiguration {
 			final RedisConnectionFactory redisConnectionFactory,
 			@Value(value = "${org.coldis.configuration.cache.day-expiration:1}")
 			final Long expiration) {
-		this.dayExpirationCentralCacheManager = RedisCacheManager.builder(redisConnectionFactory)
-				.cacheDefaults(RedisCacheConfiguration.defaultCacheConfig().entryTtl(Duration.ofDays(expiration)).serializeValuesWith(this.serializationPair))
-				.build();
+		final RedisCacheConfiguration cacheConfiguration = RedisCacheConfiguration.defaultCacheConfig().entryTtl(Duration.ofDays(expiration))
+				.serializeValuesWith(this.serializationPair).computePrefixWith(CacheKeyPrefix.simple());
+		cacheConfiguration.addCacheKeyConverter(this.keyConverter);
+		this.dayExpirationCentralCacheManager = RedisCacheManager.builder(redisConnectionFactory).cacheDefaults(cacheConfiguration).build();
 		return this.dayExpirationCentralCacheManager;
 	}
 
@@ -216,9 +277,10 @@ public class RedisCacheAutoConfiguration {
 			final RedisConnectionFactory redisConnectionFactory,
 			@Value(value = "${org.coldis.configuration.cache.days-expiration:5}")
 			final Long expiration) {
-		this.daysExpirationCentralCacheManager = RedisCacheManager.builder(redisConnectionFactory)
-				.cacheDefaults(RedisCacheConfiguration.defaultCacheConfig().entryTtl(Duration.ofDays(expiration)).serializeValuesWith(this.serializationPair))
-				.build();
+		final RedisCacheConfiguration cacheConfiguration = RedisCacheConfiguration.defaultCacheConfig().entryTtl(Duration.ofDays(expiration))
+				.serializeValuesWith(this.serializationPair).computePrefixWith(CacheKeyPrefix.simple());
+		cacheConfiguration.addCacheKeyConverter(this.keyConverter);
+		this.daysExpirationCentralCacheManager = RedisCacheManager.builder(redisConnectionFactory).cacheDefaults(cacheConfiguration).build();
 		return this.daysExpirationCentralCacheManager;
 	}
 
@@ -226,14 +288,10 @@ public class RedisCacheAutoConfiguration {
 	 * Evict all caches.
 	 */
 	public void evictAll() {
-		this.millisExpirationCentralCacheManager.getCacheNames().stream()
-				.forEach(name -> this.millisExpirationCentralCacheManager.getCache(name).clear());
-		this.secondsExpirationCentralCacheManager.getCacheNames().stream()
-				.forEach(name -> this.secondsExpirationCentralCacheManager.getCache(name).clear());
-		this.minutesExpirationCentralCacheManager.getCacheNames().stream()
-				.forEach(name -> this.minutesExpirationCentralCacheManager.getCache(name).clear());
-		this.hoursExpirationCentralCacheManager.getCacheNames().stream()
-				.forEach(name -> this.hoursExpirationCentralCacheManager.getCache(name).clear());
+		this.millisExpirationCentralCacheManager.getCacheNames().stream().forEach(name -> this.millisExpirationCentralCacheManager.getCache(name).clear());
+		this.secondsExpirationCentralCacheManager.getCacheNames().stream().forEach(name -> this.secondsExpirationCentralCacheManager.getCache(name).clear());
+		this.minutesExpirationCentralCacheManager.getCacheNames().stream().forEach(name -> this.minutesExpirationCentralCacheManager.getCache(name).clear());
+		this.hoursExpirationCentralCacheManager.getCacheNames().stream().forEach(name -> this.hoursExpirationCentralCacheManager.getCache(name).clear());
 		this.dayExpirationCentralCacheManager.getCacheNames().stream().forEach(name -> this.dayExpirationCentralCacheManager.getCache(name).clear());
 		this.daysExpirationCentralCacheManager.getCacheNames().stream().forEach(name -> this.daysExpirationCentralCacheManager.getCache(name).clear());
 	}

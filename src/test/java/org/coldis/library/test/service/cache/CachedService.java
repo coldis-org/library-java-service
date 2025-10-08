@@ -3,6 +3,7 @@ package org.coldis.library.test.service.cache;
 import java.math.BigDecimal;
 import java.util.Set;
 
+import org.coldis.library.test.service.cache.CacheTest.TestData;
 import org.springframework.cache.annotation.Cacheable;
 import org.springframework.stereotype.Service;
 
@@ -26,7 +27,7 @@ public class CachedService {
 			cacheManager = "millisExpirationCentralCacheManager",
 			value = "cachedService-getFromCentralCache1"
 	)
-	public Integer getFromCentralCache1() {
+	public Integer getFromCentralCache1(TestData test) {
 		CachedService.ATTR_1++;
 		return CachedService.ATTR_1;
 	}
