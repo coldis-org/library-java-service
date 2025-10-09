@@ -279,7 +279,7 @@ public class BatchService {
 					final LocalDateTime batchStartedAt = DateTimeHelper.getCurrentLocalDateTime();
 					final Type nextLastProcessed = this.executeBatch(batchExecutorValue);
 					final LocalDateTime batchFinishedAt = DateTimeHelper.getCurrentLocalDateTime();
-					batchExecutorValue.setLastTotalProcessingTime(Duration.ofMillis(batchStartedAt.until(batchFinishedAt, ChronoUnit.MILLIS)));
+					batchExecutorValue.setLastBatchStartedAt(batchStartedAt);
 					batchExecutorValue.setLastBatchFinishedAt(batchFinishedAt);
 					batchExecutorValue.setLastProcessed(nextLastProcessed);
 					previousLastProcessed = currentLastProcessed;

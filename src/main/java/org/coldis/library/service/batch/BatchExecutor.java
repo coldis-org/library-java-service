@@ -2,7 +2,6 @@ package org.coldis.library.service.batch;
 
 import java.time.Duration;
 import java.time.LocalDateTime;
-import java.time.temporal.ChronoUnit;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -121,14 +120,6 @@ public class BatchExecutor<Type> implements Typable {
 	private LocalDateTime lastStartedAt;
 
 	/**
-	 * Last processed.
-	 */
-	private Type lastProcessed;
-
-	/** Last batch finished at. */
-	private LocalDateTime lastBatchFinishedAt;
-
-	/**
 	 * Last finished at.
 	 */
 	private LocalDateTime lastFinishedAt;
@@ -147,6 +138,17 @@ public class BatchExecutor<Type> implements Typable {
 	 * Last total processing time.
 	 */
 	private Duration lastTotalProcessingTime;
+
+	/**
+	 * Last processed.
+	 */
+	private Type lastProcessed;
+
+	/** Last batch started at. */
+	private LocalDateTime lastBatchStartedAt;
+
+	/** Last batch finished at. */
+	private LocalDateTime lastBatchFinishedAt;
 
 	/**
 	 * No arguments constructor.
@@ -594,48 +596,6 @@ public class BatchExecutor<Type> implements Typable {
 	}
 
 	/**
-	 * Gets the lastProcessed.
-	 *
-	 * @return The lastProcessed.
-	 */
-	@JsonView({ ModelView.Persistent.class, ModelView.Public.class })
-	public Type getLastProcessed() {
-		this.lastProcessed = (((this.getType() == null) || this.getType().isInstance(this.lastProcessed)) ? this.lastProcessed
-				: ObjectMapperHelper.convert(BatchExecutor.OBJECT_MAPPER, this.lastProcessed, this.getType(), false));
-		return this.lastProcessed;
-	}
-
-	/**
-	 * Sets the lastProcessed.
-	 *
-	 * @param lastProcessed New lastProcessed.
-	 */
-	public void setLastProcessed(
-			final Type lastProcessed) {
-		this.lastProcessed = lastProcessed;
-	}
-
-	/**
-	 * Gets the lastBatchFinishedAt.
-	 *
-	 * @return The lastBatchFinishedAt.
-	 */
-	@JsonView({ ModelView.Persistent.class, ModelView.Public.class })
-	public LocalDateTime getLastBatchFinishedAt() {
-		return this.lastBatchFinishedAt;
-	}
-
-	/**
-	 * Sets the lastBatchFinishedAt.
-	 *
-	 * @param lastBatchFinishedAt New lastBatchFinishedAt.
-	 */
-	public void setLastBatchFinishedAt(
-			final LocalDateTime lastBatchFinishedAt) {
-		this.lastBatchFinishedAt = lastBatchFinishedAt;
-	}
-
-	/**
 	 * Gets the lastFinishedAt.
 	 *
 	 * @return The lastFinishedAt.
@@ -643,6 +603,16 @@ public class BatchExecutor<Type> implements Typable {
 	@JsonView({ ModelView.Persistent.class, ModelView.Public.class })
 	public LocalDateTime getLastFinishedAt() {
 		return this.lastFinishedAt;
+	}
+
+	/**
+	 * Sets the lastFinishedAt.
+	 *
+	 * @param lastFinishedAt New lastFinishedAt.
+	 */
+	public void setLastFinishedAt(
+			final LocalDateTime lastFinishedAt) {
+		this.lastFinishedAt = lastFinishedAt;
 	}
 
 	/**
@@ -656,13 +626,25 @@ public class BatchExecutor<Type> implements Typable {
 	}
 
 	/**
-	 * Sets the lastFinishedAt.
+	 * Gets the lastTotalProcessingTime.
 	 *
-	 * @param lastFinishedAt New lastFinishedAt.
+	 * @return The lastTotalProcessingTime.
 	 */
-	public void setLastFinishedAt(
-			final LocalDateTime lastFinishedAt) {
-		this.lastFinishedAt = lastFinishedAt;
+	@JsonView({ ModelView.Persistent.class, ModelView.Public.class })
+	public Duration getLastTotalProcessingTime() {
+		return (this.getLastFinishedAt() == null) || (this.getLastStartedAt() == null) || this.getLastFinishedAt().isBefore(this.getLastStartedAt())
+				? this.lastTotalProcessingTime
+				: Duration.between(this.getLastStartedAt(), this.getLastFinishedAt());
+	}
+	
+	/**
+	 * Sets the lastTotalProcessingTime.
+	 *
+	 * @param lastTotalProcessingTime New lastTotalProcessingTime.
+	 */
+	public void setLastTotalProcessingTime(
+			final Duration lastTotalProcessingTime) {
+		this.lastTotalProcessingTime = lastTotalProcessingTime;
 	}
 
 	/**
@@ -727,24 +709,72 @@ public class BatchExecutor<Type> implements Typable {
 	}
 
 	/**
-	 * Gets the lastTotalProcessingTime.
+	 * Gets the lastProcessed.
 	 *
-	 * @return The lastTotalProcessingTime.
+	 * @return The lastProcessed.
 	 */
 	@JsonView({ ModelView.Persistent.class, ModelView.Public.class })
-	public Duration getLastTotalProcessingTime() {
-		this.lastTotalProcessingTime = Objects.requireNonNullElse(this.lastTotalProcessingTime, Duration.ZERO);
-		return this.lastTotalProcessingTime;
+	public Type getLastProcessed() {
+		this.lastProcessed = (((this.getType() == null) || this.getType().isInstance(this.lastProcessed)) ? this.lastProcessed
+				: ObjectMapperHelper.convert(BatchExecutor.OBJECT_MAPPER, this.lastProcessed, this.getType(), false));
+		return this.lastProcessed;
 	}
 
 	/**
-	 * Sets the lastTotalProcessingTime.
+	 * Sets the lastProcessed.
 	 *
-	 * @param lastTotalProcessingTime New lastTotalProcessingTime.
+	 * @param lastProcessed New lastProcessed.
 	 */
-	public void setLastTotalProcessingTime(
-			final Duration lastTotalProcessingTime) {
-		this.lastTotalProcessingTime = lastTotalProcessingTime;
+	public void setLastProcessed(
+			final Type lastProcessed) {
+		this.lastProcessed = lastProcessed;
+	}
+
+	/**
+	 * Gets the lastBatchStartedAt.
+	 *
+	 * @return The lastBatchStartedAt.
+	 */
+	@JsonView({ ModelView.Persistent.class, ModelView.Public.class })
+	public LocalDateTime getLastBatchStartedAt() {
+		return this.lastBatchStartedAt;
+	}
+
+	/**
+	 * Sets the lastBatchStartedAt.
+	 *
+	 * @param lastBatchStartedAt New lastBatchStartedAt.
+	 */
+	public void setLastBatchStartedAt(
+			final LocalDateTime lastBatchStartedAt) {
+		this.lastBatchStartedAt = lastBatchStartedAt;
+	}
+
+	/**
+	 * Gets the lastBatchFinishedAt.
+	 *
+	 * @return The lastBatchFinishedAt.
+	 */
+	@JsonView({ ModelView.Persistent.class, ModelView.Public.class })
+	public LocalDateTime getLastBatchFinishedAt() {
+		return this.lastBatchFinishedAt;
+	}
+
+	/**
+	 * Sets the lastBatchFinishedAt.
+	 *
+	 * @param lastBatchFinishedAt New lastBatchFinishedAt.
+	 */
+	public void setLastBatchFinishedAt(
+			final LocalDateTime lastBatchFinishedAt) {
+		this.lastBatchFinishedAt = lastBatchFinishedAt;
+	}
+
+	/** Gets the last batch processing time. */
+	@JsonView({ ModelView.Persistent.class, ModelView.Public.class })
+	public Duration getLastBatchProcessingTime() {
+		return (this.getLastBatchStartedAt() == null) || (this.getLastBatchFinishedAt() == null) ? Duration.ZERO
+				: Duration.between(this.getLastBatchStartedAt(), this.getLastBatchFinishedAt());
 	}
 
 	/**
@@ -755,14 +785,15 @@ public class BatchExecutor<Type> implements Typable {
 	@JsonView({ ModelView.Persistent.class, ModelView.Public.class })
 	public Duration getActualDelayBetweenRuns() {
 		Duration actualDelayBetweenRuns = this.getDelayBetweenRuns();
-		if (this.getExpectedCount() != null) {
-			final Long expectedLeftCount = this.getExpectedCount() - this.getLastProcessedCount();
+		if ((this.getExpectedCount() != null) && (this.getLastProcessedCount() != null)) {
+			final long expectedLeftCount = this.getExpectedCount() - this.getLastProcessedCount();
+			final long expectedTotalBatches = this.getExpectedCount() / this.getSize();
 			final Long expectedLeftBatchCount = expectedLeftCount / this.getSize();
-			final Duration expectedLeftProcessingDuration = this.getLastTotalProcessingTime().multipliedBy(expectedLeftCount)
-					.dividedBy(this.getLastProcessedCount() <= 0 ? 1 : this.getLastProcessedCount());
-			actualDelayBetweenRuns = (expectedLeftCount <= 0 ? Duration.ZERO
-					: this.getTryToFinishWithin().minusMillis(this.getLastStartedAt().until(DateTimeHelper.getCurrentLocalDateTime(), ChronoUnit.MILLIS))
-							.minus(expectedLeftProcessingDuration).dividedBy(expectedLeftBatchCount <= 0 ? 10 : expectedLeftBatchCount));
+			final Duration timeSinceStarted = Duration.between(this.getLastStartedAt(), DateTimeHelper.getCurrentLocalDateTime());
+			final Duration timeUntilFinishTarget = this.getTryToFinishWithin().minus(timeSinceStarted);
+			final Duration timeForEachFutureBatch = (timeUntilFinishTarget.isNegative() ? Duration.ZERO
+					: timeUntilFinishTarget.dividedBy(expectedLeftBatchCount <= 0 ? expectedTotalBatches / 10 : expectedLeftBatchCount));
+			actualDelayBetweenRuns = timeForEachFutureBatch.minus(this.getLastBatchProcessingTime());
 		}
 		return actualDelayBetweenRuns;
 	}
@@ -809,7 +840,6 @@ public class BatchExecutor<Type> implements Typable {
 		this.setLastCancelledAt(null);
 		this.setLastProcessed(null);
 		this.setLastProcessedCount(null);
-		this.setLastTotalProcessingTime(null);
 		this.getLastStartedAt();
 		this.getLastProcessedCount();
 	}
