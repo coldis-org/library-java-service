@@ -150,11 +150,14 @@ public class RedisCacheAutoConfiguration {
 		@Override
 		public String convert(
 				final Object source) {
-			byte[] payload;
 			try {
-				payload = this.objectMapper.writeValueAsBytes(source);
-				final byte[] digest = this.messageDigest.digest(payload);
-				return HexFormat.of().formatHex(digest);
+				String key = null;
+				if (source != null) {
+					final byte[] payload = this.objectMapper.writeValueAsBytes(source);
+					final byte[] digest = this.messageDigest.digest(payload);
+					key = HexFormat.of().formatHex(digest);
+				}
+				return key;
 			}
 			catch (final JsonProcessingException exception) {
 				throw new IntegrationException(new SimpleMessage("Could not convert cache key."), exception);
