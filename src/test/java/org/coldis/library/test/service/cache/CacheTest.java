@@ -109,14 +109,14 @@ public class CacheTest extends ContainerTestHelper {
 		Assertions.assertEquals(attr1 + 1, this.cachedService.getFromCentralCache1(test));
 		Assertions.assertEquals(attr1 + 1, this.cachedService.getFromCentralCache1(test));
 
-		final Integer attr2 = this.cachedService.getFromCentralCache2().getAttribute();
-		Assertions.assertEquals(attr2, this.cachedService.getFromCentralCache2().getAttribute());
-		Assertions.assertEquals(attr2, this.cachedService.getFromCentralCache2().getAttribute());
-		Assertions.assertEquals(attr2, this.cachedService.getFromCentralCache2().getAttribute());
+		final Integer attr2 = this.cachedService.getFromCentralCache2(test, test).getAttribute();
+		Assertions.assertEquals(attr2, this.cachedService.getFromCentralCache2(test, test).getAttribute());
+		Assertions.assertEquals(attr2, this.cachedService.getFromCentralCache2(test, test).getAttribute());
+		Assertions.assertEquals(attr2, this.cachedService.getFromCentralCache2(test, test).getAttribute());
 		Thread.sleep(this.expiration);
-		Assertions.assertEquals(attr2 + 1, this.cachedService.getFromCentralCache2().getAttribute());
-		Assertions.assertEquals(attr2 + 1, this.cachedService.getFromCentralCache2().getAttribute());
-		Assertions.assertEquals(attr2 + 1, this.cachedService.getFromCentralCache2().getAttribute());
+		Assertions.assertEquals(attr2 + 1, this.cachedService.getFromCentralCache2(test, test).getAttribute());
+		Assertions.assertEquals(attr2 + 1, this.cachedService.getFromCentralCache2(test, test).getAttribute());
+		Assertions.assertEquals(attr2 + 1, this.cachedService.getFromCentralCache2(test, test).getAttribute());
 
 		final Integer attr3 = this.cachedService.getFromCentralCache3().intValue();
 		Assertions.assertEquals(attr3, this.cachedService.getFromCentralCache3().intValue());

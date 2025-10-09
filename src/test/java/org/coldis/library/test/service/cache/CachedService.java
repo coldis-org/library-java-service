@@ -27,7 +27,8 @@ public class CachedService {
 			cacheManager = "millisExpirationCentralCacheManager",
 			value = "cachedService-getFromCentralCache1"
 	)
-	public Integer getFromCentralCache1(TestData test) {
+	public Integer getFromCentralCache1(
+			final TestData test) {
 		CachedService.ATTR_1++;
 		return CachedService.ATTR_1;
 	}
@@ -35,13 +36,18 @@ public class CachedService {
 	/**
 	 * Gets the aTTR_1.
 	 *
-	 * @return The aTTR_1.
+	 * @param  test1 Test argument 1.
+	 * @param  test2 Test argument 2.
+	 *
+	 * @return       The aTTR_1.
 	 */
 	@Cacheable(
 			cacheManager = "millisExpirationCentralCacheManager",
 			value = "cachedService-getFromCentralCache2"
 	)
-	public CacheSimpleObject1 getFromCentralCache2() {
+	public CacheSimpleObject1 getFromCentralCache2(
+			final TestData test1,
+			final TestData test2) {
 		CachedService.ATTR_1++;
 		return new CacheSimpleObject1(CachedService.ATTR_1);
 	}
