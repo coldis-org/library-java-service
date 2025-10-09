@@ -215,7 +215,7 @@ public class RedisCacheAutoConfiguration {
 		final RedisCacheConfiguration cacheConfiguration = RedisCacheConfiguration.defaultCacheConfig().entryTtl(Duration.ofSeconds(expiration))
 				.serializeValuesWith(this.serializationPair).computePrefixWith(CacheKeyPrefix.simple());
 		cacheConfiguration.addCacheKeyConverter(this.keyConverter);
-		this.millisExpirationCentralCacheManager = RedisCacheManager.builder(redisConnectionFactory).cacheDefaults(cacheConfiguration).build();
+		this.secondsExpirationCentralCacheManager = RedisCacheManager.builder(redisConnectionFactory).cacheDefaults(cacheConfiguration).build();
 		return this.secondsExpirationCentralCacheManager;
 	}
 
