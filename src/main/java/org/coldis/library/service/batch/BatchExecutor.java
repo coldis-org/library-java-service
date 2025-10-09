@@ -760,7 +760,7 @@ public class BatchExecutor<Type> implements Typable {
 			final Long expectedLeftBatchCount = expectedLeftCount / this.getSize();
 			final Duration expectedLeftProcessingDuration = this.getLastTotalProcessingTime().multipliedBy(expectedLeftCount)
 					.dividedBy(this.getLastProcessedCount() <= 0 ? 1 : this.getLastProcessedCount());
-			actualDelayBetweenRuns = (expectedLeftCount <= 0 ? Duration.ofMillis(100)
+			actualDelayBetweenRuns = (expectedLeftCount <= 0 ? Duration.ZERO
 					: this.getTryToFinishWithin().minusMillis(this.getLastStartedAt().until(DateTimeHelper.getCurrentLocalDateTime(), ChronoUnit.MILLIS))
 							.minus(expectedLeftProcessingDuration).dividedBy(expectedLeftBatchCount <= 0 ? 10 : expectedLeftBatchCount));
 		}
