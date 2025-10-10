@@ -836,6 +836,7 @@ public class BatchExecutor<Type> implements Typable {
 			this.setExpectedCount(this.getLastProcessedCount());
 		}
 		this.setLastStartedAt(null);
+		this.setLastBatchStartedAt(null);
 		this.setLastBatchFinishedAt(null);
 		this.setLastCancelledAt(null);
 		this.setLastProcessed(null);
