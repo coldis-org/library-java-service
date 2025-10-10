@@ -636,7 +636,7 @@ public class BatchExecutor<Type> implements Typable {
 				? this.lastTotalProcessingTime
 				: Duration.between(this.getLastStartedAt(), this.getLastFinishedAt());
 	}
-	
+
 	/**
 	 * Sets the lastTotalProcessingTime.
 	 *
@@ -785,15 +785,17 @@ public class BatchExecutor<Type> implements Typable {
 	@JsonView({ ModelView.Persistent.class, ModelView.Public.class })
 	public Duration getActualDelayBetweenRuns() {
 		Duration actualDelayBetweenRuns = this.getDelayBetweenRuns();
-		if ((this.getExpectedCount() != null) && (this.getLastProcessedCount() != null)) {
+		if ((this.getExpectedCount() != null) && (this.getExpectedCount() > 0) && (this.getLastProcessedCount() != null)) {
 			final long expectedLeftCount = this.getExpectedCount() - this.getLastProcessedCount();
 			final long expectedTotalBatches = this.getExpectedCount() / this.getSize();
 			final Long expectedLeftBatchCount = expectedLeftCount / this.getSize();
 			final Duration timeSinceStarted = Duration.between(this.getLastStartedAt(), DateTimeHelper.getCurrentLocalDateTime());
 			final Duration timeUntilFinishTarget = this.getTryToFinishWithin().minus(timeSinceStarted);
 			final Duration timeForEachFutureBatch = (timeUntilFinishTarget.isNegative() ? Duration.ZERO
-					: timeUntilFinishTarget.dividedBy(expectedLeftBatchCount <= 0 ? expectedTotalBatches / 10 : expectedLeftBatchCount));
-			actualDelayBetweenRuns = timeForEachFutureBatch.minus(this.getLastBatchProcessingTime());
+					: timeUntilFinishTarget
+							.dividedBy(expectedLeftBatchCount <= 0 ? expectedTotalBatches <= 0 ? 100 : expectedTotalBatches / 10 : expectedLeftBatchCount));
+			actualDelayBetweenRuns = (timeForEachFutureBatch == Duration.ZERO ? Duration.ZERO
+					: timeForEachFutureBatch.minus(this.getLastBatchProcessingTime()));
 		}
 		return actualDelayBetweenRuns;
 	}
@@ -804,8 +806,9 @@ public class BatchExecutor<Type> implements Typable {
 	 */
 	@JsonView({ ModelView.Persistent.class, ModelView.Public.class })
 	public LocalDateTime getNextBatchStartingAt() {
-		return (this.getLastBatchFinishedAt() == null ? (this.isExpired() || this.isFinished() ? null : DateTimeHelper.getCurrentLocalDateTime())
-				: this.getLastBatchFinishedAt().plus(this.getActualDelayBetweenRuns()));
+		return ((this.isExpired() || this.isFinished()) ? null
+				: (this.getLastBatchFinishedAt() == null ? DateTimeHelper.getCurrentLocalDateTime()
+						: this.getLastBatchFinishedAt().plus(this.getActualDelayBetweenRuns())));
 	}
 
 	/**
@@ -860,9 +863,9 @@ public class BatchExecutor<Type> implements Typable {
 	@Override
 	public int hashCode() {
 		return Objects.hash(this.actionBeanName, this.actionDelegateMethods, this.arguments, this.cleansWithin, this.delayBetweenRuns, this.expectedCount,
-				this.finishWithin, this.itemTypeName, this.keySuffix, this.lastBatchFinishedAt, this.lastCancelledAt, this.lastFinishedAt, this.lastProcessed,
-				this.lastProcessedCount, this.lastStartedAt, this.lastTotalProcessingTime, this.messagesTemplates, this.size, this.slackChannels,
-				this.tryToFinishWithin);
+				this.finishWithin, this.itemTypeName, this.keySuffix, this.lastBatchFinishedAt, this.lastBatchStartedAt, this.lastCancelledAt,
+				this.lastFinishedAt, this.lastProcessed, this.lastProcessedCount, this.lastStartedAt, this.lastTotalProcessingTime, this.messagesTemplates,
+				this.size, this.slackChannels, this.tryToFinishWithin);
 	}
 
 	/**
@@ -883,9 +886,10 @@ public class BatchExecutor<Type> implements Typable {
 				&& Objects.equals(this.delayBetweenRuns, other.delayBetweenRuns) && Objects.equals(this.expectedCount, other.expectedCount)
 				&& Objects.equals(this.finishWithin, other.finishWithin) && Objects.equals(this.itemTypeName, other.itemTypeName)
 				&& Objects.equals(this.keySuffix, other.keySuffix) && Objects.equals(this.lastBatchFinishedAt, other.lastBatchFinishedAt)
-				&& Objects.equals(this.lastCancelledAt, other.lastCancelledAt) && Objects.equals(this.lastFinishedAt, other.lastFinishedAt)
-				&& Objects.equals(this.lastProcessed, other.lastProcessed) && Objects.equals(this.lastProcessedCount, other.lastProcessedCount)
-				&& Objects.equals(this.lastStartedAt, other.lastStartedAt) && Objects.equals(this.lastTotalProcessingTime, other.lastTotalProcessingTime)
+				&& Objects.equals(this.lastBatchStartedAt, other.lastBatchStartedAt) && Objects.equals(this.lastCancelledAt, other.lastCancelledAt)
+				&& Objects.equals(this.lastFinishedAt, other.lastFinishedAt) && Objects.equals(this.lastProcessed, other.lastProcessed)
+				&& Objects.equals(this.lastProcessedCount, other.lastProcessedCount) && Objects.equals(this.lastStartedAt, other.lastStartedAt)
+				&& Objects.equals(this.lastTotalProcessingTime, other.lastTotalProcessingTime)
 				&& Objects.equals(this.messagesTemplates, other.messagesTemplates) && Objects.equals(this.size, other.size)
 				&& Objects.equals(this.slackChannels, other.slackChannels) && Objects.equals(this.tryToFinishWithin, other.tryToFinishWithin);
 	}

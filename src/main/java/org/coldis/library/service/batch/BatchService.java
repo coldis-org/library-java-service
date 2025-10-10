@@ -16,6 +16,7 @@ import org.coldis.library.model.Typable;
 import org.coldis.library.persistence.LockBehavior;
 import org.coldis.library.persistence.keyvalue.KeyValue;
 import org.coldis.library.persistence.keyvalue.KeyValueService;
+import org.coldis.library.serialization.ObjectMapperHelper;
 import org.coldis.library.service.jms.JmsMessage;
 import org.coldis.library.service.jms.JmsTemplateHelper;
 import org.coldis.library.service.slack.SlackIntegration;
@@ -36,6 +37,8 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestMethod;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
+
+import com.fasterxml.jackson.databind.ObjectMapper;
 
 /**
  * Batch helper.
@@ -72,6 +75,12 @@ public class BatchService {
 	 * Placeholder resolver.
 	 */
 	private static final PropertyPlaceholderHelper PLACEHOLDER_HELPER = new PropertyPlaceholderHelper("${", "}");
+
+	/**
+	 * Object mapper.
+	 */
+	@Autowired
+	private ObjectMapper objectMapper;
 
 	/**
 	 * JMS template.
@@ -381,8 +390,10 @@ public class BatchService {
 			batchExecutor.setValue(new BatchExecutor<>());
 		}
 		// Updates fields.
-		BeanUtils.copyProperties(executor, batchExecutor.getValue(), "lastStartedAt", "lastProcessed", "lastFinishedAt", "lastCancelledAt",
-				"lastProcessedCount");
+		BeanUtils.copyProperties(executor, batchExecutor.getValue(), "lastStartedAt", "lastFinishedAt", "lastTotalProcessingTime", "lastCancelledAt",
+				"lastProcessed", "lastBatchStartedAt", "lastBatchFinishedAt", "lastProcessedCount");
+		BatchService.LOGGER.debug("Starting batch for: " + ObjectMapperHelper.serialize(this.objectMapper, batchExecutor, null, false));
+
 		// If the executor should be restarted, resets it.
 		@SuppressWarnings("unchecked")
 		final BatchExecutor<Type> batchExecutorValue = (BatchExecutor<Type>) batchExecutor.getValue();
