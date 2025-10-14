@@ -793,7 +793,7 @@ public class BatchExecutor<Type> implements Typable {
 			final Duration timeUntilFinishTarget = this.getTryToFinishWithin().minus(timeSinceStarted);
 			final Duration timeForEachFutureBatch = (timeUntilFinishTarget.isNegative() ? Duration.ZERO
 					: timeUntilFinishTarget
-							.dividedBy(expectedLeftBatchCount <= 0 ? expectedTotalBatches <= 0 ? 100 : expectedTotalBatches / 10 : expectedLeftBatchCount));
+							.dividedBy(Math.max(1L, expectedLeftBatchCount <= 0 ? expectedTotalBatches <= 0 ? 100 : expectedTotalBatches / 10 : expectedLeftBatchCount)));
 			actualDelayBetweenRuns = (timeForEachFutureBatch == Duration.ZERO ? Duration.ZERO
 					: timeForEachFutureBatch.minus(this.getLastBatchProcessingTime()));
 		}
