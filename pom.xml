@@ -3,7 +3,7 @@
 	<parent>
 		<groupId>org.coldis</groupId>
 		<artifactId>configuration</artifactId>
-		<version>2.0.134</version>
+		<version>2.0.136</version>
 	</parent>
 	<groupId>org.coldis.library</groupId>
 	<artifactId>service</artifactId>
@@ -41,7 +41,7 @@
 		<dependency>
 			<groupId>org.coldis.library</groupId>
 			<artifactId>core</artifactId>
-			<version>2.0.83</version>
+			<version>2.0.85</version>
 		</dependency>
 		<dependency>
 			<groupId>org.coldis.library</groupId>
