@@ -1,5 +1,8 @@
 package org.coldis.library.service.jms;
 
+import java.util.Collection;
+import java.util.Set;
+
 import org.apache.activemq.artemis.jms.client.ActiveMQDestination;
 import org.apache.commons.collections4.EnumerationUtils;
 import org.coldis.library.model.RetriableIn;
@@ -33,11 +36,17 @@ public class ExtendedMessagingMessageListenerAdapter extends MessagingMessageLis
 	private final JmsConverterProperties jmsConverterProperties;
 
 	/**
+	 * Non-retryable exceptions.
+	 */
+	private final Collection<Class<?>> nonRetriableExceptions;
+
+	/**
 	 * Default constructor.
 	 */
-	public ExtendedMessagingMessageListenerAdapter(final JmsConverterProperties jmsConverterProperties) {
+	public ExtendedMessagingMessageListenerAdapter(final JmsConverterProperties jmsConverterProperties, final Collection<Class<?>> nonRetriableExceptions) {
 		super();
 		this.jmsConverterProperties = jmsConverterProperties;
+		this.nonRetriableExceptions = (nonRetriableExceptions == null ? Set.of() : Set.copyOf(nonRetriableExceptions));
 	}
 
 	/**
@@ -88,26 +97,27 @@ public class ExtendedMessagingMessageListenerAdapter extends MessagingMessageLis
 			}
 			ExtendedMessagingMessageListenerAdapter.LOGGER.warn(exception.getLocalizedMessage() + "Sending message to 'async-hops/exceeded' queue.");
 		}
-		// Drops message on business exception.
+		// Handles listener execution failed exceptions.
 		catch (final ListenerExecutionFailedException exception) {
 			final Throwable exceptionCause = exception.getCause();
-			// Ignores exceptions that should not be retried.
-			if (exceptionCause instanceof final RetriableIn retriableException) {
-				if (retriableException.getRetryIn() == null) {
-					ExtendedMessagingMessageListenerAdapter.LOGGER
-							.warn("Dropping message due to non-retriable error '" + exception.getClass() + ": " + exception.getLocalizedMessage()
-									+ "' and nested error '" + exceptionCause.getClass() + ": " + exceptionCause.getLocalizedMessage() + "'.");
-					ExtendedMessagingMessageListenerAdapter.LOGGER
-							.debug("Dropped message due to non-retriable error '" + exception.getClass() + ": " + exception.getLocalizedMessage()
-									+ "' and nested error '" + exceptionCause.getClass() + ": " + exceptionCause.getLocalizedMessage() + "'.", exception);
-				}
-				else {
+
+			// If not an non-retrieable exception.
+			if (!this.nonRetriableExceptions.contains(exceptionCause.getClass())) {
+				// If not a retrieable exception or is a retrieable exception without a retry-in
+				// value.
+				if (!(exceptionCause instanceof final RetriableIn retriableException) || (retriableException.getRetryIn() != null)) {
+					// Re-throws the exception to trigger a retry.
 					throw exception;
 				}
 			}
-			else {
-				throw exception;
-			}
+
+			// Logs and drops the message.
+			ExtendedMessagingMessageListenerAdapter.LOGGER
+					.warn("Dropping message due to non-retriable error '" + exception.getClass() + ": " + exception.getLocalizedMessage()
+							+ "' and nested error '" + exceptionCause.getClass() + ": " + exceptionCause.getLocalizedMessage() + "'.");
+			ExtendedMessagingMessageListenerAdapter.LOGGER.debug("Dropped message due to non-retriable error '" + exception.getClass() + ": "
+					+ exception.getLocalizedMessage() + "' and nested error '" + exceptionCause.getClass() + ": " + exceptionCause.getLocalizedMessage() + "'.",
+					exception);
 		}
 		// Clears the thread context map.
 		finally {

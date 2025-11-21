@@ -1,6 +1,10 @@
 package org.coldis.library.service.jms;
 
+import java.util.List;
+
+import org.apache.commons.lang3.ClassUtils;
 import org.springframework.beans.BeansException;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.beans.factory.config.BeanDefinition;
 import org.springframework.beans.factory.support.BeanDefinitionRegistry;
 import org.springframework.beans.factory.support.BeanDefinitionRegistryPostProcessor;
@@ -11,6 +15,7 @@ import org.springframework.jms.annotation.JmsListenerAnnotationBeanPostProcessor
 import org.springframework.jms.config.JmsListenerConfigUtils;
 import org.springframework.jms.config.MethodJmsListenerEndpoint;
 import org.springframework.jms.listener.adapter.MessagingMessageListenerAdapter;
+
 
 /**
  * JMS bootstrap enhanced configuration.
@@ -37,7 +42,9 @@ public class EnhancedJmsBootstrapConfiguration implements BeanDefinitionRegistry
 	@Bean
 	@Role(BeanDefinition.ROLE_INFRASTRUCTURE)
 	public JmsListenerAnnotationBeanPostProcessor enhancedJmsListenerAnnotationProcessor(
-			final JmsConverterProperties jmsConverterProperties) {
+			final JmsConverterProperties jmsConverterProperties,
+			@Value(value = "#{'${org.coldis.library.service.jms.non-retriable-exceptions:}'.split(',')}")
+			List<String> nonRetriableExceptionsNames) {
 		return new JmsListenerAnnotationBeanPostProcessor() {
 
 			/**
@@ -47,12 +54,14 @@ public class EnhancedJmsBootstrapConfiguration implements BeanDefinitionRegistry
 			protected MethodJmsListenerEndpoint createMethodJmsListenerEndpoint() {
 				return new MethodJmsListenerEndpoint() {
 
+
 					/**
 					 * @see org.springframework.jms.config.MethodJmsListenerEndpoint#createMessageListenerInstance()
 					 */
 					@Override
 					protected MessagingMessageListenerAdapter createMessageListenerInstance() {
-						return new ExtendedMessagingMessageListenerAdapter(jmsConverterProperties);
+						List<Class<?>> nonRetriableExceptions = ClassUtils.convertClassNamesToClasses(nonRetriableExceptionsNames);
+						return new ExtendedMessagingMessageListenerAdapter(jmsConverterProperties, nonRetriableExceptions);
 					}
 				};
 			}
