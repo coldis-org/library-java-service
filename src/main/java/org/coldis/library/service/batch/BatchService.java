@@ -206,7 +206,7 @@ public class BatchService {
 	 */
 	@JmsListener(
 			destination = BatchService.DELETE_QUEUE,
-			concurrency = "1-3"
+			concurrency = "${org.coldis.configuration.service.batch-delete-concurrency:1-3}"
 	)
 	@Transactional(
 			propagation = Propagation.REQUIRED,
@@ -330,7 +330,7 @@ public class BatchService {
 	 */
 	@JmsListener(
 			destination = BatchService.RESUME_QUEUE,
-			concurrency = "${org.coldis.configuration.service.batch-concurrency:1-17}"
+			concurrency = "${org.coldis.configuration.service.batch-concurrency:1-10}"
 	)
 	@Transactional(
 			propagation = Propagation.REQUIRED,
