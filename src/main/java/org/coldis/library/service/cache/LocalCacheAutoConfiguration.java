@@ -2,6 +2,7 @@ package org.coldis.library.service.cache;
 
 import java.time.Duration;
 
+import org.coldis.library.service.serialization.JsonMapperAutoConfiguration;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
@@ -12,15 +13,30 @@ import org.springframework.cache.caffeine.CaffeineCacheManager;
 import org.springframework.context.annotation.AdviceMode;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.context.annotation.DependsOn;
 import org.springframework.context.annotation.Primary;
+import org.springframework.core.convert.converter.Converter;
 
+import com.fasterxml.jackson.annotation.JsonInclude;
+import com.fasterxml.jackson.annotation.JsonTypeInfo;
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.MapperFeature;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.SerializationFeature;
+import com.fasterxml.jackson.databind.cfg.MapperConfig;
+import com.fasterxml.jackson.databind.introspect.Annotated;
+import com.fasterxml.jackson.databind.introspect.AnnotatedClass;
+import com.fasterxml.jackson.databind.introspect.JacksonAnnotationIntrospector;
 import com.github.benmanes.caffeine.cache.Caffeine;
+
+import org.springframework.http.converter.json.Jackson2ObjectMapperBuilder;
 
 /**
  * Cache configuration.
  */
 @Configuration
 @EnableCaching(mode = AdviceMode.ASPECTJ)
+@DependsOn(value = { "jsonMapperAutoConfiguration" })
 @ConditionalOnClass(value = { CacheManager.class, CaffeineCacheManager.class })
 public class LocalCacheAutoConfiguration {
 
@@ -28,6 +44,55 @@ public class LocalCacheAutoConfiguration {
 	 * Logger.
 	 */
 	static final Logger LOGGER = LoggerFactory.getLogger(LocalCacheAutoConfiguration.class);
+
+	/**
+	 * Ignore type info introspector.
+	 */
+	private class IgnoreTypeInfoIntrospector extends JacksonAnnotationIntrospector {
+
+		/**
+		 * Serial.
+		 */
+		private static final long serialVersionUID = 6492455468446095497L;
+
+		/**
+		 * @see com.fasterxml.jackson.databind.introspect.JacksonAnnotationIntrospector#findPolymorphicTypeInfo(com.fasterxml.jackson.databind.cfg.MapperConfig,
+		 *      com.fasterxml.jackson.databind.introspect.Annotated)
+		 */
+		@Override
+		public JsonTypeInfo.Value findPolymorphicTypeInfo(
+				final MapperConfig<?> config,
+				final Annotated ann) {
+			return null;
+		}
+
+		/**
+		 * @see com.fasterxml.jackson.databind.introspect.JacksonAnnotationIntrospector#findTypeName(com.fasterxml.jackson.databind.introspect.AnnotatedClass)
+		 */
+		@Override
+		public String findTypeName(
+				final AnnotatedClass ac) {
+			return null;
+		}
+	}
+
+	/** Key converter. */
+	private final Converter<Object, String> keyConverter;
+
+	/**
+	 * Default constructor.
+	 *
+	 * @throws JsonProcessingException
+	 */
+	public LocalCacheAutoConfiguration(final JsonMapperAutoConfiguration jsonMapperAutoConfiguration, final Jackson2ObjectMapperBuilder builder)
+			throws JsonProcessingException {
+		final ObjectMapper objectMapper = jsonMapperAutoConfiguration.genericMapper(builder);
+		objectMapper.configure(MapperFeature.SORT_PROPERTIES_ALPHABETICALLY, true);
+		objectMapper.configure(SerializationFeature.ORDER_MAP_ENTRIES_BY_KEYS, true);
+		objectMapper.setDefaultPropertyInclusion(JsonInclude.Include.NON_NULL);
+		objectMapper.setAnnotationIntrospector(new IgnoreTypeInfoIntrospector());
+		this.keyConverter = new HashCacheKeyConverter(objectMapper, "SHA-256");
+	}
 
 	/** Maximum cache size. */
 	@Value(value = "${org.coldis.configuration.cache.local.maximum-size:}")

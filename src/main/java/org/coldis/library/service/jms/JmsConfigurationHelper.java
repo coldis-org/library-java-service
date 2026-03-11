@@ -144,7 +144,7 @@ public class JmsConfigurationHelper {
 			final Double flowControlMaxPoolSizeCpuMultiplier,
 			@Value("${org.coldis.library.service.jms.global.flow-control.executor.keep-alive-seconds:60}")
 			final Integer flowControlKeepAliveSeconds
-
+			
 	) {
 		if (useCustomPools) {
 			this.globalThreadPool = (this.globalThreadPool == null
