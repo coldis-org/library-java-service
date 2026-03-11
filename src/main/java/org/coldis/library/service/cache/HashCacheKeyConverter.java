@@ -8,7 +8,6 @@ import org.coldis.library.model.SimpleMessage;
 import org.springframework.cache.interceptor.SimpleKey;
 import org.springframework.core.convert.converter.Converter;
 
-import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
 /**
@@ -21,14 +20,15 @@ class HashCacheKeyConverter implements Converter<Object, String> {
 	 */
 	private final ObjectMapper objectMapper;
 
-	/** Message digest. */
-	private final MessageDigest messageDigest;
+	/** Message digest algorithm. */
+	private final String algorithm;
 
 	/** Constructor. */
 	public HashCacheKeyConverter(final ObjectMapper objectMapper, final String algorithm) {
 		this.objectMapper = objectMapper;
+		this.algorithm = algorithm;
 		try {
-			this.messageDigest = MessageDigest.getInstance(algorithm);
+			MessageDigest.getInstance(algorithm);
 		}
 		catch (final Exception exception) {
 			throw new IntegrationException(new SimpleMessage("Could not create message digest."), exception);
@@ -45,12 +45,12 @@ class HashCacheKeyConverter implements Converter<Object, String> {
 			String key = null;
 			if (source != null) {
 				final byte[] payload = (source instanceof SimpleKey ? source.toString().getBytes() : this.objectMapper.writeValueAsBytes(source));
-				final byte[] digest = this.messageDigest.digest(payload);
+				final byte[] digest = MessageDigest.getInstance(this.algorithm).digest(payload);
 				key = HexFormat.of().formatHex(digest);
 			}
 			return key;
 		}
-		catch (final JsonProcessingException exception) {
+		catch (final Exception exception) {
 			throw new IntegrationException(new SimpleMessage("Could not convert cache key."), exception);
 		}
 
