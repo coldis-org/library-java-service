@@ -15,7 +15,7 @@ import org.coldis.library.model.RetriableIn;
 import org.coldis.library.model.Typable;
 import org.coldis.library.persistence.LockBehavior;
 import org.coldis.library.persistence.keyvalue.KeyValue;
-import org.coldis.library.persistence.keyvalue.KeyValueService;
+import org.coldis.library.persistence.keyvalue.KeyValueServiceComponent;
 import org.coldis.library.serialization.ObjectMapperHelper;
 import org.coldis.library.service.jms.JmsMessage;
 import org.coldis.library.service.jms.JmsTemplateHelper;
@@ -98,7 +98,7 @@ public class BatchService {
 	 * Key batchExecutorValue service.
 	 */
 	@Autowired(required = false)
-	private KeyValueService keyValueService;
+	private KeyValueServiceComponent keyValueService;
 
 	/**
 	 * Slack integration.

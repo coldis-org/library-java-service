@@ -9,7 +9,7 @@ import java.util.List;
 import org.coldis.library.exception.BusinessException;
 import org.coldis.library.helper.DateTimeHelper;
 import org.coldis.library.persistence.LockBehavior;
-import org.coldis.library.persistence.keyvalue.KeyValueService;
+import org.coldis.library.persistence.keyvalue.KeyValueServiceComponent;
 import org.coldis.library.service.batch.BatchExecutor;
 import org.coldis.library.service.batch.BatchService;
 import org.coldis.library.test.StartTestWithContainerExtension;
@@ -44,7 +44,7 @@ public class BatchServiceTest extends ContainerTestHelper {
 	 * Key/value service.
 	 */
 	@Autowired
-	private KeyValueService keyValueService;
+	private KeyValueServiceComponent keyValueService;
 
 	/**
 	 * Batch service.

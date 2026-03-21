@@ -5,7 +5,7 @@ import org.coldis.library.model.Typable;
 import org.coldis.library.persistence.LockBehavior;
 import org.coldis.library.persistence.keyvalue.KeyValue;
 import org.coldis.library.persistence.keyvalue.KeyValueRepository;
-import org.coldis.library.persistence.keyvalue.KeyValueService;
+import org.coldis.library.persistence.keyvalue.KeyValueServiceComponent;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnClass;
 import org.springframework.stereotype.Service;
@@ -17,13 +17,13 @@ import org.springframework.transaction.annotation.Transactional;
  */
 @Service
 @ConditionalOnClass(value = KeyValueRepository.class)
-public class RepositoryHealthCheckService {
+public class RepositoryHealthCheckServiceComponent {
 
 	/**
 	 * Health check repository.
 	 */
 	@Autowired(required = false)
-	private KeyValueService keyValueService;
+	private KeyValueServiceComponent keyValueService;
 
 	/**
 	 * Touches the health check repository.

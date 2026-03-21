@@ -33,7 +33,7 @@ public class HealthCheckService {
 	 * Repository health check service.
 	 */
 	@Autowired(required = false)
-	private RepositoryHealthCheckService repositoryHealthCheckService;
+	private RepositoryHealthCheckServiceComponent repositoryHealthCheckService;
 
 	/**
 	 * Health check service.
