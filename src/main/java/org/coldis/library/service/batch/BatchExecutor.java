@@ -787,13 +787,15 @@ public class BatchExecutor<Type> implements Typable {
 		Duration actualDelayBetweenRuns = this.getDelayBetweenRuns();
 		if ((this.getExpectedCount() != null) && (this.getExpectedCount() > 0) && (this.getLastProcessedCount() != null)) {
 			final long expectedLeftCount = this.getExpectedCount() - this.getLastProcessedCount();
-			final long expectedTotalBatches = this.getExpectedCount() / this.getSize();
-			final Long expectedLeftBatchCount = expectedLeftCount / this.getSize();
+			// Roundup to avoid underestimating batches (truncation inflates delay).
+			final long expectedTotalBatches = (this.getExpectedCount() + this.getSize() - 1) / this.getSize();
+			final Long expectedLeftBatchCount = (expectedLeftCount + this.getSize() - 1) / this.getSize();
 			final Duration timeSinceStarted = Duration.between(this.getLastStartedAt(), DateTimeHelper.getCurrentLocalDateTime());
 			final Duration timeUntilFinishTarget = this.getTryToFinishWithin().minus(timeSinceStarted);
 			final Duration timeForEachFutureBatch = (timeUntilFinishTarget.isNegative() ? Duration.ZERO
 					: timeUntilFinishTarget
-							.dividedBy(Math.max(1L, expectedLeftBatchCount <= 0 ? expectedTotalBatches <= 0 ? 100 : expectedTotalBatches / 10 : expectedLeftBatchCount)));
+							// When processed exceeds expected, increase divisor to reduce delay.
+						.dividedBy(Math.max(1L, expectedLeftBatchCount <= 0 ? expectedTotalBatches <= 0 ? 100 : expectedTotalBatches * 10 : expectedLeftBatchCount)));
 			actualDelayBetweenRuns = (timeForEachFutureBatch == Duration.ZERO ? Duration.ZERO
 					: timeForEachFutureBatch.minus(this.getLastBatchProcessingTime()));
 		}
