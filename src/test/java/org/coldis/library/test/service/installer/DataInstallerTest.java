@@ -102,6 +102,32 @@ public class DataInstallerTest extends ContainerTestHelper {
 	}
 
 	/**
+	 * Tests the single file installation.
+	 *
+	 * @throws Exception If the test fails.
+	 */
+	@Test
+	public void testSingleFileInstallation() throws Exception {
+		// Cleans any auto-installed data.
+		this.testRepository.deleteAll();
+		// Installs only data-set-1.
+		this.dataInstaller.install("data-set-1.json");
+		// For each updatable test object (from data-set-1).
+		for (final DataInstallerTestEntity testEntity : DataInstallerTest.UPDATABLE_DATA) {
+			// Asserts that the object have been created.
+			Assertions.assertTrue(TestHelper.waitUntilValid(
+					() -> this.testRepository.findById(new DataInstallerTestEntityKey(testEntity.getProperty1(), testEntity.getProperty2())).orElse(null),
+					data -> Objects.equals(testEntity, data), TestHelper.LONG_WAIT, TestHelper.SHORT_WAIT));
+		}
+		// For each non-updatable test object (from data-set-2).
+		for (final DataInstallerTestEntity testEntity : DataInstallerTest.NON_UPDATABLE_DATA) {
+			// Asserts that the object have not been created.
+			Assertions.assertTrue(
+					this.testRepository.findById(new DataInstallerTestEntityKey(testEntity.getProperty1(), testEntity.getProperty2())).isEmpty());
+		}
+	}
+
+	/**
 	 * Tests the multiple installations.
 	 *
 	 * @throws Exception If the test fails.

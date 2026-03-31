@@ -35,6 +35,7 @@ import org.springframework.http.HttpMethod;
 import org.springframework.http.HttpStatus;
 import org.springframework.util.StreamUtils;
 import org.springframework.util.StringValueResolver;
+import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestMethod;
 import org.springframework.web.bind.annotation.ResponseStatus;
@@ -325,6 +326,47 @@ public class DataInstaller implements ApplicationListener<ApplicationReadyEvent>
 	}
 
 	/**
+	 * Processes and installs a single data set resource.
+	 *
+	 * @param dataSet The resource to install.
+	 */
+	private void installResource(
+			final Resource dataSet) throws Exception {
+		// Gets the data set content.
+		String dataSetContent = StreamUtils.copyToString(dataSet.getInputStream(), Charset.forName("UTF-8"));
+		dataSetContent = Pattern.compile(DataInstaller.RESOURCE_PATTERN).matcher(dataSetContent)
+				.replaceAll(result -> this.getResourceContent(result.group(1)));
+		dataSetContent = Pattern.compile(DataInstaller.PROPERTY_PATTERN).matcher(dataSetContent)
+				.replaceAll(result -> this.valueResolver.resolveStringValue("${" + result.group(1) + "}"));
+		// Gets the installation metadata.
+		final String dataSetName = dataSet.getFilename();
+		final DataInstallationMetadata dataSetMetadata = ObjectMapperHelper.deserialize(this.objectMapper, dataSetContent,
+				DataInstallationMetadata.class, false);
+		// If the data should be ignored.
+		if (CollectionUtils.isNotEmpty(this.ignoreData)
+				&& this.ignoreData.stream().anyMatch(currentIgnoredData -> dataSetName.matches(currentIgnoredData))) {
+			// Logs it.
+			DataInstaller.LOGGER.info("Ignoring data installation for data set '" + dataSetName + "'.");
+		}
+		// If the data should not be ignored.
+		else {
+			if (dataSetMetadata.getAsynchronously()) {
+				CompletableFuture.runAsync(new Runnable() {
+
+					@Override
+					public void run() {
+						DataInstaller.this.installDataSet(dataSetName, dataSetMetadata);
+					}
+				}, DataInstaller.THREAD_POOL);
+			}
+			else {
+				// Installs the data set.
+				this.installDataSet(dataSetName, dataSetMetadata);
+			}
+		}
+	}
+
+	/**
 	 * Installs data.
 	 */
 	@ResponseStatus(HttpStatus.OK)
@@ -349,38 +391,7 @@ public class DataInstaller implements ApplicationListener<ApplicationReadyEvent>
 			});
 			// Installs each data set.
 			for (final Resource dataSet : dataSets) {
-				// Gets the data set content.
-				String dataSetContent = StreamUtils.copyToString(dataSet.getInputStream(), Charset.forName("UTF-8"));
-				dataSetContent = Pattern.compile(DataInstaller.RESOURCE_PATTERN).matcher(dataSetContent)
-						.replaceAll(result -> this.getResourceContent(result.group(1)));
-				dataSetContent = Pattern.compile(DataInstaller.PROPERTY_PATTERN).matcher(dataSetContent)
-						.replaceAll(result -> this.valueResolver.resolveStringValue("${" + result.group(1) + "}"));
-				// Gets the installation metadata.
-				final String dataSetName = dataSet.getFilename();
-				final DataInstallationMetadata dataSetMetadata = ObjectMapperHelper.deserialize(this.objectMapper, dataSetContent,
-						DataInstallationMetadata.class, false);
-				// If the data should be ignored.
-				if (CollectionUtils.isNotEmpty(this.ignoreData)
-						&& this.ignoreData.stream().anyMatch(currentIgnoredData -> dataSetName.matches(currentIgnoredData))) {
-					// Logs it.
-					DataInstaller.LOGGER.info("Ignoring data installation for data set '" + dataSetName + "'.");
-				}
-				// If the data should not be ignored.
-				else {
-					if (dataSetMetadata.getAsynchronously()) {
-						CompletableFuture.runAsync(new Runnable() {
-
-							@Override
-							public void run() {
-								DataInstaller.this.installDataSet(dataSetName, dataSetMetadata);
-							}
-						}, DataInstaller.THREAD_POOL);
-					}
-					else {
-						// Installs the data set.
-						this.installDataSet(dataSetName, dataSetMetadata);
-					}
-				}
+				this.installResource(dataSet);
 			}
 			DataInstaller.LOGGER.info("Finishing data installer");
 		}
@@ -388,6 +399,45 @@ public class DataInstaller implements ApplicationListener<ApplicationReadyEvent>
 		catch (final Exception exception) {
 			// Logs it.
 			DataInstaller.LOGGER.error("Data could not be installed.", exception);
+		}
+	}
+
+	/**
+	 * Installs a specific data file by name.
+	 *
+	 * @param fileName The file name to install.
+	 */
+	@ResponseStatus(HttpStatus.OK)
+	@RequestMapping(
+			path = "/{fileName}",
+			method = { RequestMethod.POST, RequestMethod.GET }
+	)
+	public void install(
+			@PathVariable
+			final String fileName) {
+		// Tries to install data.
+		try {
+			DataInstaller.LOGGER.info("Starting data installer for file '" + fileName + "'.");
+			// Gets the data sets to be installed.
+			final Resource[] dataSets = this.resourcePatternResolver.getResources(this.data);
+			// Finds the matching data set.
+			boolean found = false;
+			for (final Resource dataSet : dataSets) {
+				if (dataSet.getFilename().equals(fileName)) {
+					this.installResource(dataSet);
+					found = true;
+					break;
+				}
+			}
+			if (!found) {
+				DataInstaller.LOGGER.warn("Data file '" + fileName + "' not found.");
+			}
+			DataInstaller.LOGGER.info("Finishing data installer for file '" + fileName + "'.");
+		}
+		// If the data cannot be installed.
+		catch (final Exception exception) {
+			// Logs it.
+			DataInstaller.LOGGER.error("Data could not be installed for file '" + fileName + "'.", exception);
 		}
 	}
 
