@@ -9,6 +9,7 @@ import java.util.Objects;
 import java.util.Properties;
 
 import org.apache.commons.lang3.StringUtils;
+import org.apache.commons.lang3.exception.ExceptionUtils;
 import org.coldis.library.exception.BusinessException;
 import org.coldis.library.helper.DateTimeHelper;
 import org.coldis.library.model.RetriableIn;
@@ -38,6 +39,7 @@ import org.springframework.web.bind.annotation.RequestMethod;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
+import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
 /**
@@ -217,10 +219,20 @@ public class BatchService {
 		final String key = (String) message.get("key");
 		final Boolean onlyIfShouldBeCleaned = (Boolean) message.get("onlyIfShouldBeCleaned");
 		if (this.keyValueService.getRepository().existsById(key)) {
-			final KeyValue<Typable> batchExecutor = this.keyValueService.findById(key, LockBehavior.WAIT_AND_LOCK, false);
-			final BatchExecutor<?> batchExecutorValue = (BatchExecutor<?>) batchExecutor.getValue();
-			if (!onlyIfShouldBeCleaned || batchExecutorValue.shouldBeCleaned()) {
-				this.keyValueService.delete(key);
+			try {
+				final KeyValue<Typable> batchExecutor = this.keyValueService.findById(key, LockBehavior.WAIT_AND_LOCK, false);
+				final BatchExecutor<?> batchExecutorValue = (BatchExecutor<?>) batchExecutor.getValue();
+				if (!onlyIfShouldBeCleaned || batchExecutorValue.shouldBeCleaned()) {
+					this.keyValueService.delete(key);
+				}
+			}
+			catch (final Exception exception) {
+				if (ExceptionUtils.indexOfType(exception, JsonProcessingException.class) >= 0) {
+					this.keyValueService.delete(key);
+				}
+				else {
+					throw exception;
+				}
 			}
 		}
 	}
@@ -476,15 +488,25 @@ public class BatchService {
 	public void checkAll() throws BusinessException {
 		final List<KeyValue<Typable>> batchExecutors = this.keyValueService.findByKeyStart(BatchService.BATCH_KEY_PREFIX);
 		for (final KeyValue<Typable> batchExecutor : batchExecutors) {
-			final BatchExecutor<?> batchExecutorValue = (BatchExecutor<?>) batchExecutor.getValue();
-			if ((batchExecutorValue != null)) {
-				// Deletes old batches.
-				if (batchExecutorValue.shouldBeCleaned()) {
-					this.queueDeleteAsync(batchExecutor.getKey(), true);
+			try {
+				final BatchExecutor<?> batchExecutorValue = (BatchExecutor<?>) batchExecutor.getValue();
+				if ((batchExecutorValue != null)) {
+					// Deletes old batches.
+					if (batchExecutorValue.shouldBeCleaned()) {
+						this.queueDeleteAsync(batchExecutor.getKey(), true);
+					}
+					// Makes sure non-expired are still running.
+					else if (batchExecutorValue.getNextBatchStartingAt() != null) {
+						this.queueResumeAsync(batchExecutorValue.getKeySuffix(), batchExecutorValue.getNextBatchStartingAt());
+					}
 				}
-				// Makes sure non-expired are still running.
-				else if (batchExecutorValue.getNextBatchStartingAt() != null) {
-					this.queueResumeAsync(batchExecutorValue.getKeySuffix(), batchExecutorValue.getNextBatchStartingAt());
+			}
+			catch (final Exception exception) {
+				if (ExceptionUtils.indexOfType(exception, JsonProcessingException.class) >= 0) {
+					this.queueDeleteAsync(batchExecutor.getKey(), false);
+				}
+				else {
+					throw exception;
 				}
 			}
 		}

@@ -279,7 +279,7 @@ public class BatchExecutor<Type> implements Typable {
 			return (this.getItemTypeName() == null ? null : (Class<Type>) Class.forName(this.getItemTypeName()));
 		}
 		catch (final Exception exception) {
-			throw new IntegrationException(new SimpleMessage("type.ivalid"));
+			return null;
 		}
 	}
 
