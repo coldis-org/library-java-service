@@ -19,23 +19,7 @@ import org.testcontainers.containers.GenericContainer;
 @TestWithContainer(reuse = true)
 @ExtendWith(StartTestWithContainerExtension.class)
 @SpringBootTest(webEnvironment = WebEnvironment.RANDOM_PORT)
-@DirtiesContext(classMode = DirtiesContext.ClassMode.AFTER_CLASS)
 public class HealthCheckServiceTest extends ContainerTestHelper {
-
-	/**
-	 * Redis container.
-	 */
-	public static GenericContainer<?> REDIS_CONTAINER = TestHelper.createRedisContainer();
-
-	/**
-	 * Postgres container.
-	 */
-	public static GenericContainer<?> POSTGRES_CONTAINER = TestHelper.createPostgresContainer();
-
-	/**
-	 * Artemis container.
-	 */
-	public static GenericContainer<?> ARTEMIS_CONTAINER = TestHelper.createArtemisContainer();
 
 	/**
 	 * Health check service client.

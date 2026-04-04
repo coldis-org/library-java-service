@@ -22,23 +22,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 @TestWithContainer(reuse = true)
 @ExtendWith(StartTestWithContainerExtension.class)
 @SpringBootTest(webEnvironment = WebEnvironment.RANDOM_PORT)
-@DirtiesContext(classMode = DirtiesContext.ClassMode.AFTER_CLASS)
 public class SerializationTest extends ContainerTestHelper {
-
-	/**
-	 * Redis container.
-	 */
-	public static GenericContainer<?> REDIS_CONTAINER = TestHelper.createRedisContainer();
-
-	/**
-	 * Postgres container.
-	 */
-	public static GenericContainer<?> POSTGRES_CONTAINER = TestHelper.createPostgresContainer();
-
-	/**
-	 * Artemis container.
-	 */
-	public static GenericContainer<?> ARTEMIS_CONTAINER = TestHelper.createArtemisContainer();
 
 	/**
 	 * Object mapper.

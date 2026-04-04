@@ -32,7 +32,6 @@ import org.springframework.test.annotation.DirtiesContext;
 @TestWithContainer(reuse = true)
 @ExtendWith(StartTestWithContainerExtension.class)
 @SpringBootTest(webEnvironment = WebEnvironment.RANDOM_PORT)
-@DirtiesContext(classMode = DirtiesContext.ClassMode.AFTER_CLASS)
 public class BatchServiceTest extends ContainerTestHelper {
 
 	/**

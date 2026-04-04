@@ -36,23 +36,7 @@ import jakarta.jms.Message;
 @TestWithContainer(reuse = true)
 @ExtendWith(StartTestWithContainerExtension.class)
 @SpringBootTest(webEnvironment = WebEnvironment.RANDOM_PORT)
-@DirtiesContext(classMode = DirtiesContext.ClassMode.AFTER_CLASS)
 public class EnhancedMessageConverterTest extends ContainerTestHelper {
-
-	/**
-	 * Redis container.
-	 */
-	public static GenericContainer<?> REDIS_CONTAINER = TestHelper.createRedisContainer();
-
-	/**
-	 * Postgres container.
-	 */
-	public static GenericContainer<?> POSTGRES_CONTAINER = TestHelper.createPostgresContainer();
-
-	/**
-	 * Artemis container.
-	 */
-	public static GenericContainer<?> ARTEMIS_CONTAINER = TestHelper.createArtemisContainer();
 
 	/**
 	 * Test data.
@@ -115,18 +99,37 @@ public class EnhancedMessageConverterTest extends ContainerTestHelper {
 	@Qualifier("internalEnhancedJmsMessageConverter")
 	private EnhancedJmsMessageConverter internalEnhancedJmsMessageConverter;
 
+	/** Original message converter captured before tests modify it. */
+	private org.springframework.jms.support.converter.MessageConverter originalMessageConverter;
+
+	/** Original maximumAsyncHops captured before tests modify it. */
+	private Long originalMaximumAsyncHops;
+
+	/** Original originalTypePrecedence captured before tests modify it. */
+	private Boolean originalTypePrecedence;
+
 	/**
 	 * Sets up tests.
 	 */
 	@BeforeEach
 	public void setUp() {
+		this.originalMessageConverter = this.jmsTemplate.getMessageConverter();
+		this.originalMaximumAsyncHops = this.jmsConverterProperties.getMaximumAsyncHops();
+		this.originalTypePrecedence = this.jmsConverterProperties.getOriginalTypePrecedence();
 		EnhancedMessageConverterTest.currentTestMessage = null;
 		EnhancedMessageConverterTest.asyncHops = 0L;
 		this.jmsTemplate.setMessageConverter(this.enhancedJmsMessageConverter);
 		this.enhancedJmsMessageConverter.clearPreferredClassesCache();
 		this.jmsConverterProperties.setMaximumAsyncHops(103L);
 		this.jmsConverterProperties.setOriginalTypePrecedence(true);
+	}
 
+	/** Resets shared singletons after each test. */
+	@org.junit.jupiter.api.AfterEach
+	public void tearDown() {
+		this.jmsTemplate.setMessageConverter(this.originalMessageConverter);
+		this.jmsConverterProperties.setMaximumAsyncHops(this.originalMaximumAsyncHops);
+		this.jmsConverterProperties.setOriginalTypePrecedence(this.originalTypePrecedence);
 	}
 
 	/**

@@ -10,6 +10,8 @@ import org.coldis.library.test.service.ContainerTestHelper;
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.coldis.library.helper.ReflectionHelper;
+import org.coldis.library.service.security.BrowserRequestSecurityFilter;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -18,50 +20,41 @@ import org.springframework.core.ParameterizedTypeReference;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpMethod;
 import org.springframework.http.HttpStatus;
-import org.springframework.test.annotation.DirtiesContext;
 import org.springframework.util.StringValueResolver;
-import org.testcontainers.containers.GenericContainer;
 
 /**
  * Security test.
  */
 @TestWithContainer(reuse = true)
 @ExtendWith(StartTestWithContainerExtension.class)
-@SpringBootTest(
-		webEnvironment = WebEnvironment.RANDOM_PORT,
-		properties = { "org.coldis.library.service.security.deny-non-browser-requests=true",
-				"org.coldis.library.service.security.ignore-non-browser-requests-paths=/exception/business" }
-)
-@DirtiesContext(classMode = DirtiesContext.ClassMode.AFTER_CLASS)
+@SpringBootTest(webEnvironment = WebEnvironment.RANDOM_PORT)
 public class BrowserRequestSecurityTest extends ContainerTestHelper {
 
-	/**
-	 * Redis container.
-	 */
-	public static GenericContainer<?> REDIS_CONTAINER = TestHelper.createRedisContainer();
+	@Autowired
+	private BrowserRequestSecurityFilter browserRequestSecurityFilter;
 
-	/**
-	 * Postgres container.
-	 */
-	public static GenericContainer<?> POSTGRES_CONTAINER = TestHelper.createPostgresContainer();
-
-	/**
-	 * Artemis container.
-	 */
-	public static GenericContainer<?> ARTEMIS_CONTAINER = TestHelper.createArtemisContainer();
-
-	/**
-	 * Value resolver.
-	 */
+	/** Value resolver. */
 	@Autowired
 	private StringValueResolver valueResolver;
 
-	/**
-	 * Service client.
-	 */
+	/** Service client. */
 	@Autowired
 	@Qualifier(value = "restServiceClient")
 	private GenericRestServiceClient genericRestServiceClient;
+
+	/** Enables the filter before each test. */
+	@org.junit.jupiter.api.BeforeEach
+	public void enableFilter() {
+		ReflectionHelper.setAttribute(this.browserRequestSecurityFilter, true, "denyNonBrowserRequests", true);
+		ReflectionHelper.setAttribute(this.browserRequestSecurityFilter, true, "ignorePaths",
+				new String[] { "/exception/business" });
+	}
+
+	/** Disables the filter after each test. */
+	@org.junit.jupiter.api.AfterEach
+	public void disableFilter() {
+		ReflectionHelper.setAttribute(this.browserRequestSecurityFilter, true, "denyNonBrowserRequests", false);
+	}
 
 	/**
 	 * Tests requests from browsers and non-browsers.

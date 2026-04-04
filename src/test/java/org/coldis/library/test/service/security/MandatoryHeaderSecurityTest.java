@@ -3,6 +3,7 @@ package org.coldis.library.test.service.security;
 import java.util.List;
 import java.util.Map;
 
+import org.coldis.library.helper.ReflectionHelper;
 import org.coldis.library.exception.BusinessException;
 import org.coldis.library.exception.IntegrationException;
 import org.coldis.library.service.client.GenericRestServiceClient;
@@ -20,50 +21,42 @@ import org.springframework.boot.test.context.SpringBootTest.WebEnvironment;
 import org.springframework.core.ParameterizedTypeReference;
 import org.springframework.http.HttpMethod;
 import org.springframework.http.HttpStatus;
-import org.springframework.test.annotation.DirtiesContext;
 import org.springframework.util.LinkedMultiValueMap;
 import org.springframework.util.StringValueResolver;
-import org.testcontainers.containers.GenericContainer;
 
 /**
  * Security test.
  */
 @TestWithContainer(reuse = true)
 @ExtendWith(StartTestWithContainerExtension.class)
-@SpringBootTest(
-		webEnvironment = WebEnvironment.RANDOM_PORT,
-		properties = { "org.coldis.library.service.security.mandatory-headers=x-mandatory1,x-mandatory2=abc" }
-)
-@DirtiesContext(classMode = DirtiesContext.ClassMode.AFTER_CLASS)
+@SpringBootTest(webEnvironment = WebEnvironment.RANDOM_PORT)
 public class MandatoryHeaderSecurityTest extends ContainerTestHelper {
 
-	/**
-	 * Redis container.
-	 */
-	public static GenericContainer<?> REDIS_CONTAINER = TestHelper.createRedisContainer();
+	@Autowired
+	private org.coldis.library.service.security.MandatoryHeaderSecurityFilter mandatoryHeaderSecurityFilter;
 
-	/**
-	 * Postgres container.
-	 */
-	public static GenericContainer<?> POSTGRES_CONTAINER = TestHelper.createPostgresContainer();
-
-	/**
-	 * Artemis container.
-	 */
-	public static GenericContainer<?> ARTEMIS_CONTAINER = TestHelper.createArtemisContainer();
-
-	/**
-	 * Value resolver.
-	 */
+	/** Value resolver. */
 	@Autowired
 	private StringValueResolver valueResolver;
 
-	/**
-	 * Service client.
-	 */
+	/** Service client. */
 	@Autowired
 	@Qualifier(value = "restServiceClient")
 	private GenericRestServiceClient genericRestServiceClient;
+
+	/** Configures mandatory headers before each test. */
+	@org.junit.jupiter.api.BeforeEach
+	public void enableFilter() {
+		ReflectionHelper.setAttribute(this.mandatoryHeaderSecurityFilter, true, "mandatoryHeaders",
+				new String[] { "x-mandatory1", "x-mandatory2=abc" });
+	}
+
+	/** Clears mandatory headers after each test. */
+	@org.junit.jupiter.api.AfterEach
+	public void disableFilter() {
+		ReflectionHelper.setAttribute(this.mandatoryHeaderSecurityFilter, true, "mandatoryHeaders",
+				new String[] {});
+	}
 
 	/**
 	 * Tests requests from browsers and non-browsers.

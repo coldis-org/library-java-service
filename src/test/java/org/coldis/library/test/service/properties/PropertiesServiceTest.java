@@ -31,28 +31,12 @@ import com.zaxxer.hikari.HikariDataSource;
 @TestWithContainer(reuse = true)
 @ExtendWith(StartTestWithContainerExtension.class)
 @SpringBootTest(webEnvironment = WebEnvironment.RANDOM_PORT)
-@DirtiesContext(classMode = DirtiesContext.ClassMode.AFTER_CLASS)
 public class PropertiesServiceTest extends ContainerTestHelper {
 
 	/**
 	 * Logger.
 	 */
 	private static final Logger LOGGER = LoggerFactory.getLogger(PropertiesServiceTest.class);
-
-	/**
-	 * Redis container.
-	 */
-	public static GenericContainer<?> REDIS_CONTAINER = TestHelper.createRedisContainer();
-
-	/**
-	 * Postgres container.
-	 */
-	public static GenericContainer<?> POSTGRES_CONTAINER = TestHelper.createPostgresContainer();
-
-	/**
-	 * Artemis container.
-	 */
-	public static GenericContainer<?> ARTEMIS_CONTAINER = TestHelper.createArtemisContainer();
 
 	/**
 	 * Service port.
@@ -85,6 +69,53 @@ public class PropertiesServiceTest extends ContainerTestHelper {
 	/** Jms template. */
 	@Autowired
 	private JmsTemplate jmsTemplate;
+
+	/** Original datasource URL from environment. */
+	@Value("${spring.datasource.url}")
+	private String originalJdbcUrl;
+
+	/** Original Artemis port from environment. */
+	@Value("${ARTEMIS_CONTAINER_61616}")
+	private String originalArtemisPort;
+
+	/** Resets shared singletons after each test to their initial environment-based values. */
+	@org.junit.jupiter.api.AfterEach
+	public void tearDown() {
+		try {
+			this.restTemplate.put("http://localhost:" + this.port + "/properties/string/testProperties1/property1", 1, Void.class);
+			this.restTemplate.put("http://localhost:" + this.port + "/properties/long/testProperties1/property2", 1, Void.class);
+			this.restTemplate.put("http://localhost:" + this.port + "/properties/integer/testProperties1/property3", 1, Void.class);
+			this.restTemplate.put("http://localhost:" + this.port + "/properties/double/testProperties1/property4", 1, Void.class);
+			this.restTemplate.put("http://localhost:" + this.port + "/properties/float/testProperties1/property5", 1, Void.class);
+			this.restTemplate.put("http://localhost:" + this.port + "/properties/boolean/testProperties1/property6", true, Void.class);
+		} catch (final Exception exception) {
+		}
+		try {
+			this.restTemplate.put("http://localhost:" + this.port + "/properties/string/dataSource/pool.dataSource.jdbcUrl?fieldAccess=true",
+					this.originalJdbcUrl, Void.class);
+		} catch (final Exception exception) {
+		}
+		try {
+			this.restTemplate.put(
+					"http://localhost:" + this.port
+							+ "/properties/string/pooledJmsConnectionFactory/connectionFactory.serverLocator.topologyArray.0.a.params.host?fieldAccess=true",
+					"localhost", Void.class);
+			this.restTemplate.put(
+					"http://localhost:" + this.port
+							+ "/properties/string/pooledJmsConnectionFactory/connectionFactory.serverLocator.initialConnectors.0.params.host?fieldAccess=true",
+					"localhost", Void.class);
+			this.restTemplate.put(
+					"http://localhost:" + this.port
+							+ "/properties/string/pooledJmsConnectionFactory/connectionFactory.serverLocator.topologyArray.0.a.params.port?fieldAccess=true",
+					this.originalArtemisPort, Void.class);
+			this.restTemplate.put(
+					"http://localhost:" + this.port
+							+ "/properties/string/pooledJmsConnectionFactory/connectionFactory.serverLocator.initialConnectors.0.params.port?fieldAccess=true",
+					this.originalArtemisPort, Void.class);
+			this.connectionFactory.clear();
+		} catch (final Exception exception) {
+		}
+	}
 
 	/** Test properties update. */
 	@Test

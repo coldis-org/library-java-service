@@ -8,7 +8,6 @@ import org.coldis.library.service.http.UserAgentHelper;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
-import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.cache.annotation.Cacheable;
 import org.springframework.core.annotation.Order;
 import org.springframework.http.HttpHeaders;
@@ -26,15 +25,14 @@ import jakarta.servlet.http.HttpServletResponse;
 /** Browser request security filter. */
 @Component
 @Order(-100)
-@ConditionalOnProperty(
-		name = "org.coldis.library.service.security.deny-non-browser-requests",
-		havingValue = "true",
-		matchIfMissing = false
-)
 public class BrowserRequestSecurityFilter implements Filter {
 
 	/** Logger. */
 	private static final Logger LOGGER = LoggerFactory.getLogger(BrowserRequestSecurityFilter.class);
+
+	/** Whether to deny non-browser requests. */
+	@Value(value = "${org.coldis.library.service.security.deny-non-browser-requests:false}")
+	private boolean denyNonBrowserRequests;
 
 	/**
 	 * Ignored paths.
@@ -66,6 +64,11 @@ public class BrowserRequestSecurityFilter implements Filter {
 			final ServletRequest request,
 			final ServletResponse response,
 			final FilterChain chain) throws IOException, ServletException {
+		// Skips filtering if not enabled.
+		if (!this.denyNonBrowserRequests) {
+			chain.doFilter(request, response);
+			return;
+		}
 		// Throws an unauthorized request if not a browser.
 		boolean isBrowser = true;
 		if (HttpServletHelper.shouldConsiderPath(request, this.ignorePaths)) {

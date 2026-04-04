@@ -10,7 +10,6 @@ import org.coldis.library.service.http.HttpServletHelper;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
-import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.core.annotation.Order;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Component;
@@ -26,10 +25,6 @@ import jakarta.servlet.http.HttpServletResponse;
 /** Mandatory header security filter. */
 @Component
 @Order(-100)
-@ConditionalOnProperty(
-		name = "org.coldis.library.service.security.mandatory-headers",
-		matchIfMissing = false
-)
 public class MandatoryHeaderSecurityFilter implements Filter {
 
 	/** Logger. */

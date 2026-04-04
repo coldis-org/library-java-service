@@ -1,4 +1,4 @@
-package org.coldis.library.test.service.jms;
+package org.coldis.library.test.service;
 
 import org.coldis.library.service.jms.ExtendedArtemisProperties;
 import org.coldis.library.service.jms.JmsConfigurationHelper;
