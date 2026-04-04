@@ -11,6 +11,7 @@ import org.coldis.library.model.SimpleMessage;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.http.HttpStatus;
 import org.springframework.jms.annotation.JmsListener;
@@ -27,6 +28,7 @@ import org.springframework.transaction.annotation.Transactional;
  * component handles deduplication and deferred persistence via an internal JMS queue.
  */
 @Component
+@ConditionalOnProperty(name = "org.coldis.configuration.service.statistics-enabled", matchIfMissing = false)
 public class StatisticsEventServiceComponent {
 
   /** Logger. */

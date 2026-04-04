@@ -2,6 +2,7 @@ package org.coldis.library.service.statistics;
 
 import java.time.LocalDateTime;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.cache.annotation.CacheEvict;
 import org.springframework.cache.annotation.Cacheable;
@@ -11,6 +12,7 @@ import org.springframework.transaction.annotation.Transactional;
 
 /** Statistics context configuration service component. */
 @Component
+@ConditionalOnProperty(name = "org.coldis.configuration.service.statistics-enabled", matchIfMissing = false)
 public class StatisticsContextConfigurationServiceComponent {
 
   /** Default truncation in minutes (configurable via property). */
