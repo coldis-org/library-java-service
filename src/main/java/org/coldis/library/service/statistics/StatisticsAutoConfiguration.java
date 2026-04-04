@@ -1,7 +1,6 @@
 package org.coldis.library.service.statistics;
 
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
-import org.springframework.context.annotation.ComponentScan;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.scheduling.annotation.EnableScheduling;
 
@@ -10,7 +9,6 @@ import org.springframework.scheduling.annotation.EnableScheduling;
  */
 @Configuration
 @EnableScheduling
-@ComponentScan
 @ConditionalOnProperty(
     name = "org.coldis.configuration.service.statistics-enabled",
     matchIfMissing = false
