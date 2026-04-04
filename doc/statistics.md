@@ -10,7 +10,17 @@ The statistics module provides three core concepts:
 - **StatisticsEventSummary** — Aggregated counts and weights per dimension value, bucketed by configurable time intervals.
 - **StatisticsContextConfiguration** — Per-context settings (e.g., time truncation interval).
 
-Events are persisted immediately. Summary updates are buffered in-memory, flushed periodically via JMS, and applied in batches for scalability.
+Events are persisted immediately. Summary deltas are buffered in-memory, flushed periodically via JMS, and applied in batches for scalability.
+
+## Enabling
+
+Set the following property to activate the statistics module:
+
+```properties
+org.coldis.configuration.service.statistics-enabled=true
+```
+
+When disabled, no statistics beans, scheduled tasks, or JMS listeners are created.
 
 ## Package
 
@@ -26,10 +36,10 @@ org.coldis.library.service.statistics
 | `StatisticsEventSummary` | JPA entity. Composite key: `(context, dimensionName, dateTime)`. Stores `valueCounts`, `totalCount`, `valueWeights`, `totalWeight`. |
 | `StatisticsEventSummaryDelta` | Buffered delta POJO. Implements `Reduceable` for in-memory aggregation before flush. |
 | `StatisticsContextConfiguration` | JPA entity. Key: `context`. Stores `truncationMinutes`. |
-| `StatisticsEventServiceComponent` | Business logic: upsert, delete, buffered event processing, expired event purge. |
+| `StatisticsEventServiceComponent` | Business logic: upsert, delete, batch upsert, expired event purge. |
 | `StatisticsEventSummaryServiceComponent` | Summary logic: delta buffering/flushing/applying, period queries, comparison, probability. |
 | `StatisticsContextConfigurationServiceComponent` | Cached context configuration lookup, context-aware time truncation. |
-| `StatisticsAutoConfiguration` | Spring `@Configuration` that enables entity scanning, repository scanning, and scheduling. |
+| `StatisticsAutoConfiguration` | Spring `@Configuration` that enables scheduling. Conditional on `statistics-enabled`. |
 
 ## Data Model
 
@@ -77,13 +87,15 @@ Event arrives
        -> Persists event (pessimistic locking for upsert)
        -> Buffers summary delta (in-memory BufferedReducer)
 
+Batch upsert
+  -> StatisticsEventServiceComponent.upsertAllStatisticsEvents()
+       -> Calls upsertStatisticsEvent() for each event
+
 Periodic flush (configurable cron, default every minute)
-  -> Flushes event buffer to JMS queue (statistics-event/buffer)
   -> Flushes summary delta buffer to JMS queue (statistics-event/summary/delta)
 
-JMS listeners
-  -> Process buffered events (concurrency 1-10)
-  -> Apply summary deltas with pessimistic locking (concurrency 1-10)
+JMS listener
+  -> Applies summary deltas with pessimistic locking (concurrency 1-10)
 ```
 
 ### Buffered Summary Deltas
@@ -139,11 +151,10 @@ Each context can define its own time bucket size via `StatisticsContextConfigura
 
 | Property | Default | Description |
 |----------|---------|-------------|
+| `org.coldis.configuration.service.statistics-enabled` | `false` | Feature toggle — must be `true` to activate the module |
 | `org.coldis.library.service.statistics.default-truncation-minutes` | `15` | Default time bucket size when no context config exists |
-| `org.coldis.library.service.statistics.event.buffer.cron` | `0 * * * * *` | Event buffer flush schedule (every minute) |
 | `org.coldis.library.service.statistics.event.deleteexpired.cron` | `0 0 3 * * *` | Expired event cleanup schedule (3 AM daily) |
 | `org.coldis.library.service.statistics.event.deleteexpired.batch-size` | `1000` | Batch size for expired event deletion |
-| `org.coldis.library.service.statistics.event.processbufferedevent.concurrency` | `1-10` | JMS concurrency for event buffer processing |
 | `org.coldis.library.service.statistics.summary.buffer.cron` | `0 * * * * *` | Summary delta buffer flush schedule (every minute) |
 | `org.coldis.library.service.statistics.summary.processsummarydelta.concurrency` | `1-10` | JMS concurrency for summary delta processing |
 
@@ -151,11 +162,15 @@ Each context can define its own time bucket size via `StatisticsContextConfigura
 
 ### Dependencies
 
-Add `coldis-library-java-service` to your project. The `StatisticsAutoConfiguration` class handles entity scanning, repository scanning, and scheduling automatically.
+Add `coldis-library-java-service` to your project and enable the module:
+
+```properties
+org.coldis.configuration.service.statistics-enabled=true
+```
 
 Your application needs:
 - PostgreSQL (for event and summary tables — auto-created by Hibernate)
-- Apache Artemis / JMS broker (for buffered processing queues)
+- Apache Artemis / JMS broker (for buffered summary delta processing)
 
 ### Upsert an Event
 
@@ -171,6 +186,12 @@ event.setDimensionValue("sao-paulo");
 event.setWeight(new BigDecimal("150.00")); // optional, defaults to 1
 event.setExpiredAt(LocalDateTime.now().plusDays(90)); // optional
 statisticsEventServiceComponent.upsertStatisticsEvent(event);
+```
+
+### Batch Upsert
+
+```java
+statisticsEventServiceComponent.upsertAllStatisticsEvents(List.of(event1, event2, event3));
 ```
 
 ### Query Summaries
