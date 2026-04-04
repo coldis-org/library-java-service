@@ -1,14 +1,18 @@
 <project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+
 	<modelVersion>4.0.0</modelVersion>
+
 	<parent>
 		<groupId>org.coldis</groupId>
 		<artifactId>configuration</artifactId>
-		<version>2.0.148</version>
+		<version>2.0.149</version>
 	</parent>
+
 	<groupId>org.coldis.library</groupId>
 	<artifactId>service</artifactId>
 	<version>2.0.222-SNAPSHOT</version>
 	<packaging>jar</packaging>
+
 	<name>Spring boot utilities</name>
 	<description>Java Spring Boot utilities.</description>
 	<url>http://coldis.org/project/library/java-service</url>
@@ -22,6 +26,7 @@
 			<email>me@rvcoutinho.com</email>
 		</developer>
 	</developers>
+	
 	<properties>
 		<project.config.source.test.compile.annotationProcessors>
 			org.coldis.library.dto.DtoGenerator,org.coldis.library.service.client.generator.ServiceClientGenerator</project.config.source.test.compile.annotationProcessors>
@@ -29,6 +34,7 @@
 		<project.config.source.test.fork-count>3</project.config.source.test.fork-count>
 		<project.config.source.test.retry-and-fail-fast.max-attempts>3</project.config.source.test.retry-and-fail-fast.max-attempts>
 	</properties>
+	
 	<scm>
 		<url>https://github.com/coldis-org/library-java-service</url>
 		<connection>
@@ -37,7 +43,9 @@
 			scm:git:git@github.com:coldis-org/library-java-service.git</developerConnection>
 		<tag>HEAD</tag>
 	</scm>
+	
 	<dependencies>
+	
 		<dependency>
 			<groupId>org.coldis.library</groupId>
 			<artifactId>core</artifactId>
@@ -147,7 +155,7 @@
 		<dependency>
 			<groupId>org.springframework</groupId>
 			<artifactId>spring-jms</artifactId>
-			<optional>true</optional>
+			<oiptional>true</oiptional>
 		</dependency>
 
 		<dependency>
