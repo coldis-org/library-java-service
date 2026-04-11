@@ -208,7 +208,8 @@ public class BatchService {
 	 */
 	@JmsListener(
 			destination = BatchService.DELETE_QUEUE,
-			concurrency = "${org.coldis.configuration.service.batch-delete-concurrency:1-3}"
+			concurrency = "${org.coldis.configuration.service.batch-delete-concurrency:1-3}",
+			containerFactory = "${org.coldis.configuration.service.batch-container-factory:jmsListenerContainerFactory}"
 	)
 	@Transactional(
 			propagation = Propagation.REQUIRED,
@@ -269,7 +270,7 @@ public class BatchService {
 			final String keySuffix) throws BusinessException {
 		// Synchronizes the batch (preventing to happen in parallel).
 		final String key = this.getKey(keySuffix);
-		final KeyValue<Typable> batchExecutor = this.keyValueService.findById(key, LockBehavior.LOCK_SKIP, true);
+		final KeyValue<Typable> batchExecutor = this.keyValueService.findById(key, LockBehavior.LOCK_FAIL_FAST, true);
 		if (batchExecutor != null) {
 			@SuppressWarnings("unchecked")
 			final BatchExecutor<Type> batchExecutorValue = (BatchExecutor<Type>) batchExecutor.getValue();
@@ -342,7 +343,8 @@ public class BatchService {
 	 */
 	@JmsListener(
 			destination = BatchService.RESUME_QUEUE,
-			concurrency = "${org.coldis.configuration.service.batch-concurrency:1-10}"
+			concurrency = "${org.coldis.configuration.service.batch-concurrency:1-10}",
+			containerFactory = "${org.coldis.configuration.service.batch-container-factory:jmsListenerContainerFactory}"
 	)
 	@Transactional(
 			propagation = Propagation.REQUIRED,

@@ -276,7 +276,8 @@ public class StatisticsEventServiceComponent {
   @Transactional(propagation = Propagation.REQUIRED)
   @JmsListener(
       destination = StatisticsEventServiceComponent.DELETE_EXPIRED_QUEUE,
-      concurrency = "1")
+      concurrency = "1",
+      containerFactory = "${org.coldis.library.service.statistics.container-factory:jmsListenerContainerFactory}")
 
   public void deleteExpiredEvents(final String message) {
     final int deleted =
