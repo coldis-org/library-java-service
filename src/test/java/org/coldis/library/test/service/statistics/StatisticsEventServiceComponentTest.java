@@ -443,33 +443,44 @@ public class StatisticsEventServiceComponentTest extends ContainerTestHelper {
    */
   @Test
   public void testCompareByPeriod() throws Exception {
-    // Creates events in the 10:00-11:00 window across 3 consecutive days.
-    // Day 1 (Jan 12): 2 events, both "sao-paulo" -> totalCount=2, sao-paulo=2
+    // Creates events in the 10:00-11:00 window across 3 consecutive days with varied weights.
+    // Day 1 (Jan 12): 2 events, both "sao-paulo" -> count=2, sp=2, totalWeight=300, sp=300
     final LocalDateTime day1 = LocalDateTime.of(2026, 1, 12, 10, 0, 0);
     this.statisticsEventServiceComponent.upsertStatisticsEvent(
-        createEvent("test-comparison", "owner-1", day1, "city", "sao-paulo"));
+        createEvent("test-comparison", "owner-1", day1, "city", "sao-paulo",
+            new BigDecimal("100")));
     this.statisticsEventServiceComponent.upsertStatisticsEvent(
-        createEvent("test-comparison", "owner-2", day1, "city", "sao-paulo"));
+        createEvent("test-comparison", "owner-2", day1, "city", "sao-paulo",
+            new BigDecimal("200")));
 
-    // Day 2 (Jan 13): 4 events, 3 "sao-paulo" + 1 "rio" -> totalCount=4, sao-paulo=3, rio=1
+    // Day 2 (Jan 13): 4 events, 3 "sao-paulo" + 1 "rio"
+    // -> count=4, sp=3, rio=1; totalWeight=400, sp=200, rio=200
     final LocalDateTime day2 = LocalDateTime.of(2026, 1, 13, 10, 0, 0);
     this.statisticsEventServiceComponent.upsertStatisticsEvent(
-        createEvent("test-comparison", "owner-3", day2, "city", "sao-paulo"));
+        createEvent("test-comparison", "owner-3", day2, "city", "sao-paulo",
+            new BigDecimal("50")));
     this.statisticsEventServiceComponent.upsertStatisticsEvent(
-        createEvent("test-comparison", "owner-4", day2, "city", "sao-paulo"));
+        createEvent("test-comparison", "owner-4", day2, "city", "sao-paulo",
+            new BigDecimal("50")));
     this.statisticsEventServiceComponent.upsertStatisticsEvent(
-        createEvent("test-comparison", "owner-5", day2, "city", "sao-paulo"));
+        createEvent("test-comparison", "owner-5", day2, "city", "sao-paulo",
+            new BigDecimal("100")));
     this.statisticsEventServiceComponent.upsertStatisticsEvent(
-        createEvent("test-comparison", "owner-6", day2, "city", "rio"));
+        createEvent("test-comparison", "owner-6", day2, "city", "rio",
+            new BigDecimal("200")));
 
-    // Day 3 (Jan 14) -- reference day: 3 events, 1 "sao-paulo" + 2 "rio" -> totalCount=3
+    // Day 3 (Jan 14) -- reference: 3 events, 1 "sao-paulo" + 2 "rio"
+    // -> count=3, sp=1, rio=2; totalWeight=300, sp=150, rio=150
     final LocalDateTime day3 = LocalDateTime.of(2026, 1, 14, 10, 0, 0);
     this.statisticsEventServiceComponent.upsertStatisticsEvent(
-        createEvent("test-comparison", "owner-7", day3, "city", "sao-paulo"));
+        createEvent("test-comparison", "owner-7", day3, "city", "sao-paulo",
+            new BigDecimal("150")));
     this.statisticsEventServiceComponent.upsertStatisticsEvent(
-        createEvent("test-comparison", "owner-8", day3, "city", "rio"));
+        createEvent("test-comparison", "owner-8", day3, "city", "rio",
+            new BigDecimal("75")));
     this.statisticsEventServiceComponent.upsertStatisticsEvent(
-        createEvent("test-comparison", "owner-9", day3, "city", "rio"));
+        createEvent("test-comparison", "owner-9", day3, "city", "rio",
+            new BigDecimal("75")));
 
     // Waits for all summaries to be populated.
     this.waitForSummary("test-comparison", "city", day1, 2L);
@@ -486,58 +497,58 @@ public class StatisticsEventServiceComponentTest extends ContainerTestHelper {
     Assertions.assertEquals(2, comparison.getSampleSize());
 
     // Historical totals: day1=2, day2=4 -> avg=3.0, stdDev=1.0
-    assertBigDecimalEquals(new BigDecimal("3.0"), comparison.getAverageTotalCount(), TOLERANCE);
-    assertBigDecimalEquals(new BigDecimal("1.0"), comparison.getStdDevTotalCount(), TOLERANCE);
+    assertBigDecimalEquals(new BigDecimal("3.0"), comparison.getCountStats().getAverageTotal(), TOLERANCE);
+    assertBigDecimalEquals(new BigDecimal("1.0"), comparison.getCountStats().getStdDevTotal(), TOLERANCE);
 
     // Historical sao-paulo: day1=2, day2=3 -> avg=2.5, stdDev=0.5
     assertBigDecimalEquals(
-        new BigDecimal("2.5"), comparison.getAverageValueCounts().get("sao-paulo"), TOLERANCE);
+        new BigDecimal("2.5"), comparison.getCountStats().getAverageValues().get("sao-paulo"), TOLERANCE);
     assertBigDecimalEquals(
-        new BigDecimal("0.5"), comparison.getStdDevValueCounts().get("sao-paulo"), TOLERANCE);
+        new BigDecimal("0.5"), comparison.getCountStats().getStdDevValues().get("sao-paulo"), TOLERANCE);
 
     // Historical rio: day1=0, day2=1 -> avg=0.5, stdDev=0.5
     assertBigDecimalEquals(
-        new BigDecimal("0.5"), comparison.getAverageValueCounts().get("rio"), TOLERANCE);
+        new BigDecimal("0.5"), comparison.getCountStats().getAverageValues().get("rio"), TOLERANCE);
     assertBigDecimalEquals(
-        new BigDecimal("0.5"), comparison.getStdDevValueCounts().get("rio"), TOLERANCE);
+        new BigDecimal("0.5"), comparison.getCountStats().getStdDevValues().get("rio"), TOLERANCE);
 
     // Historical ratios sao-paulo: day1=2/2=1.0, day2=3/4=0.75 -> avg=0.875, stdDev=0.125
     assertBigDecimalEquals(
-        new BigDecimal("0.875"), comparison.getAverageValueRatios().get("sao-paulo"), TOLERANCE);
+        new BigDecimal("0.875"), comparison.getCountStats().getAverageRatios().get("sao-paulo"), TOLERANCE);
     assertBigDecimalEquals(
-        new BigDecimal("0.125"), comparison.getStdDevValueRatios().get("sao-paulo"), TOLERANCE);
+        new BigDecimal("0.125"), comparison.getCountStats().getStdDevRatios().get("sao-paulo"), TOLERANCE);
 
     // Historical ratios rio: day1=0/2=0.0, day2=1/4=0.25 -> avg=0.125, stdDev=0.125
     assertBigDecimalEquals(
-        new BigDecimal("0.125"), comparison.getAverageValueRatios().get("rio"), TOLERANCE);
+        new BigDecimal("0.125"), comparison.getCountStats().getAverageRatios().get("rio"), TOLERANCE);
     assertBigDecimalEquals(
-        new BigDecimal("0.125"), comparison.getStdDevValueRatios().get("rio"), TOLERANCE);
+        new BigDecimal("0.125"), comparison.getCountStats().getStdDevRatios().get("rio"), TOLERANCE);
 
     // Reference window: day3 -> totalCount=3, sao-paulo=1, rio=2
-    Assertions.assertEquals(3L, comparison.getReferenceTotalCount());
-    Assertions.assertEquals(1L, comparison.getReferenceValueCounts().get("sao-paulo"));
-    Assertions.assertEquals(2L, comparison.getReferenceValueCounts().get("rio"));
+    assertBigDecimalEquals(new BigDecimal("3"), comparison.getCountStats().getReferenceTotal(), TOLERANCE);
+    assertBigDecimalEquals(BigDecimal.ONE, comparison.getCountStats().getReferenceValues().get("sao-paulo"), TOLERANCE);
+    assertBigDecimalEquals(new BigDecimal("2"), comparison.getCountStats().getReferenceValues().get("rio"), TOLERANCE);
 
     // Reference ratios: sao-paulo=1/3~0.333, rio=2/3~0.667
     assertBigDecimalEquals(
         BigDecimal.ONE.divide(BigDecimal.valueOf(3), MC),
-        comparison.getReferenceValueRatios().get("sao-paulo"),
+        comparison.getCountStats().getReferenceRatios().get("sao-paulo"),
         TOLERANCE);
     assertBigDecimalEquals(
         BigDecimal.valueOf(2).divide(BigDecimal.valueOf(3), MC),
-        comparison.getReferenceValueRatios().get("rio"),
+        comparison.getCountStats().getReferenceRatios().get("rio"),
         TOLERANCE);
 
     // Z-score total count: ref=3, avg=3.0, stdDev=1.0 -> z=(3-3)/1=0.0
-    assertBigDecimalEquals(BigDecimal.ZERO, comparison.getZScoreTotalCount(), TOLERANCE);
+    assertBigDecimalEquals(BigDecimal.ZERO, comparison.getCountStats().getZScoreTotal(), TOLERANCE);
 
     // Z-score sao-paulo count: ref=1, avg=2.5, stdDev=0.5 -> z=(1-2.5)/0.5=-3.0
     assertBigDecimalEquals(
-        new BigDecimal("-3.0"), comparison.getZScoreValueCounts().get("sao-paulo"), TOLERANCE);
+        new BigDecimal("-3.0"), comparison.getCountStats().getZScoreValues().get("sao-paulo"), TOLERANCE);
 
     // Z-score rio count: ref=2, avg=0.5, stdDev=0.5 -> z=(2-0.5)/0.5=3.0
     assertBigDecimalEquals(
-        new BigDecimal("3.0"), comparison.getZScoreValueCounts().get("rio"), TOLERANCE);
+        new BigDecimal("3.0"), comparison.getCountStats().getZScoreValues().get("rio"), TOLERANCE);
 
     // Z-score sao-paulo ratio: ref=0.333, avg=0.875, stdDev=0.125 -> z=(0.333-0.875)/0.125~-4.333
     final BigDecimal expectedZScoreSpRatio =
@@ -546,7 +557,7 @@ public class StatisticsEventServiceComponentTest extends ContainerTestHelper {
             .subtract(new BigDecimal("0.875"))
             .divide(new BigDecimal("0.125"), MC);
     assertBigDecimalEquals(
-        expectedZScoreSpRatio, comparison.getZScoreValueRatios().get("sao-paulo"), TOLERANCE);
+        expectedZScoreSpRatio, comparison.getCountStats().getZScoreRatios().get("sao-paulo"), TOLERANCE);
 
     // Z-score rio ratio: ref=0.667, avg=0.125, stdDev=0.125 -> z=(0.667-0.125)/0.125~4.333
     final BigDecimal expectedZScoreRioRatio =
@@ -555,7 +566,104 @@ public class StatisticsEventServiceComponentTest extends ContainerTestHelper {
             .subtract(new BigDecimal("0.125"))
             .divide(new BigDecimal("0.125"), MC);
     assertBigDecimalEquals(
-        expectedZScoreRioRatio, comparison.getZScoreValueRatios().get("rio"), TOLERANCE);
+        expectedZScoreRioRatio, comparison.getCountStats().getZScoreRatios().get("rio"), TOLERANCE);
+
+    // ---- Weight stats ----
+    // Historical total weights: day1=300, day2=400 -> avg=350, stdDev=50
+    assertBigDecimalEquals(
+        new BigDecimal("350"), comparison.getWeightStats().getAverageTotal(), TOLERANCE);
+    assertBigDecimalEquals(
+        new BigDecimal("50"), comparison.getWeightStats().getStdDevTotal(), TOLERANCE);
+
+    // Historical sao-paulo weights: day1=300, day2=200 -> avg=250, stdDev=50
+    assertBigDecimalEquals(
+        new BigDecimal("250"),
+        comparison.getWeightStats().getAverageValues().get("sao-paulo"),
+        TOLERANCE);
+    assertBigDecimalEquals(
+        new BigDecimal("50"),
+        comparison.getWeightStats().getStdDevValues().get("sao-paulo"),
+        TOLERANCE);
+
+    // Historical rio weights: day1=0, day2=200 -> avg=100, stdDev=100
+    assertBigDecimalEquals(
+        new BigDecimal("100"),
+        comparison.getWeightStats().getAverageValues().get("rio"),
+        TOLERANCE);
+    assertBigDecimalEquals(
+        new BigDecimal("100"),
+        comparison.getWeightStats().getStdDevValues().get("rio"),
+        TOLERANCE);
+
+    // Historical weight ratios sao-paulo: day1=300/300=1.0, day2=200/400=0.5 -> avg=0.75, stdDev=0.25
+    assertBigDecimalEquals(
+        new BigDecimal("0.75"),
+        comparison.getWeightStats().getAverageRatios().get("sao-paulo"),
+        TOLERANCE);
+    assertBigDecimalEquals(
+        new BigDecimal("0.25"),
+        comparison.getWeightStats().getStdDevRatios().get("sao-paulo"),
+        TOLERANCE);
+
+    // Historical weight ratios rio: day1=0/300=0.0, day2=200/400=0.5 -> avg=0.25, stdDev=0.25
+    assertBigDecimalEquals(
+        new BigDecimal("0.25"),
+        comparison.getWeightStats().getAverageRatios().get("rio"),
+        TOLERANCE);
+    assertBigDecimalEquals(
+        new BigDecimal("0.25"),
+        comparison.getWeightStats().getStdDevRatios().get("rio"),
+        TOLERANCE);
+
+    // Reference weights: totalWeight=300, sao-paulo=150, rio=150
+    assertBigDecimalEquals(
+        new BigDecimal("300"), comparison.getWeightStats().getReferenceTotal(), TOLERANCE);
+    assertBigDecimalEquals(
+        new BigDecimal("150"),
+        comparison.getWeightStats().getReferenceValues().get("sao-paulo"),
+        TOLERANCE);
+    assertBigDecimalEquals(
+        new BigDecimal("150"),
+        comparison.getWeightStats().getReferenceValues().get("rio"),
+        TOLERANCE);
+
+    // Reference weight ratios: sao-paulo=150/300=0.5, rio=150/300=0.5
+    assertBigDecimalEquals(
+        new BigDecimal("0.5"),
+        comparison.getWeightStats().getReferenceRatios().get("sao-paulo"),
+        TOLERANCE);
+    assertBigDecimalEquals(
+        new BigDecimal("0.5"),
+        comparison.getWeightStats().getReferenceRatios().get("rio"),
+        TOLERANCE);
+
+    // Z-score total weight: (300-350)/50 = -1.0
+    assertBigDecimalEquals(
+        new BigDecimal("-1.0"), comparison.getWeightStats().getZScoreTotal(), TOLERANCE);
+
+    // Z-score sao-paulo weight: (150-250)/50 = -2.0
+    assertBigDecimalEquals(
+        new BigDecimal("-2.0"),
+        comparison.getWeightStats().getZScoreValues().get("sao-paulo"),
+        TOLERANCE);
+
+    // Z-score rio weight: (150-100)/100 = 0.5
+    assertBigDecimalEquals(
+        new BigDecimal("0.5"),
+        comparison.getWeightStats().getZScoreValues().get("rio"),
+        TOLERANCE);
+
+    // Z-score sao-paulo weight ratio: (0.5-0.75)/0.25 = -1.0
+    assertBigDecimalEquals(
+        new BigDecimal("-1.0"),
+        comparison.getWeightStats().getZScoreRatios().get("sao-paulo"),
+        TOLERANCE);
+
+    // Z-score rio weight ratio: (0.5-0.25)/0.25 = 1.0
+    assertBigDecimalEquals(
+        new BigDecimal("1.0"),
+        comparison.getWeightStats().getZScoreRatios().get("rio"),
+        TOLERANCE);
   }
 
   /** Tests compareByPeriod with WEEKS step unit -- comparing the same weekday across weeks. */
@@ -597,12 +705,87 @@ public class StatisticsEventServiceComponentTest extends ContainerTestHelper {
     Assertions.assertEquals(2, comparison.getSampleSize());
 
     // Historical totals: week1=1, week2=3 -> avg=2.0, stdDev=1.0
-    assertBigDecimalEquals(new BigDecimal("2.0"), comparison.getAverageTotalCount(), TOLERANCE);
-    assertBigDecimalEquals(new BigDecimal("1.0"), comparison.getStdDevTotalCount(), TOLERANCE);
+    assertBigDecimalEquals(new BigDecimal("2.0"), comparison.getCountStats().getAverageTotal(), TOLERANCE);
+    assertBigDecimalEquals(new BigDecimal("1.0"), comparison.getCountStats().getStdDevTotal(), TOLERANCE);
 
     // Reference: totalCount=2, desktop=2
-    Assertions.assertEquals(2L, comparison.getReferenceTotalCount());
-    Assertions.assertEquals(2L, comparison.getReferenceValueCounts().get("desktop"));
+    assertBigDecimalEquals(new BigDecimal("2"), comparison.getCountStats().getReferenceTotal(), TOLERANCE);
+    assertBigDecimalEquals(new BigDecimal("2"), comparison.getCountStats().getReferenceValues().get("desktop"), TOLERANCE);
+  }
+
+  /**
+   * Tests that weight drift is detected even when counts are stable. Same number of events per
+   * period but significantly higher weights in the reference window — count z-scores are zero
+   * while weight z-scores are high.
+   */
+  @Test
+  public void testWeightDriftWithStableCounts() throws Exception {
+    // Day 1 (Jan 12): 2 events, "sao-paulo", weight=100 each -> totalWeight=200
+    final LocalDateTime day1 = LocalDateTime.of(2026, 1, 12, 10, 0, 0);
+    this.statisticsEventServiceComponent.upsertStatisticsEvent(
+        createEvent("test-weight-drift", "wd-1", day1, "city", "sao-paulo",
+            new BigDecimal("100")));
+    this.statisticsEventServiceComponent.upsertStatisticsEvent(
+        createEvent("test-weight-drift", "wd-2", day1, "city", "sao-paulo",
+            new BigDecimal("100")));
+
+    // Day 2 (Jan 13): 2 events, "sao-paulo", weight=100 each -> totalWeight=200
+    final LocalDateTime day2 = LocalDateTime.of(2026, 1, 13, 10, 0, 0);
+    this.statisticsEventServiceComponent.upsertStatisticsEvent(
+        createEvent("test-weight-drift", "wd-3", day2, "city", "sao-paulo",
+            new BigDecimal("100")));
+    this.statisticsEventServiceComponent.upsertStatisticsEvent(
+        createEvent("test-weight-drift", "wd-4", day2, "city", "sao-paulo",
+            new BigDecimal("100")));
+
+    // Reference (Jan 14): 2 events, "sao-paulo", weight=500 each -> totalWeight=1000
+    final LocalDateTime ref = LocalDateTime.of(2026, 1, 14, 10, 0, 0);
+    this.statisticsEventServiceComponent.upsertStatisticsEvent(
+        createEvent("test-weight-drift", "wd-5", ref, "city", "sao-paulo",
+            new BigDecimal("500")));
+    this.statisticsEventServiceComponent.upsertStatisticsEvent(
+        createEvent("test-weight-drift", "wd-6", ref, "city", "sao-paulo",
+            new BigDecimal("500")));
+
+    this.waitForSummary("test-weight-drift", "city", day1, 2L);
+    this.waitForSummary("test-weight-drift", "city", day2, 2L);
+    this.waitForSummary("test-weight-drift", "city", ref, 2L);
+
+    this.cacheHelper.clearCaches();
+    final StatisticsEventSummaryComparison comparison =
+        this.statisticsEventSummaryServiceComponent.compareByPeriod(
+            "test-weight-drift", "city", ref, ChronoUnit.HOURS, 1, ChronoUnit.DAYS, 2);
+
+    Assertions.assertEquals(2, comparison.getSampleSize());
+
+    // Count stats: all periods have 2 events -> avg=2, stdDev=0 -> z-score=0 (no drift).
+    assertBigDecimalEquals(new BigDecimal("2"), comparison.getCountStats().getAverageTotal(), TOLERANCE);
+    assertBigDecimalEquals(BigDecimal.ZERO, comparison.getCountStats().getStdDevTotal(), TOLERANCE);
+    // Reference counts: 2 events in the reference window.
+    assertBigDecimalEquals(new BigDecimal("2"), comparison.getCountStats().getReferenceTotal(), TOLERANCE);
+    // stdDev=0 -> z-score is 0 (no historical variance to measure deviation against — drift
+    // detection for this case is the growth rule's job, not the z-score rule's).
+    assertBigDecimalEquals(BigDecimal.ZERO, comparison.getCountStats().getZScoreTotal(), TOLERANCE);
+
+    // Weight stats: historical=[200,200] -> avg=200, stdDev=0. Reference=1000.
+    assertBigDecimalEquals(new BigDecimal("200"), comparison.getWeightStats().getAverageTotal(), TOLERANCE);
+    assertBigDecimalEquals(BigDecimal.ZERO, comparison.getWeightStats().getStdDevTotal(), TOLERANCE);
+    // stdDev=0 -> z-score is 0 (same reasoning as counts).
+    assertBigDecimalEquals(BigDecimal.ZERO, comparison.getWeightStats().getZScoreTotal(), TOLERANCE);
+
+    // Per-value weight: historical sp=[200,200] -> avg=200, stdDev=0. Reference sp=1000.
+    assertBigDecimalEquals(
+        new BigDecimal("200"),
+        comparison.getWeightStats().getAverageValues().get("sao-paulo"),
+        TOLERANCE);
+    assertBigDecimalEquals(
+        new BigDecimal("1000"),
+        comparison.getWeightStats().getReferenceValues().get("sao-paulo"),
+        TOLERANCE);
+
+    // Reference total and reference values are populated.
+    assertBigDecimalEquals(new BigDecimal("1000"), comparison.getWeightStats().getReferenceTotal(), TOLERANCE);
+    assertBigDecimalEquals(new BigDecimal("2"), comparison.getCountStats().getReferenceTotal(), TOLERANCE);
   }
 
   /** Tests compareByPeriod returns an error when no historical data exists. */

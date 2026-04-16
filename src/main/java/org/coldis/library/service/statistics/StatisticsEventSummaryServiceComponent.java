@@ -212,7 +212,7 @@ public class StatisticsEventSummaryServiceComponent {
       final BigDecimal observed, final BigDecimal mean, final BigDecimal stdDev) {
     return stdDev.compareTo(BigDecimal.ZERO) > 0
         ? observed.subtract(mean, MATH_CONTEXT).divide(stdDev, MATH_CONTEXT)
-        : null;
+        : BigDecimal.ZERO;
   }
 
   // ---- Find / create / update ----
@@ -402,17 +402,126 @@ public class StatisticsEventSummaryServiceComponent {
 
   // ---- Historical aggregation ----
 
-  /** Internal holder for aggregated period data used by comparison and probability methods. */
-  private static class PeriodAggregation {
-    final List<Long> totalCounts = new ArrayList<>();
-    final List<Map<String, Long>> allValueCounts = new ArrayList<>();
-    final Set<String> allKeys = new HashSet<>();
+  /** Aggregated statistics for one metric across historical periods. */
+  private static class MetricAggregation {
+    final List<BigDecimal> totals = new ArrayList<>();
+    final List<Map<String, BigDecimal>> allValues = new ArrayList<>();
     BigDecimal avgTotal;
     BigDecimal stdDevTotal;
-    final Map<String, BigDecimal> avgValueCounts = new HashMap<>();
-    final Map<String, BigDecimal> stdDevValueCounts = new HashMap<>();
-    final Map<String, BigDecimal> avgValueRatios = new HashMap<>();
-    final Map<String, BigDecimal> stdDevValueRatios = new HashMap<>();
+    final Map<String, BigDecimal> avgValues = new HashMap<>();
+    final Map<String, BigDecimal> stdDevValues = new HashMap<>();
+    final Map<String, BigDecimal> avgRatios = new HashMap<>();
+    final Map<String, BigDecimal> stdDevRatios = new HashMap<>();
+  }
+
+  /** Internal holder for aggregated period data used by comparison and probability methods. */
+  private static class PeriodAggregation {
+    final MetricAggregation counts = new MetricAggregation();
+    final MetricAggregation weights = new MetricAggregation();
+    final Set<String> allKeys = new HashSet<>();
+  }
+
+  /** Converts a Map&lt;String, Long&gt; to Map&lt;String, BigDecimal&gt;. */
+  private static Map<String, BigDecimal> toBigDecimalMap(final Map<String, Long> longMap) {
+    final Map<String, BigDecimal> result = new HashMap<>(longMap.size());
+    longMap.forEach((key, value) -> result.put(key, BigDecimal.valueOf(value)));
+    return result;
+  }
+
+  /** Computes avg/stdDev for total, per-value, and per-ratio on a single MetricAggregation. */
+  private static void computeMetricStats(
+      final MetricAggregation metric, final Set<String> allKeys) {
+    final int size = metric.totals.size();
+    final BigDecimal[] totalValues = metric.totals.toArray(new BigDecimal[0]);
+    metric.avgTotal = computeAverage(totalValues);
+    metric.stdDevTotal = computeStdDev(totalValues, metric.avgTotal);
+    for (final String key : allKeys) {
+      final BigDecimal[] values = new BigDecimal[size];
+      final BigDecimal[] ratios = new BigDecimal[size];
+      for (int sampleIndex = 0; sampleIndex < size; sampleIndex++) {
+        values[sampleIndex] =
+            metric.allValues.get(sampleIndex).getOrDefault(key, BigDecimal.ZERO);
+        final BigDecimal total = metric.totals.get(sampleIndex);
+        ratios[sampleIndex] =
+            total.compareTo(BigDecimal.ZERO) > 0
+                ? values[sampleIndex].divide(total, MATH_CONTEXT)
+                : BigDecimal.ZERO;
+      }
+      final BigDecimal avgVal = computeAverage(values);
+      metric.avgValues.put(key, avgVal);
+      metric.stdDevValues.put(key, computeStdDev(values, avgVal));
+      final BigDecimal avgRatio = computeAverage(ratios);
+      metric.avgRatios.put(key, avgRatio);
+      metric.stdDevRatios.put(key, computeStdDev(ratios, avgRatio));
+    }
+  }
+
+  /** Populates reference ratios on a MetricComparisonStats from its referenceTotal/Values. */
+  private static void populateReferenceRatios(final MetricComparisonStats stats) {
+    if (stats.getReferenceTotal() != null
+        && stats.getReferenceTotal().compareTo(BigDecimal.ZERO) > 0
+        && stats.getReferenceValues() != null) {
+      final Map<String, BigDecimal> ratios = new HashMap<>();
+      stats
+          .getReferenceValues()
+          .forEach(
+              (key, value) ->
+                  ratios.put(key, value.divide(stats.getReferenceTotal(), MATH_CONTEXT)));
+      stats.setReferenceRatios(ratios);
+    }
+  }
+
+  /** Computes z-scores for a MetricComparisonStats against its MetricAggregation. */
+  private static void populateZScores(
+      final MetricComparisonStats stats,
+      final MetricAggregation agg,
+      final Set<String> allKeys) {
+    if (stats.getReferenceTotal() == null) {
+      return;
+    }
+    stats.setZScoreTotal(computeZScore(stats.getReferenceTotal(), agg.avgTotal, agg.stdDevTotal));
+    if (stats.getReferenceValues() != null && !stats.getReferenceValues().isEmpty()) {
+      final Map<String, BigDecimal> zScoreValues = new HashMap<>();
+      for (final String key : allKeys) {
+        zScoreValues.put(
+            key,
+            computeZScore(
+                stats.getReferenceValues().getOrDefault(key, BigDecimal.ZERO),
+                agg.avgValues.getOrDefault(key, BigDecimal.ZERO),
+                agg.stdDevValues.getOrDefault(key, BigDecimal.ZERO)));
+      }
+      stats.setZScoreValues(zScoreValues);
+    }
+    if (stats.getReferenceRatios() != null && !stats.getReferenceRatios().isEmpty()) {
+      final Map<String, BigDecimal> zScoreRatios = new HashMap<>();
+      for (final String key : allKeys) {
+        zScoreRatios.put(
+            key,
+            computeZScore(
+                stats.getReferenceRatios().getOrDefault(key, BigDecimal.ZERO),
+                agg.avgRatios.getOrDefault(key, BigDecimal.ZERO),
+                agg.stdDevRatios.getOrDefault(key, BigDecimal.ZERO)));
+      }
+      stats.setZScoreRatios(zScoreRatios);
+    }
+  }
+
+  /**
+   * Populates a MetricComparisonStats from its aggregation: copies avg/stdDev, computes reference
+   * ratios, and computes z-scores.
+   */
+  private static void populateMetricComparisonStats(
+      final MetricComparisonStats stats,
+      final MetricAggregation agg,
+      final Set<String> allKeys) {
+    stats.setAverageTotal(agg.avgTotal);
+    stats.setStdDevTotal(agg.stdDevTotal);
+    stats.setAverageValues(agg.avgValues);
+    stats.setStdDevValues(agg.stdDevValues);
+    stats.setAverageRatios(agg.avgRatios);
+    stats.setStdDevRatios(agg.stdDevRatios);
+    populateReferenceRatios(stats);
+    populateZScores(stats, agg, allKeys);
   }
 
   /**
@@ -437,47 +546,31 @@ public class StatisticsEventSummaryServiceComponent {
               context, dimensionName, windowStarts.get(windowIndex), windowEnds.get(windowIndex));
       if (summaries != null && !summaries.isEmpty()) {
         long total = 0L;
-        final Map<String, Long> merged = new HashMap<>();
+        BigDecimal totalWeight = BigDecimal.ZERO;
+        final Map<String, Long> mergedCounts = new HashMap<>();
+        final Map<String, BigDecimal> mergedWeights = new HashMap<>();
         for (final StatisticsEventSummary summary : summaries) {
           total += summary.getTotalCount();
-          summary.getValueCounts().forEach((key, value) -> merged.merge(key, value, Long::sum));
+          totalWeight = totalWeight.add(summary.getTotalWeight());
+          summary
+              .getValueCounts()
+              .forEach((key, value) -> mergedCounts.merge(key, value, Long::sum));
+          summary
+              .getValueWeights()
+              .forEach((key, value) -> mergedWeights.merge(key, value, BigDecimal::add));
         }
-        agg.totalCounts.add(total);
-        agg.allValueCounts.add(merged);
-        agg.allKeys.addAll(merged.keySet());
+        agg.counts.totals.add(BigDecimal.valueOf(total));
+        agg.counts.allValues.add(toBigDecimalMap(mergedCounts));
+        agg.weights.totals.add(totalWeight);
+        agg.weights.allValues.add(mergedWeights);
+        agg.allKeys.addAll(mergedCounts.keySet());
       }
     }
-    if (agg.totalCounts.isEmpty()) {
+    if (agg.counts.totals.isEmpty()) {
       return null;
     }
-    final int size = agg.totalCounts.size();
-    // Total count stats.
-    final BigDecimal[] totalValues = new BigDecimal[size];
-    for (int sampleIndex = 0; sampleIndex < size; sampleIndex++) {
-      totalValues[sampleIndex] = BigDecimal.valueOf(agg.totalCounts.get(sampleIndex));
-    }
-    agg.avgTotal = computeAverage(totalValues);
-    agg.stdDevTotal = computeStdDev(totalValues, agg.avgTotal);
-    // Per-value count and ratio stats.
-    for (final String key : agg.allKeys) {
-      final BigDecimal[] values = new BigDecimal[size];
-      final BigDecimal[] ratios = new BigDecimal[size];
-      for (int sampleIndex = 0; sampleIndex < size; sampleIndex++) {
-        values[sampleIndex] =
-            BigDecimal.valueOf(agg.allValueCounts.get(sampleIndex).getOrDefault(key, 0L));
-        final long total = agg.totalCounts.get(sampleIndex);
-        ratios[sampleIndex] =
-            total > 0
-                ? values[sampleIndex].divide(BigDecimal.valueOf(total), MATH_CONTEXT)
-                : BigDecimal.ZERO;
-      }
-      final BigDecimal avgCount = computeAverage(values);
-      agg.avgValueCounts.put(key, avgCount);
-      agg.stdDevValueCounts.put(key, computeStdDev(values, avgCount));
-      final BigDecimal avgRatio = computeAverage(ratios);
-      agg.avgValueRatios.put(key, avgRatio);
-      agg.stdDevValueRatios.put(key, computeStdDev(ratios, avgRatio));
-    }
+    computeMetricStats(agg.counts, agg.allKeys);
+    computeMetricStats(agg.weights, agg.allKeys);
     return agg;
   }
 
@@ -547,20 +640,9 @@ public class StatisticsEventSummaryServiceComponent {
     }
 
     // Queries reference window.
-    Long referenceTotalCount = null;
-    Map<String, Long> referenceValueCounts = null;
     final List<StatisticsEventSummary> refSummaries =
         this.statisticsEventSummaryRepository.findByPeriod(
             context, dimensionName, refStart, refEnd);
-    if (refSummaries != null && !refSummaries.isEmpty()) {
-      referenceTotalCount = 0L;
-      referenceValueCounts = new HashMap<>();
-      for (final StatisticsEventSummary summary : refSummaries) {
-        referenceTotalCount += summary.getTotalCount();
-        final Map<String, Long> refCounts = referenceValueCounts;
-        summary.getValueCounts().forEach((key, value) -> refCounts.merge(key, value, Long::sum));
-      }
-    }
 
     // Builds the result.
     final StatisticsEventSummaryComparison comparison = new StatisticsEventSummaryComparison();
@@ -571,57 +653,38 @@ public class StatisticsEventSummaryServiceComponent {
     comparison.setWindowSize(windowSize);
     comparison.setStepUnit(stepUnit);
     comparison.setSteps(steps);
-    comparison.setSampleSize(agg.totalCounts.size());
-    comparison.setAverageTotalCount(agg.avgTotal);
-    comparison.setStdDevTotalCount(agg.stdDevTotal);
-    comparison.setAverageValueCounts(agg.avgValueCounts);
-    comparison.setStdDevValueCounts(agg.stdDevValueCounts);
-    comparison.setAverageValueRatios(agg.avgValueRatios);
-    comparison.setStdDevValueRatios(agg.stdDevValueRatios);
-    comparison.setReferenceTotalCount(referenceTotalCount);
-    comparison.setReferenceValueCounts(referenceValueCounts);
-    // Computes reference value ratios and z-scores.
-    if (referenceTotalCount != null && referenceTotalCount > 0 && referenceValueCounts != null) {
-      final Map<String, BigDecimal> refRatios = new HashMap<>();
-      final BigDecimal refTotal = BigDecimal.valueOf(referenceTotalCount);
-      referenceValueCounts.forEach(
-          (key, value) ->
-              refRatios.put(key, BigDecimal.valueOf(value).divide(refTotal, MATH_CONTEXT)));
-      comparison.setReferenceValueRatios(refRatios);
-    }
-    if (referenceTotalCount != null) {
-      comparison.setZScoreTotalCount(
-          computeZScore(BigDecimal.valueOf(referenceTotalCount), agg.avgTotal, agg.stdDevTotal));
-      if (referenceValueCounts != null) {
-        final Map<String, BigDecimal> zScoreCounts = new HashMap<>();
-        for (final String key : agg.allKeys) {
-          final BigDecimal refCount =
-              BigDecimal.valueOf(referenceValueCounts.getOrDefault(key, 0L));
-          zScoreCounts.put(
-              key,
-              computeZScore(
-                  refCount,
-                  agg.avgValueCounts.getOrDefault(key, BigDecimal.ZERO),
-                  agg.stdDevValueCounts.getOrDefault(key, BigDecimal.ZERO)));
-        }
-        comparison.setZScoreValueCounts(zScoreCounts);
+    comparison.setSampleSize(agg.counts.totals.size());
+
+    // Populates reference values from the reference-window summaries.
+    final MetricComparisonStats countStats = comparison.getCountStats();
+    final MetricComparisonStats weightStats = comparison.getWeightStats();
+    if (refSummaries != null && !refSummaries.isEmpty()) {
+      BigDecimal refTotalCount = BigDecimal.ZERO;
+      BigDecimal refTotalWeight = BigDecimal.ZERO;
+      final Map<String, BigDecimal> refValueCounts = new HashMap<>();
+      final Map<String, BigDecimal> refValueWeights = new HashMap<>();
+      for (final StatisticsEventSummary summary : refSummaries) {
+        refTotalCount = refTotalCount.add(BigDecimal.valueOf(summary.getTotalCount()));
+        refTotalWeight = refTotalWeight.add(summary.getTotalWeight());
+        summary
+            .getValueCounts()
+            .forEach(
+                (key, value) ->
+                    refValueCounts.merge(key, BigDecimal.valueOf(value), BigDecimal::add));
+        summary
+            .getValueWeights()
+            .forEach((key, value) -> refValueWeights.merge(key, value, BigDecimal::add));
       }
-      if (comparison.getReferenceValueRatios() != null
-          && !comparison.getReferenceValueRatios().isEmpty()) {
-        final Map<String, BigDecimal> zScoreRatios = new HashMap<>();
-        for (final String key : agg.allKeys) {
-          final BigDecimal refRatio =
-              comparison.getReferenceValueRatios().getOrDefault(key, BigDecimal.ZERO);
-          zScoreRatios.put(
-              key,
-              computeZScore(
-                  refRatio,
-                  agg.avgValueRatios.getOrDefault(key, BigDecimal.ZERO),
-                  agg.stdDevValueRatios.getOrDefault(key, BigDecimal.ZERO)));
-        }
-        comparison.setZScoreValueRatios(zScoreRatios);
-      }
+      countStats.setReferenceTotal(refTotalCount);
+      countStats.setReferenceValues(refValueCounts);
+      weightStats.setReferenceTotal(refTotalWeight);
+      weightStats.setReferenceValues(refValueWeights);
     }
+
+    // Populates avg/stdDev, reference ratios, and z-scores for both metrics.
+    populateMetricComparisonStats(countStats, agg.counts, agg.allKeys);
+    populateMetricComparisonStats(weightStats, agg.weights, agg.allKeys);
+
     return comparison;
   }
 
@@ -686,12 +749,15 @@ public class StatisticsEventSummaryServiceComponent {
     probability.setWindowSize(windowSize);
     probability.setStepUnit(stepUnit);
     probability.setSteps(steps);
-    probability.setSampleSize(agg.totalCounts.size());
-    probability.setProbability(agg.avgValueRatios.getOrDefault(dimensionValue, BigDecimal.ZERO));
+    probability.setSampleSize(agg.counts.totals.size());
+    probability.setProbability(
+        agg.counts.avgRatios.getOrDefault(dimensionValue, BigDecimal.ZERO));
     probability.setStdDevProbability(
-        agg.stdDevValueRatios.getOrDefault(dimensionValue, BigDecimal.ZERO));
-    probability.setAverageCount(agg.avgValueCounts.getOrDefault(dimensionValue, BigDecimal.ZERO));
-    probability.setStdDevCount(agg.stdDevValueCounts.getOrDefault(dimensionValue, BigDecimal.ZERO));
+        agg.counts.stdDevRatios.getOrDefault(dimensionValue, BigDecimal.ZERO));
+    probability.setAverageCount(
+        agg.counts.avgValues.getOrDefault(dimensionValue, BigDecimal.ZERO));
+    probability.setStdDevCount(
+        agg.counts.stdDevValues.getOrDefault(dimensionValue, BigDecimal.ZERO));
     return probability;
   }
 
