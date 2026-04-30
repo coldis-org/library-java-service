@@ -209,7 +209,7 @@ public class BatchService {
 	@JmsListener(
 			destination = BatchService.DELETE_QUEUE,
 			concurrency = "${org.coldis.configuration.service.batch-delete-concurrency:1-3}",
-			containerFactory = "${org.coldis.configuration.service.batch-container-factory:jmsListenerContainerFactory}"
+			containerFactory = "${org.coldis.library.service.batch.container-factory:jmsListenerContainerFactory}"
 	)
 	@Transactional(
 			propagation = Propagation.REQUIRED,
@@ -344,7 +344,7 @@ public class BatchService {
 	@JmsListener(
 			destination = BatchService.RESUME_QUEUE,
 			concurrency = "${org.coldis.configuration.service.batch-concurrency:1-10}",
-			containerFactory = "${org.coldis.configuration.service.batch-container-factory:jmsListenerContainerFactory}"
+			containerFactory = "${org.coldis.library.service.batch.container-factory:jmsListenerContainerFactory}"
 	)
 	@Transactional(
 			propagation = Propagation.REQUIRED,

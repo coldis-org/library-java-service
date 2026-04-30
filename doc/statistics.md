@@ -197,8 +197,10 @@ Each context can define its own time bucket size via `StatisticsContextConfigura
 | `org.coldis.library.service.statistics.event.lock-type` | `ADVISORY` | Lock mechanism for per-key serialization: `ADVISORY` or `TABLE` |
 | `org.coldis.library.service.statistics.event.deleteexpired.cron` | `0 0 3 * * *` | Expired event cleanup schedule (3 AM daily) |
 | `org.coldis.library.service.statistics.event.deleteexpired.batch-size` | `1000` | Batch size for expired event deletion |
+| `org.coldis.library.service.statistics.event.container-factory` | `jmsListenerContainerFactory` | JMS listener container factory bean for event listeners (upsert + deleteExpired) |
 | `org.coldis.library.service.statistics.summary.buffer.cron` | `0 * * * * *` | Summary delta buffer flush schedule (every minute) |
 | `org.coldis.library.service.statistics.summary.processsummarydelta.concurrency` | `1-10` | JMS concurrency for summary delta processing |
+| `org.coldis.library.service.statistics.summary.container-factory` | `jmsListenerContainerFactory` | JMS listener container factory bean for the summary delta listener |
 
 ## Usage
 

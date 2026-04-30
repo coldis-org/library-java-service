@@ -247,7 +247,7 @@ public class StatisticsEventServiceComponent {
       concurrency =
           "${org.coldis.library.service.statistics.event.buffer.processupsertbatch.concurrency:1}",
       containerFactory =
-          "${org.coldis.library.service.statistics.container-factory:jmsListenerContainerFactory}")
+          "${org.coldis.library.service.statistics.event.container-factory:jmsListenerContainerFactory}")
   public void processEventUpsertBatch(final List<StatisticsEvent> events) throws BusinessException {
     if (events == null || events.isEmpty()) {
       return;
@@ -390,7 +390,7 @@ public class StatisticsEventServiceComponent {
   @JmsListener(
       destination = StatisticsEventServiceComponent.DELETE_EXPIRED_QUEUE,
       concurrency = "1",
-      containerFactory = "${org.coldis.library.service.statistics.container-factory:jmsListenerContainerFactory}")
+      containerFactory = "${org.coldis.library.service.statistics.event.container-factory:jmsListenerContainerFactory}")
 
   public void deleteExpiredEvents(final String message) {
     final int deleted =

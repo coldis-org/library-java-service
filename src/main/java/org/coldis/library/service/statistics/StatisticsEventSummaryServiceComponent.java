@@ -107,7 +107,7 @@ public class StatisticsEventSummaryServiceComponent {
       concurrency =
           "${org.coldis.library.service.statistics.summary.processsummarydelta.concurrency:1-10}",
       containerFactory =
-          "${org.coldis.library.service.statistics.container-factory:jmsListenerContainerFactory}")
+          "${org.coldis.library.service.statistics.summary.container-factory:jmsListenerContainerFactory}")
 
   public void processSummaryDelta(final StatisticsEventSummaryDelta delta) {
     StatisticsEventSummaryServiceComponent.LOGGER.debug(
