@@ -7,10 +7,12 @@ import java.time.temporal.ChronoUnit;
 import java.util.List;
 
 import org.coldis.library.exception.BusinessException;
+import org.coldis.library.persistence.lock.LockType;
 import org.coldis.library.service.cache.CacheHelper;
 import org.coldis.library.service.statistics.StatisticsEvent;
 import org.coldis.library.service.statistics.StatisticsEventKey;
 import org.coldis.library.service.statistics.StatisticsEventNaiveMultiDimensionProbability;
+import org.coldis.library.service.statistics.StatisticsEventRepositoryImpl;
 import org.coldis.library.service.statistics.StatisticsEventServiceComponent;
 import org.coldis.library.service.statistics.StatisticsEventSingleDimensionProbability;
 import org.coldis.library.service.statistics.StatisticsEventSummary;
@@ -23,13 +25,13 @@ import org.coldis.library.test.TestHelper;
 import org.coldis.library.test.TestWithContainer;
 import org.coldis.library.test.service.ContainerTestHelper;
 import org.junit.jupiter.api.Assertions;
-import org.springframework.test.annotation.DirtiesContext;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.context.SpringBootTest.WebEnvironment;
+import org.springframework.test.util.ReflectionTestUtils;
 
 /** Statistics event service component test. */
 @TestWithContainer(reuse = true)
@@ -46,11 +48,15 @@ public class StatisticsEventServiceComponentTest extends ContainerTestHelper {
 
   /** Statistics event service component. */
   @Autowired
-  private StatisticsEventServiceComponent statisticsEventServiceComponent;
+  protected StatisticsEventServiceComponent statisticsEventServiceComponent;
 
   /** Statistics event summary service component. */
   @Autowired
-  private StatisticsEventSummaryServiceComponent statisticsEventSummaryServiceComponent;
+  protected StatisticsEventSummaryServiceComponent statisticsEventSummaryServiceComponent;
+
+  /** Statistics event repository custom impl (for reflective strategy override in subclasses). */
+  @Autowired
+  protected StatisticsEventRepositoryImpl statisticsEventRepositoryImpl;
 
   /** Fixed date time for tests (truncated to 15-minute boundary). */
   private static final LocalDateTime TEST_DATE_TIME = LocalDateTime.of(2026, 1, 15, 10, 0, 0);
@@ -73,12 +79,19 @@ public class StatisticsEventServiceComponentTest extends ContainerTestHelper {
   /** Tolerance for BigDecimal comparisons. */
   private static final BigDecimal TOLERANCE = new BigDecimal("0.001");
 
-  /** Cleans statistics tables and clears caches before each test. */
+  /**
+   * Cleans statistics tables, clears caches, and resets upsert strategy + lock type to defaults
+   * before each test. Subclasses add their own {@code @BeforeEach} to override these defaults
+   * (runs after this one) — keeps a single Spring context shared across all combinations instead
+   * of dirtying via {@code @TestPropertySource}.
+   */
   @BeforeEach
   public void setUp() {
     this.purgeAllArtemisQueues();
     this.truncateTables("statistics_event", "statistics_event_summary", "statistics_context_configuration");
     this.cacheHelper.clearCaches();
+    ReflectionTestUtils.setField(this.statisticsEventServiceComponent, "lockType", LockType.ADVISORY);
+    ReflectionTestUtils.setField(this.statisticsEventRepositoryImpl, "upsertStrategy", "merge");
   }
 
   /**
