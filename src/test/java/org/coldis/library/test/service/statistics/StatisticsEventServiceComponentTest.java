@@ -125,8 +125,31 @@ public class StatisticsEventServiceComponentTest extends ContainerTestHelper {
   }
 
   /**
+   * Waits until an event is persisted (handles eventual consistency from buffered upsert
+   * processing). Flushes the event buffer on every iteration so the listener gets a chance to
+   * apply the upsert.
+   */
+  private StatisticsEvent waitForEvent(final StatisticsEventKey key) throws Exception {
+    Assertions.assertTrue(
+        TestHelper.waitUntilValid(
+            () -> {
+              try {
+                this.statisticsEventServiceComponent.flushEventBuffer();
+                return this.statisticsEventServiceComponent.findById(key, false);
+              } catch (final BusinessException exception) {
+                return null;
+              }
+            },
+            event -> event != null,
+            TestHelper.LONG_WAIT,
+            TestHelper.SHORT_WAIT));
+    return this.statisticsEventServiceComponent.findById(key, false);
+  }
+
+  /**
    * Waits until a summary meets the expected total count (handles eventual consistency from buffered
-   * delta processing).
+   * delta processing). Flushes the event buffer first so summary deltas have a chance to be
+   * produced before each poll.
    */
   private StatisticsEventSummary waitForSummary(
       final String context,
@@ -137,6 +160,7 @@ public class StatisticsEventServiceComponentTest extends ContainerTestHelper {
         TestHelper.waitUntilValid(
             () -> {
               try {
+                this.statisticsEventServiceComponent.flushEventBuffer();
                 this.statisticsEventSummaryServiceComponent.flushSummaryDeltaBuffer();
                 this.cacheHelper.clearCaches();
                 return this.statisticsEventSummaryServiceComponent.findById(
@@ -181,6 +205,7 @@ public class StatisticsEventServiceComponentTest extends ContainerTestHelper {
         TestHelper.waitUntilValid(
             () -> {
               try {
+                this.statisticsEventServiceComponent.flushEventBuffer();
                 this.statisticsEventSummaryServiceComponent.flushSummaryDeltaBuffer();
                 this.cacheHelper.clearCaches();
                 return this.statisticsEventSummaryServiceComponent.findById(
@@ -206,19 +231,13 @@ public class StatisticsEventServiceComponentTest extends ContainerTestHelper {
    */
   @Test
   public void testSyncUpsert() throws Exception {
-    // Upserts a statistics event.
-    final StatisticsEvent createdEvent =
-        this.statisticsEventServiceComponent.upsertStatisticsEvent(
-            createEvent("test-sync", "owner-1", TEST_DATE_TIME, "city", "sao-paulo"));
+    // Buffers a statistics event for upsert.
+    this.statisticsEventServiceComponent.upsertStatisticsEvent(
+        createEvent("test-sync", "owner-1", TEST_DATE_TIME, "city", "sao-paulo"));
 
-    // Verifies the event was persisted with the correct values.
-    Assertions.assertNotNull(createdEvent);
-    Assertions.assertEquals("sao-paulo", createdEvent.getDimensionValue());
-
-    // Retrieves the event via findById and verifies it.
+    // Waits until the event is flushed and persisted, then verifies.
     final StatisticsEvent retrievedEvent =
-        this.statisticsEventServiceComponent.findById(
-            new StatisticsEventKey("test-sync", "owner-1", "city"), false);
+        this.waitForEvent(new StatisticsEventKey("test-sync", "owner-1", "city"));
     Assertions.assertEquals("sao-paulo", retrievedEvent.getDimensionValue());
 
     // Waits for the summary buffer to flush and verifies the summary.
@@ -307,8 +326,7 @@ public class StatisticsEventServiceComponentTest extends ContainerTestHelper {
 
     // Verifies the event itself was updated.
     final StatisticsEvent updatedEvent =
-        this.statisticsEventServiceComponent.findById(
-            new StatisticsEventKey("test-change", "owner-x", "state"), false);
+        this.waitForEvent(new StatisticsEventKey("test-change", "owner-x", "state"));
     Assertions.assertEquals("RJ", updatedEvent.getDimensionValue());
   }
 
@@ -1052,19 +1070,10 @@ public class StatisticsEventServiceComponentTest extends ContainerTestHelper {
     this.statisticsEventServiceComponent.upsertAllStatisticsEvents(List.of(event));
 
     // Waits for the event to be persisted by the buffer flush.
-    Assertions.assertTrue(
-        TestHelper.waitUntilValid(
-            () -> {
-              try {
-                return this.statisticsEventServiceComponent.findById(
-                    new StatisticsEventKey("test-buffered", "buffered-owner-1", "channel"), false);
-              } catch (final BusinessException exception) {
-                return null;
-              }
-            },
-            result -> result != null && "web".equals(result.getDimensionValue()),
-            TestHelper.LONG_WAIT,
-            TestHelper.SHORT_WAIT));
+    final StatisticsEvent persisted =
+        this.waitForEvent(
+            new StatisticsEventKey("test-buffered", "buffered-owner-1", "channel"));
+    Assertions.assertEquals("web", persisted.getDimensionValue());
 
     // Verifies the summary was also updated.
     final StatisticsEventSummary summary =

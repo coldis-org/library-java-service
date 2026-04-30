@@ -60,6 +60,9 @@ public class StatisticsEvent extends AbstractTimestampableEntity
   /** When the statistics event expires. */
   private LocalDateTime expiredAt;
 
+  /** When the event was emitted by the caller (used to preserve order across buffered upserts). */
+  private LocalDateTime emittedAt;
+
   /** No arguments constructor. */
   public StatisticsEvent() {}
 
@@ -281,13 +284,47 @@ public class StatisticsEvent extends AbstractTimestampableEntity
   }
 
   /**
+   * Gets the emittedAt. Falls back to updatedAt when null (covers legacy rows that pre-date the
+   * column and callers that did not set it explicitly).
+   *
+   * @return The emittedAt.
+   */
+  @Column(name = "emitted_at", columnDefinition = "TIMESTAMPTZ")
+  @JsonView({ModelView.Persistent.class, ModelView.Public.class})
+  public LocalDateTime getEmittedAt() {
+    this.emittedAt = (this.emittedAt == null ? this.getUpdatedAt() : this.emittedAt);
+    return this.emittedAt;
+  }
+
+  /**
+   * Sets the emittedAt.
+   *
+   * @param emittedAt New emittedAt.
+   */
+  public void setEmittedAt(final LocalDateTime emittedAt) {
+    this.emittedAt = emittedAt;
+  }
+
+  /**
    * @see Reduceable#reduce(Object)
+   *
+   * <p>Latest-emission-wins: keeps the current state if the incoming event is older than what is
+   * already buffered.
    */
   @Override
   public synchronized void reduce(final StatisticsEvent toBeReduced) {
+    final LocalDateTime currentEmittedAt = this.getEmittedAt();
+    final LocalDateTime incomingEmittedAt = toBeReduced.getEmittedAt();
+    if (currentEmittedAt != null
+        && incomingEmittedAt != null
+        && incomingEmittedAt.isBefore(currentEmittedAt)) {
+      return;
+    }
+    this.dateTime = toBeReduced.getDateTime();
     this.dimensionValue = toBeReduced.getDimensionValue();
     this.weight = toBeReduced.getWeight();
     this.expiredAt = toBeReduced.getExpiredAt();
+    this.emittedAt = incomingEmittedAt;
   }
 
   /**
@@ -306,7 +343,8 @@ public class StatisticsEvent extends AbstractTimestampableEntity
                 this.dimensionName,
                 this.dimensionValue,
                 this.weight,
-                this.expiredAt);
+                this.expiredAt,
+                this.emittedAt);
     return result;
   }
 
@@ -331,6 +369,7 @@ public class StatisticsEvent extends AbstractTimestampableEntity
         && Objects.equals(this.dimensionName, other.dimensionName)
         && Objects.equals(this.dimensionValue, other.dimensionValue)
         && Objects.equals(this.weight, other.weight)
-        && Objects.equals(this.expiredAt, other.expiredAt);
+        && Objects.equals(this.expiredAt, other.expiredAt)
+        && Objects.equals(this.emittedAt, other.emittedAt);
   }
 }

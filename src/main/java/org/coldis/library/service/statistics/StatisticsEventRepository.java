@@ -17,7 +17,7 @@ import jakarta.persistence.LockModeType;
 /** Statistics event repository. */
 @Repository
 public interface StatisticsEventRepository
-    extends JpaRepository<StatisticsEvent, StatisticsEventKey> {
+    extends JpaRepository<StatisticsEvent, StatisticsEventKey>, StatisticsEventRepositoryCustom {
 
   /**
    * Finds the statistics event for update (with pessimistic write lock).

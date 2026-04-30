@@ -1,13 +1,20 @@
 package org.coldis.library.service.statistics;
 
+import jakarta.annotation.PreDestroy;
+import java.io.Serializable;
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
+import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import org.coldis.library.exception.BusinessException;
 import org.coldis.library.exception.IntegrationException;
+import org.coldis.library.helper.BufferedReducer;
 import org.coldis.library.helper.DateTimeHelper;
 import org.coldis.library.helper.ExtendedValidator;
 import org.coldis.library.model.SimpleMessage;
+import org.coldis.library.persistence.lock.AdvisoryLockServiceComponent;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -38,10 +45,28 @@ public class StatisticsEventServiceComponent {
   /** Internal queue for expired event deletion. */
   private static final String DELETE_EXPIRED_QUEUE = "statistics-event/delete/expired";
 
+  /** Internal queue for buffered upsert batches. */
+  private static final String UPSERT_BATCH_QUEUE = "statistics-event/upsert/batch";
+
+  /** Advisory lock namespace for statistics-event upsert serialization. ASCII for "STAT". */
+  private static final int LOCK_NAMESPACE = 0x53544154;
+
+  /** Advisory lock key prefix for statistics-event upsert serialization. */
+  private static final String LOCK_KEY_PREFIX = "statistics-event:";
+
   /** Batch size for expired event deletion. */
   @org.springframework.beans.factory.annotation.Value(
       "${org.coldis.library.service.statistics.event.deleteexpired.batch-size:1000}")
   private int deleteExpiredBatchSize;
+
+  /** Maximum number of events sent in a single upsert batch message. */
+  @org.springframework.beans.factory.annotation.Value(
+      "${org.coldis.library.service.statistics.event.buffer.batch-size:100}")
+  private int upsertBatchSize;
+
+  /** In-memory buffer for upserts pending flush. */
+  private final BufferedReducer<StatisticsEventKey, StatisticsEvent> eventBuffer =
+      new BufferedReducer<>();
 
   /** Validator. */
   @Autowired private ExtendedValidator validator;
@@ -51,6 +76,9 @@ public class StatisticsEventServiceComponent {
 
   /** Statistics event repository. */
   @Autowired private StatisticsEventRepository statisticsEventRepository;
+
+  /** Advisory lock service. */
+  @Autowired private AdvisoryLockServiceComponent advisoryLockService;
 
   /** Statistics context configuration service component. */
   @Autowired
@@ -85,7 +113,8 @@ public class StatisticsEventServiceComponent {
   }
 
   /**
-   * Creates a statistics event.
+   * Creates a statistics event in a separate transaction so duplicate-key violations don't poison
+   * the outer transaction.
    *
    * @param statisticsEvent Statistics event.
    * @return The created statistics event.
@@ -142,85 +171,153 @@ public class StatisticsEventServiceComponent {
   }
 
   /**
-   * Upserts a single statistics event. If the event already exists and the dimension value changed,
-   * both the event and the summary are updated in the same transaction.
+   * Buffers a statistics event for deferred upsert. Validates and truncates synchronously so
+   * callers see input errors immediately, but the actual DB write happens asynchronously via the
+   * upsert batch queue.
    *
    * @param statisticsEvent The statistics event.
-   * @return The upserted statistics event.
-   * @throws BusinessException If the event cannot be upserted.
+   * @throws BusinessException If validation fails.
    */
-
-  @Transactional(propagation = Propagation.REQUIRED)
-  public StatisticsEvent upsertStatisticsEvent(final StatisticsEvent statisticsEvent)
+  public void upsertStatisticsEvent(final StatisticsEvent statisticsEvent)
       throws BusinessException {
     StatisticsEventServiceComponent.LOGGER.debug(
-        "Upserting event: context={}, owner={}, dimension={}, value={}",
+        "Buffering event: context={}, owner={}, dimension={}, value={}",
         statisticsEvent.getContext(), statisticsEvent.getOwnerKey(),
         statisticsEvent.getDimensionName(), statisticsEvent.getDimensionValue());
     // Truncates the date time using the context configuration.
     statisticsEvent.setDateTime(
         this.statisticsContextConfigurationServiceComponent.truncateDateTime(
             statisticsEvent.getContext(), statisticsEvent.getDateTime()));
+    // Default emittedAt to now so the latest-emission-wins ordering invariant holds even when
+    // callers don't set it.
+    if (statisticsEvent.getEmittedAt() == null) {
+      statisticsEvent.setEmittedAt(DateTimeHelper.getCurrentLocalDateTime());
+    }
     this.validator.validateAndThrowViolations(statisticsEvent);
-    // Checks if the event already exists before findOrCreate persists it.
-    final StatisticsEvent existing =
-        this.statisticsEventRepository
-            .findByIdForUpdate(
-                statisticsEvent.getContext(),
-                statisticsEvent.getOwnerKey(),
-                statisticsEvent.getDimensionName())
-            .orElse(null);
-    final String oldDimensionValue = existing != null ? existing.getDimensionValue() : null;
-    final BigDecimal oldWeight = existing != null ? existing.getWeight() : null;
-    final LocalDateTime oldDateTime = existing != null ? existing.getDateTime() : null;
-    final StatisticsEvent actual = this.findOrCreate(statisticsEvent);
-    final String newDimensionValue = statisticsEvent.getDimensionValue();
-    final LocalDateTime newDateTime = statisticsEvent.getDateTime();
-    // Updates the event.
-    actual.setDateTime(newDateTime);
-    actual.setDimensionValue(newDimensionValue);
-    actual.setWeight(statisticsEvent.getWeight());
-    actual.setExpiredAt(statisticsEvent.getExpiredAt());
-    final StatisticsEvent saved = this.statisticsEventRepository.save(actual);
-    // Buffers summary deltas for deferred processing.
-    final boolean isNew = oldDimensionValue == null;
+    this.eventBuffer.reduce(statisticsEvent.getId(), statisticsEvent);
+  }
+
+  /**
+   * Drains the upsert buffer and dispatches batches to the upsert batch queue. Runs on a schedule
+   * and on shutdown.
+   */
+  @PreDestroy
+  @Scheduled(
+      cron =
+          "${org.coldis.library.service.statistics.event.buffer.cron:0 * * * * *}")
+  public void flushEventBuffer() {
+    StatisticsEventServiceComponent.LOGGER.debug("Flushing event buffer.");
+    final List<StatisticsEvent> drained = new ArrayList<>();
+    this.eventBuffer.flushLocalBuffer(drained::add);
+    if (drained.isEmpty()) {
+      return;
+    }
+    final int batchSize = Math.max(1, this.upsertBatchSize);
+    for (int from = 0; from < drained.size(); from += batchSize) {
+      final int to = Math.min(from + batchSize, drained.size());
+      final ArrayList<StatisticsEvent> chunk = new ArrayList<>(drained.subList(from, to));
+      this.jmsTemplate.convertAndSend(
+          StatisticsEventServiceComponent.UPSERT_BATCH_QUEUE, (Serializable) chunk);
+    }
+  }
+
+  /**
+   * Processes a buffered upsert batch from the internal JMS queue. Acquires per-key advisory locks
+   * to serialize cross-instance writers, then runs a single MERGE statement that applies the
+   * latest-emission-wins ordering rule and reports back the pre-update state. Summary deltas are
+   * computed from the result and buffered.
+   *
+   * @param events The batch of events to upsert.
+   */
+  @Transactional(propagation = Propagation.REQUIRED)
+  @JmsListener(
+      destination = StatisticsEventServiceComponent.UPSERT_BATCH_QUEUE,
+      concurrency =
+          "${org.coldis.library.service.statistics.event.buffer.processupsertbatch.concurrency:1}",
+      containerFactory =
+          "${org.coldis.library.service.statistics.container-factory:jmsListenerContainerFactory}")
+  public void processEventUpsertBatch(final List<StatisticsEvent> events) {
+    if (events == null || events.isEmpty()) {
+      return;
+    }
+    // Serialize cross-instance writers per-key. While we hold these locks, no other instance can
+    // run the upsert path for the same keys — so the MERGE's old-state snapshot is stable.
+    final List<String> lockKeys = new ArrayList<>(events.size());
+    for (final StatisticsEvent event : events) {
+      lockKeys.add(
+          StatisticsEventServiceComponent.LOCK_KEY_PREFIX
+              + event.getContext()
+              + "|" + event.getOwnerKey()
+              + "|" + event.getDimensionName());
+    }
+    this.advisoryLockService.lockKeys(StatisticsEventServiceComponent.LOCK_NAMESPACE, lockKeys);
+    // Single round-trip: insert/update + capture old state for delta computation.
+    final List<StatisticsEventUpsertResult> results =
+        this.statisticsEventRepository.upsertBatch(events);
+    final Map<StatisticsEventKey, StatisticsEventUpsertResult> resultByKey =
+        new HashMap<>(results.size());
+    for (final StatisticsEventUpsertResult result : results) {
+      resultByKey.put(result.key(), result);
+    }
+    for (final StatisticsEvent incoming : events) {
+      final StatisticsEventUpsertResult result = resultByKey.get(incoming.getId());
+      if (result == null || !result.applied()) {
+        StatisticsEventServiceComponent.LOGGER.debug(
+            "Dropping stale event: context={}, owner={}, dimension={}, incomingEmittedAt={}",
+            incoming.getContext(), incoming.getOwnerKey(), incoming.getDimensionName(),
+            incoming.getEmittedAt());
+        continue;
+      }
+      this.bufferSummaryDeltasForUpsert(result, incoming);
+    }
+  }
+
+  /**
+   * Computes and buffers the summary deltas implied by applying {@code incoming} given the
+   * pre-update state captured in {@code result}.
+   */
+  private void bufferSummaryDeltasForUpsert(
+      final StatisticsEventUpsertResult result, final StatisticsEvent incoming) {
+    final String newDimensionValue = incoming.getDimensionValue();
+    final LocalDateTime newDateTime = incoming.getDateTime();
+    final boolean isNew = result.wasInserted();
+    final String oldDimensionValue = isNew ? null : result.oldDimensionValue();
+    final BigDecimal oldWeight = isNew ? null : result.oldWeight();
+    final LocalDateTime oldDateTime = isNew ? null : result.oldDateTime();
     final boolean dateTimeChanged = !isNew && !oldDateTime.equals(newDateTime);
     final boolean dimensionValueChanged = isNew || !oldDimensionValue.equals(newDimensionValue);
     final boolean weightChanged =
-        !isNew && oldWeight.compareTo(statisticsEvent.getWeight()) != 0;
+        !isNew && oldWeight.compareTo(incoming.getWeight()) != 0;
     if (dateTimeChanged) {
       // Decrement from old bucket.
       final StatisticsEventSummaryDelta oldDelta =
           new StatisticsEventSummaryDelta(
-              statisticsEvent.getContext(), statisticsEvent.getDimensionName(), oldDateTime);
+              incoming.getContext(), incoming.getDimensionName(), oldDateTime);
       oldDelta.addDelta(oldDimensionValue, -1, oldWeight.negate());
       this.statisticsEventSummaryServiceComponent.bufferDelta(oldDelta.getKey(), oldDelta);
       // Increment in new bucket.
       final StatisticsEventSummaryDelta newDelta =
           new StatisticsEventSummaryDelta(
-              statisticsEvent.getContext(), statisticsEvent.getDimensionName(), newDateTime);
-      newDelta.addDelta(newDimensionValue, 1, statisticsEvent.getWeight());
+              incoming.getContext(), incoming.getDimensionName(), newDateTime);
+      newDelta.addDelta(newDimensionValue, 1, incoming.getWeight());
       this.statisticsEventSummaryServiceComponent.bufferDelta(newDelta.getKey(), newDelta);
     } else if (dimensionValueChanged) {
-      // Dimension value changed within the same bucket.
       final StatisticsEventSummaryDelta delta =
           new StatisticsEventSummaryDelta(
-              statisticsEvent.getContext(), statisticsEvent.getDimensionName(), newDateTime);
+              incoming.getContext(), incoming.getDimensionName(), newDateTime);
       if (!isNew) {
         delta.addDelta(oldDimensionValue, -1, oldWeight.negate());
       }
-      delta.addDelta(newDimensionValue, 1, statisticsEvent.getWeight());
+      delta.addDelta(newDimensionValue, 1, incoming.getWeight());
       this.statisticsEventSummaryServiceComponent.bufferDelta(delta.getKey(), delta);
     } else if (weightChanged) {
-      // Only weight changed — adjust the weight delta without changing counts.
       final StatisticsEventSummaryDelta delta =
           new StatisticsEventSummaryDelta(
-              statisticsEvent.getContext(), statisticsEvent.getDimensionName(), newDateTime);
+              incoming.getContext(), incoming.getDimensionName(), newDateTime);
       delta.addDelta(
-          newDimensionValue, 0, statisticsEvent.getWeight().subtract(oldWeight));
+          newDimensionValue, 0, incoming.getWeight().subtract(oldWeight));
       this.statisticsEventSummaryServiceComponent.bufferDelta(delta.getKey(), delta);
     }
-    return saved;
   }
 
   /**
