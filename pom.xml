@@ -10,7 +10,7 @@
 
 	<groupId>org.coldis.library</groupId>
 	<artifactId>service</artifactId>
-	<version>2.0.231</version>
+	<version>2.0.232-SNAPSHOT</version>
 	<packaging>jar</packaging>
 
 	<name>Spring boot utilities</name>
@@ -41,7 +41,7 @@
 			scm:git:https://github.com/coldis-org/library-java-service.git</connection>
 		<developerConnection>
 			scm:git:git@github.com:coldis-org/library-java-service.git</developerConnection>
-		<tag>service-2.0.231</tag>
+		<tag>service-2.0.229</tag>
 	</scm>
 	
 	<dependencies>
