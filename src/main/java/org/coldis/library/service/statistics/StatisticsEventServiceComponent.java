@@ -14,7 +14,9 @@ import org.coldis.library.helper.BufferedReducer;
 import org.coldis.library.helper.DateTimeHelper;
 import org.coldis.library.helper.ExtendedValidator;
 import org.coldis.library.model.SimpleMessage;
-import org.coldis.library.persistence.lock.AdvisoryLockServiceComponent;
+import org.coldis.library.persistence.LockBehavior;
+import org.coldis.library.persistence.lock.LockServiceComponent;
+import org.coldis.library.persistence.lock.LockType;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -48,11 +50,15 @@ public class StatisticsEventServiceComponent {
   /** Internal queue for buffered upsert batches. */
   private static final String UPSERT_BATCH_QUEUE = "statistics-event/upsert/batch";
 
-  /** Advisory lock namespace for statistics-event upsert serialization. ASCII for "STAT". */
+  /** Lock namespace for statistics-event upsert serialization. ASCII for "STAT". */
   private static final int LOCK_NAMESPACE = 0x53544154;
 
-  /** Advisory lock key prefix for statistics-event upsert serialization. */
+  /** Lock key prefix for statistics-event upsert serialization. */
   private static final String LOCK_KEY_PREFIX = "statistics-event:";
+
+  /** Lock-type property name. */
+  static final String LOCK_TYPE_PROPERTY =
+      "org.coldis.library.service.statistics.event.lock-type";
 
   /** Batch size for expired event deletion. */
   @org.springframework.beans.factory.annotation.Value(
@@ -77,8 +83,14 @@ public class StatisticsEventServiceComponent {
   /** Statistics event repository. */
   @Autowired private StatisticsEventRepository statisticsEventRepository;
 
-  /** Advisory lock service. */
-  @Autowired private AdvisoryLockServiceComponent advisoryLockService;
+  /** Lock service (advisory or table-row, configurable). */
+  @Autowired private LockServiceComponent lockService;
+
+  /** Lock mechanism for the upsert listener. Defaults to advisory; set to {@code TABLE} for
+   * collision-free string-key locking at the cost of an INSERT/DELETE per acquired key. */
+  @org.springframework.beans.factory.annotation.Value(
+      "${" + StatisticsEventServiceComponent.LOCK_TYPE_PROPERTY + ":ADVISORY}")
+  private LockType lockType;
 
   /** Statistics context configuration service component. */
   @Autowired
@@ -236,7 +248,7 @@ public class StatisticsEventServiceComponent {
           "${org.coldis.library.service.statistics.event.buffer.processupsertbatch.concurrency:1}",
       containerFactory =
           "${org.coldis.library.service.statistics.container-factory:jmsListenerContainerFactory}")
-  public void processEventUpsertBatch(final List<StatisticsEvent> events) {
+  public void processEventUpsertBatch(final List<StatisticsEvent> events) throws BusinessException {
     if (events == null || events.isEmpty()) {
       return;
     }
@@ -250,7 +262,11 @@ public class StatisticsEventServiceComponent {
               + "|" + event.getOwnerKey()
               + "|" + event.getDimensionName());
     }
-    this.advisoryLockService.lockKeys(StatisticsEventServiceComponent.LOCK_NAMESPACE, lockKeys);
+    this.lockService.lockKeys(
+        LockBehavior.WAIT_AND_LOCK,
+        this.lockType,
+        StatisticsEventServiceComponent.LOCK_NAMESPACE,
+        lockKeys);
     // Single round-trip: insert/update + capture old state for delta computation.
     final List<StatisticsEventUpsertResult> results =
         this.statisticsEventRepository.upsertBatch(events);

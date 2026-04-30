@@ -4,26 +4,49 @@ import jakarta.persistence.EntityManager;
 import jakarta.persistence.PersistenceContext;
 import jakarta.persistence.Query;
 import java.math.BigDecimal;
+import java.time.Instant;
 import java.time.LocalDateTime;
 import java.time.OffsetDateTime;
+import java.time.ZoneId;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import org.coldis.library.helper.DateTimeHelper;
+import org.springframework.beans.factory.annotation.Value;
 
 /**
- * Custom statistics event repository operations. Implements the batched MERGE upsert against
- * Postgres 17+ with parallel-array binding via {@code unnest}.
+ * Custom statistics event repository operations. Implements the batched upsert against Postgres
+ * with parallel-array binding via {@code unnest}.
+ *
+ * <p>Two SQL flavors are supported, selected by
+ * {@code org.coldis.library.service.statistics.event.upsert-strategy}:
+ * <ul>
+ *   <li>{@code merge} (default) — uses {@code MERGE ... RETURNING merge_action()}; requires
+ *       Postgres 17 or newer.</li>
+ *   <li>{@code on-conflict} — uses {@code INSERT ... ON CONFLICT DO UPDATE ... RETURNING
+ *       (xmax = 0) AS was_inserted}; works on Postgres 9.5+.</li>
+ * </ul>
  */
 public class StatisticsEventRepositoryImpl implements StatisticsEventRepositoryCustom {
 
+  /** Upsert strategy property name. */
+  static final String UPSERT_STRATEGY_PROPERTY =
+      "org.coldis.library.service.statistics.event.upsert-strategy";
+
+  /** Strategy value: PostgreSQL 17+ {@code MERGE ... RETURNING merge_action()}. */
+  static final String STRATEGY_MERGE = "merge";
+
+  /** Strategy value: portable {@code INSERT ... ON CONFLICT DO UPDATE ... RETURNING}. */
+  static final String STRATEGY_ON_CONFLICT = "on-conflict";
+
   /**
-   * Single-statement CTE upsert: input → existing snapshot → MERGE (insert/update with
-   * latest-emission-wins predicate) → join everything back. Returns one row per input key in input
-   * order with {@code applied}, {@code was_inserted} and the pre-update state needed for summary
-   * deltas. Caller must hold the per-key advisory lock for the keys being upserted.
+   * MERGE-based single-statement CTE upsert (Postgres 17+): input → existing snapshot → MERGE
+   * (insert/update with latest-emission-wins predicate) → join everything back. Returns one row
+   * per input key in input order with {@code applied}, {@code was_inserted} and the pre-update
+   * state needed for summary deltas. Caller must hold the per-key advisory lock for the keys
+   * being upserted.
    */
-  private static final String UPSERT_BATCH_SQL =
+  private static final String UPSERT_BATCH_SQL_MERGE =
       "WITH input AS ("
           + " SELECT * FROM unnest("
           + "  CAST(:contexts AS text[]),"
@@ -78,6 +101,68 @@ public class StatisticsEventRepositoryImpl implements StatisticsEventRepositoryC
           + "    AND i.owner_key = e.owner_key AND i.dimension_name = e.dimension_name"
           + "  ORDER BY i.ord";
 
+  /**
+   * ON CONFLICT-based single-statement CTE upsert (Postgres 9.5+): identical structure to the
+   * MERGE flavor, except the middle CTE uses {@code INSERT ... ON CONFLICT DO UPDATE} with a
+   * {@code WHERE} clause for the latest-emission-wins predicate, and {@code (xmax = 0)} on the
+   * RETURNING row to distinguish freshly inserted rows from updates.
+   */
+  private static final String UPSERT_BATCH_SQL_ON_CONFLICT =
+      "WITH input AS ("
+          + " SELECT * FROM unnest("
+          + "  CAST(:contexts AS text[]),"
+          + "  CAST(:ownerKeys AS text[]),"
+          + "  CAST(:dimensionNames AS text[]),"
+          + "  CAST(:dateTimes AS timestamptz[]),"
+          + "  CAST(:dimensionValues AS text[]),"
+          + "  CAST(:weights AS numeric[]),"
+          + "  CAST(:expiredAts AS timestamptz[]),"
+          + "  CAST(:emittedAts AS timestamptz[]),"
+          + "  CAST(:createdAts AS timestamptz[]),"
+          + "  CAST(:updatedAts AS timestamptz[])"
+          + " ) WITH ORDINALITY AS t(context, owner_key, dimension_name, date_time,"
+          + "        dimension_value, weight, expired_at, emitted_at, created_at,"
+          + "        updated_at, ord)"
+          + "), existing AS ("
+          + " SELECT s.context, s.owner_key, s.dimension_name,"
+          + "        s.dimension_value AS old_dim, s.weight AS old_weight,"
+          + "        s.date_time AS old_dt"
+          + " FROM statistics_event s"
+          + " WHERE (s.context, s.owner_key, s.dimension_name) IN ("
+          + "   SELECT context, owner_key, dimension_name FROM input"
+          + " )"
+          + "), upserted AS ("
+          + " INSERT INTO statistics_event ("
+          + "   context, owner_key, dimension_name, date_time, dimension_value, weight,"
+          + "   expired_at, emitted_at, created_at, updated_at"
+          + " ) SELECT context, owner_key, dimension_name, date_time, dimension_value, weight,"
+          + "          expired_at, emitted_at, created_at, updated_at FROM input"
+          + " ON CONFLICT (context, owner_key, dimension_name) DO UPDATE SET"
+          + "   date_time = EXCLUDED.date_time,"
+          + "   dimension_value = EXCLUDED.dimension_value,"
+          + "   weight = EXCLUDED.weight,"
+          + "   expired_at = EXCLUDED.expired_at,"
+          + "   emitted_at = EXCLUDED.emitted_at,"
+          + "   updated_at = EXCLUDED.updated_at"
+          + " WHERE statistics_event.emitted_at IS NULL"
+          + "    OR EXCLUDED.emitted_at >= statistics_event.emitted_at"
+          + " RETURNING context, owner_key, dimension_name, (xmax = 0) AS was_inserted"
+          + ") SELECT i.context, i.owner_key, i.dimension_name,"
+          + "         u.was_inserted IS NOT NULL AS applied,"
+          + "         COALESCE(u.was_inserted, false) AS was_inserted,"
+          + "         e.old_dim, e.old_weight, e.old_dt"
+          + "  FROM input i"
+          + "  LEFT JOIN upserted u ON i.context = u.context"
+          + "    AND i.owner_key = u.owner_key AND i.dimension_name = u.dimension_name"
+          + "  LEFT JOIN existing e ON i.context = e.context"
+          + "    AND i.owner_key = e.owner_key AND i.dimension_name = e.dimension_name"
+          + "  ORDER BY i.ord";
+
+  /** Configured upsert strategy ({@code merge} or {@code on-conflict}). Defaults to {@code merge}. */
+  @Value("${" + StatisticsEventRepositoryImpl.UPSERT_STRATEGY_PROPERTY + ":"
+      + StatisticsEventRepositoryImpl.STRATEGY_MERGE + "}")
+  private String upsertStrategy;
+
   /** Entity manager. */
   @PersistenceContext private EntityManager entityManager;
 
@@ -111,8 +196,11 @@ public class StatisticsEventRepositoryImpl implements StatisticsEventRepositoryC
       createdAts[index] = (event.getCreatedAt() == null) ? now : event.getCreatedAt();
       updatedAts[index] = now;
     }
-    final Query query =
-        this.entityManager.createNativeQuery(StatisticsEventRepositoryImpl.UPSERT_BATCH_SQL);
+    final String sql =
+        StatisticsEventRepositoryImpl.STRATEGY_ON_CONFLICT.equalsIgnoreCase(this.upsertStrategy)
+            ? StatisticsEventRepositoryImpl.UPSERT_BATCH_SQL_ON_CONFLICT
+            : StatisticsEventRepositoryImpl.UPSERT_BATCH_SQL_MERGE;
+    final Query query = this.entityManager.createNativeQuery(sql);
     query.setParameter("contexts", contexts);
     query.setParameter("ownerKeys", owners);
     query.setParameter("dimensionNames", dims);
@@ -142,9 +230,11 @@ public class StatisticsEventRepositoryImpl implements StatisticsEventRepositoryC
   }
 
   /**
-   * Coerces the JDBC timestamp value returned by the native query (driver may return
-   * {@link java.sql.Timestamp}, {@link LocalDateTime}, or {@link OffsetDateTime} depending on the
-   * Postgres / Hibernate type mapping) to {@link LocalDateTime}.
+   * Coerces the JDBC timestamp value returned by the native query to {@link LocalDateTime}.
+   * Postgres JDBC + Hibernate 6 may return {@link Instant}, {@link OffsetDateTime},
+   * {@link LocalDateTime}, or {@link java.sql.Timestamp} depending on column type and dialect
+   * configuration. {@link Instant} (the typical {@code timestamptz} mapping) is converted via the
+   * JVM default zone, matching how {@code AbstractTimestampableEntity} treats local times.
    */
   private static LocalDateTime toLocalDateTime(final Object value) {
     if (value == null) {
@@ -153,11 +243,14 @@ public class StatisticsEventRepositoryImpl implements StatisticsEventRepositoryC
     if (value instanceof LocalDateTime localDateTime) {
       return localDateTime;
     }
-    if (value instanceof java.sql.Timestamp timestamp) {
-      return timestamp.toLocalDateTime();
+    if (value instanceof Instant instant) {
+      return instant.atZone(ZoneId.systemDefault()).toLocalDateTime();
     }
     if (value instanceof OffsetDateTime offsetDateTime) {
       return offsetDateTime.toLocalDateTime();
+    }
+    if (value instanceof java.sql.Timestamp timestamp) {
+      return timestamp.toLocalDateTime();
     }
     throw new IllegalStateException(
         "Unexpected timestamp type from upsertBatch: " + value.getClass().getName());

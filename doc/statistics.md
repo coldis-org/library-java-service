@@ -54,6 +54,7 @@ org.coldis.library.service.statistics
 | `dimensionValue` | String | No | The observed value (e.g., "sao-paulo", "mobile") |
 | `weight` | BigDecimal | No | Numeric value to accumulate (defaults to 1) |
 | `expiredAt` | LocalDateTime | No | Optional expiration for data cleanup |
+| `emittedAt` | LocalDateTime | No | When the event was emitted by the caller; orders concurrent buffered upserts (latest-emission-wins). Defaults to `now()` if unset; falls back to `updatedAt` for legacy rows. |
 
 **Index:** `(context, dimension_name, date_time)` for summary aggregation queries.
 
@@ -82,21 +83,57 @@ org.coldis.library.service.statistics
 
 ```
 Event arrives
-  -> StatisticsEventServiceComponent.upsertStatisticsEvent()
+  -> StatisticsEventServiceComponent.upsertStatisticsEvent()  (returns void)
        -> Truncates dateTime using context configuration (cached)
-       -> Persists event (pessimistic locking for upsert)
-       -> Buffers summary delta (in-memory BufferedReducer)
+       -> Defaults emittedAt to now() if unset
+       -> Validates and reduces into in-memory event buffer
+          (latest-emission-wins on duplicate keys)
 
 Batch upsert
   -> StatisticsEventServiceComponent.upsertAllStatisticsEvents()
-       -> Calls upsertStatisticsEvent() for each event
+       -> Calls upsertStatisticsEvent() for each event (same buffer)
 
 Periodic flush (configurable cron, default every minute)
-  -> Flushes summary delta buffer to JMS queue (statistics-event/summary/delta)
+  -> Drains event buffer, splits into chunks, dispatches each chunk
+     as a List<StatisticsEvent> to JMS queue
+     (statistics-event/upsert/batch)
 
-JMS listener
+JMS listener (processEventUpsertBatch)
+  -> Acquires per-key locks via LockServiceComponent (advisory or table)
+  -> Runs single CTE upsert: existing snapshot + MERGE / INSERT ON CONFLICT
+     with latest-emission-wins predicate, returning was_inserted +
+     pre-update state
+  -> Buffers summary deltas computed from the result (skipping stale rows)
+
+Summary deltas flush (configurable cron, default every minute)
+  -> Flushes summary delta buffer to JMS queue
+     (statistics-event/summary/delta)
+
+Summary listener
   -> Applies summary deltas with pessimistic locking (concurrency 1-10)
 ```
+
+### Buffered Event Upserts
+
+Event upserts are also **eventually consistent**, mirroring the summary path:
+
+1. `upsertStatisticsEvent()` is `void` — the caller's data lands in an in-memory `BufferedReducer<StatisticsEventKey, StatisticsEvent>`. Validation and `dateTime` truncation happen synchronously, so input errors surface immediately; the DB write does not.
+2. Same-key upserts within the buffer window are reduced via `StatisticsEvent.reduce()` (latest-emission-wins by `emittedAt`).
+3. The buffer flushes on a cron (default every minute) and on JVM shutdown (`@PreDestroy`). Each flush splits the drained set into chunks of `batch-size` (default 100) and sends each chunk as a `List<StatisticsEvent>` JMS message.
+4. The listener:
+   - Acquires per-key locks via `LockServiceComponent` to serialize cross-instance writers (`ADVISORY` by default, `TABLE` when collision-free string-key locking is required).
+   - Runs a single CTE statement that snapshots the existing rows, upserts the batch with a latest-emission-wins predicate, and joins the pre-update state into the result.
+   - Skips rows the predicate filtered out as stale (incoming `emittedAt` older than persisted) — they end up `applied = false` in the result and produce no summary delta.
+   - Computes summary deltas from the per-row pre-update state and the incoming event, and buffers them.
+
+Two upsert SQL flavors are supported, selected by `event.upsert-strategy`:
+
+- `merge` (default) — `MERGE ... RETURNING merge_action()`. Requires Postgres 17+.
+- `on-conflict` — `INSERT ... ON CONFLICT DO UPDATE ... RETURNING (xmax = 0)`. Works on Postgres 9.5+.
+
+**Read-your-writes within the flush window is not guaranteed.** A caller that reads back an event right after upserting may not see it until the next flush.
+
+**`deleteStatisticsEvent` stays synchronous** — deletes are rare and keeping them sync avoids ordering complexity vs. concurrent buffered upserts.
 
 ### Buffered Summary Deltas
 
@@ -153,6 +190,11 @@ Each context can define its own time bucket size via `StatisticsContextConfigura
 |----------|---------|-------------|
 | `org.coldis.configuration.service.statistics-enabled` | `false` | Feature toggle — must be `true` to activate the module |
 | `org.coldis.library.service.statistics.default-truncation-minutes` | `15` | Default time bucket size when no context config exists |
+| `org.coldis.library.service.statistics.event.buffer.cron` | `0 * * * * *` | Event upsert buffer flush schedule (every minute) |
+| `org.coldis.library.service.statistics.event.buffer.batch-size` | `100` | Max events per JMS upsert batch message |
+| `org.coldis.library.service.statistics.event.buffer.processupsertbatch.concurrency` | `1` | JMS concurrency for the upsert batch listener |
+| `org.coldis.library.service.statistics.event.upsert-strategy` | `merge` | Upsert SQL flavor: `merge` (PG 17+) or `on-conflict` (PG 9.5+) |
+| `org.coldis.library.service.statistics.event.lock-type` | `ADVISORY` | Lock mechanism for per-key serialization: `ADVISORY` or `TABLE` |
 | `org.coldis.library.service.statistics.event.deleteexpired.cron` | `0 0 3 * * *` | Expired event cleanup schedule (3 AM daily) |
 | `org.coldis.library.service.statistics.event.deleteexpired.batch-size` | `1000` | Batch size for expired event deletion |
 | `org.coldis.library.service.statistics.summary.buffer.cron` | `0 * * * * *` | Summary delta buffer flush schedule (every minute) |

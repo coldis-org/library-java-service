@@ -302,6 +302,7 @@ public class StatisticsEventServiceComponentTest extends ContainerTestHelper {
         TestHelper.waitUntilValid(
             () -> {
               try {
+                this.statisticsEventServiceComponent.flushEventBuffer();
                 this.statisticsEventSummaryServiceComponent.flushSummaryDeltaBuffer();
                 this.cacheHelper.clearCaches();
                 return this.statisticsEventSummaryServiceComponent.findById(
