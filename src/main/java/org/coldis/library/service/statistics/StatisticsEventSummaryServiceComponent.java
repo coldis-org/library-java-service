@@ -20,7 +20,6 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
-import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.http.HttpStatus;
 import org.springframework.jms.annotation.JmsListener;
 import org.springframework.jms.core.JmsTemplate;
@@ -249,60 +248,33 @@ public class StatisticsEventSummaryServiceComponent {
   }
 
   /**
-   * Creates a statistics event summary.
-   *
-   * @param summary Statistics event summary.
-   * @return The created statistics event summary.
-   */
-  @Transactional(propagation = Propagation.REQUIRES_NEW)
-  protected StatisticsEventSummary create(final StatisticsEventSummary summary) {
-    return this.statisticsEventSummaryRepository.saveAndFlush(summary);
-  }
-
-  /**
-   * Finds or creates a statistics event summary. Uses pessimistic locking to prevent duplicates.
+   * Finds or creates a statistics event summary. Hot path: a single {@code FOR UPDATE} read
+   * returns when the row already exists (the common case). Only on first-write does it fall back
+   * to {@code INSERT ... ON CONFLICT DO NOTHING} followed by a second read — atomic against
+   * concurrent inserters, no nested transactions, no exception bouncing.
    *
    * @param context Context.
    * @param dimensionName Dimension name.
    * @param dateTime Date time (already truncated).
-   * @return Found or created statistics event summary.
+   * @return Found or created statistics event summary, locked for update.
    */
-  @Transactional(
-      propagation = Propagation.REQUIRED,
-      noRollbackFor = DataIntegrityViolationException.class)
+  @Transactional(propagation = Propagation.REQUIRED)
   public StatisticsEventSummary findOrCreate(
       final String context, final String dimensionName, final LocalDateTime dateTime) {
-    // Tries to find the summary.
     StatisticsEventSummary actual =
         this.statisticsEventSummaryRepository
             .findByIdForUpdate(context, dimensionName, dateTime)
             .orElse(null);
-    // If there is no summary.
     if (actual == null) {
-      // Tries creating the summary.
-      try {
-        actual = this.create(new StatisticsEventSummary(context, dimensionName, dateTime));
-        StatisticsEventSummaryServiceComponent.LOGGER.debug(
-            "Created summary successfully: context={}, dimension={}, dateTime={}, id={}",
-            context, dimensionName, dateTime, actual != null ? actual.getDateTime() : "null");
-      } catch (final Exception exception) {
-        StatisticsEventSummaryServiceComponent.LOGGER.warn(
-            "Could not create statistics event summary: {}", exception.getLocalizedMessage());
-        StatisticsEventSummaryServiceComponent.LOGGER.debug(
-            "Could not create statistics event summary.", exception);
-      }
-      // Tries to find the summary again.
+      this.statisticsEventSummaryRepository.insertIfAbsent(context, dimensionName, dateTime);
       actual =
           this.statisticsEventSummaryRepository
               .findByIdForUpdate(context, dimensionName, dateTime)
               .orElse(null);
-      StatisticsEventSummaryServiceComponent.LOGGER.debug(
-          "Retry findByIdForUpdate: context={}, dimension={}, dateTime={}, found={}",
-          context, dimensionName, dateTime, actual != null);
     }
-    // If the summary was not created.
     if (actual == null) {
-      throw new IntegrationException(new SimpleMessage("statistics.event.summary.creation.error"));
+      throw new IntegrationException(
+          new SimpleMessage("statistics.event.summary.creation.error"));
     }
     return actual;
   }

@@ -6,6 +6,7 @@ import java.util.Optional;
 
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Lock;
+import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
@@ -35,6 +36,33 @@ public interface StatisticsEventSummaryRepository
           + "AND dimensionName = :dimensionName "
           + "AND dateTime = :dateTime")
   Optional<StatisticsEventSummary> findByIdForUpdate(
+      @Param("context") String context,
+      @Param("dimensionName") String dimensionName,
+      @Param("dateTime") LocalDateTime dateTime);
+
+  /**
+   * Atomically inserts a summary row if absent, no-op if a row with the same composite key already
+   * exists. Replaces the {@code find → REQUIRES_NEW create → catch DataIntegrityViolation}
+   * pattern: a single round-trip handled by Postgres' {@code ON CONFLICT DO NOTHING}, with no
+   * need for nested transactions or exception bouncing.
+   *
+   * <p>Native SQL bypasses {@code EntityTimestampListener}, so {@code created_at} / {@code
+   * updated_at} are set inline via Postgres {@code now()}.
+   *
+   * @param context Context.
+   * @param dimensionName Dimension name.
+   * @param dateTime Date time (already truncated).
+   */
+  @Modifying
+  @Transactional(propagation = Propagation.REQUIRED)
+  @Query(
+      nativeQuery = true,
+      value =
+          "INSERT INTO statistics_event_summary "
+              + "(context, dimension_name, date_time, created_at, updated_at) "
+              + "VALUES (:context, :dimensionName, :dateTime, now(), now()) "
+              + "ON CONFLICT (context, dimension_name, date_time) DO NOTHING")
+  void insertIfAbsent(
       @Param("context") String context,
       @Param("dimensionName") String dimensionName,
       @Param("dateTime") LocalDateTime dateTime);

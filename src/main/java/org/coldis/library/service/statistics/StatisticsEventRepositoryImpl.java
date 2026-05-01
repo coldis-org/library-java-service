@@ -32,7 +32,7 @@ public class StatisticsEventRepositoryImpl implements StatisticsEventRepositoryC
   /** Upsert strategy property name. */
   static final String UPSERT_STRATEGY_PROPERTY =
       "org.coldis.library.service.statistics.event.upsert-strategy";
-
+  
   /** Strategy value: PostgreSQL 17+ {@code MERGE ... RETURNING merge_action()}. */
   static final String STRATEGY_MERGE = "merge";
 

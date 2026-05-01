@@ -9,7 +9,6 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import org.coldis.library.exception.BusinessException;
-import org.coldis.library.exception.IntegrationException;
 import org.coldis.library.helper.BufferedReducer;
 import org.coldis.library.helper.DateTimeHelper;
 import org.coldis.library.helper.ExtendedValidator;
@@ -21,7 +20,6 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
-import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.http.HttpStatus;
 import org.springframework.jms.annotation.JmsListener;
 import org.springframework.jms.core.JmsTemplate;
@@ -122,64 +120,6 @@ public class StatisticsEventServiceComponent {
           new SimpleMessage("statistics.event.notfound"), HttpStatus.NOT_FOUND.value());
     }
     return statisticsEvent;
-  }
-
-  /**
-   * Creates a statistics event in a separate transaction so duplicate-key violations don't poison
-   * the outer transaction.
-   *
-   * @param statisticsEvent Statistics event.
-   * @return The created statistics event.
-   */
-  @Transactional(propagation = Propagation.REQUIRES_NEW)
-  protected StatisticsEvent create(final StatisticsEvent statisticsEvent) {
-    return this.statisticsEventRepository.saveAndFlush(statisticsEvent);
-  }
-
-  /**
-   * Finds or creates a statistics event. Uses pessimistic locking to prevent duplicates.
-   *
-   * @param statisticsEvent Statistics event data.
-   * @return Found or created statistics event.
-   */
-  @Transactional(
-      propagation = Propagation.REQUIRED,
-      noRollbackFor = DataIntegrityViolationException.class)
-  protected StatisticsEvent findOrCreate(final StatisticsEvent statisticsEvent) {
-    // Tries to find the statistics event.
-    StatisticsEvent actual =
-        this.statisticsEventRepository
-            .findByIdForUpdate(
-                statisticsEvent.getContext(),
-                statisticsEvent.getOwnerKey(),
-                statisticsEvent.getDimensionName())
-            .orElse(null);
-    // If there is no statistics event.
-    if (actual == null) {
-      // Tries creating the statistics event.
-      try {
-        actual = this.create(statisticsEvent);
-      } catch (final Exception exception) {
-        StatisticsEventServiceComponent.LOGGER.warn(
-            String.format(
-                "Could not create statistics event: %s", exception.getLocalizedMessage()));
-        StatisticsEventServiceComponent.LOGGER.debug(
-            "Could not create statistics event.", exception);
-      }
-      // Tries to find the statistics event again.
-      actual =
-          this.statisticsEventRepository
-              .findByIdForUpdate(
-                  statisticsEvent.getContext(),
-                  statisticsEvent.getOwnerKey(),
-                  statisticsEvent.getDimensionName())
-              .orElse(null);
-    }
-    // If the statistics event was not created.
-    if (actual == null) {
-      throw new IntegrationException(new SimpleMessage("statistics.event.creation.error"));
-    }
-    return actual;
   }
 
   /**
