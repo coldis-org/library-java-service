@@ -105,12 +105,14 @@ JMS listener (processEventUpsertBatch)
      pre-update state
   -> Buffers summary deltas computed from the result (skipping stale rows)
 
-Summary deltas flush (configurable cron, default every minute)
-  -> Flushes summary delta buffer to JMS queue
-     (statistics-event/summary/delta)
+Summary deltas flush (configurable cron, default every 5 minutes)
+  -> Drains summary delta buffer, splits into chunks, dispatches each
+     chunk as a List<StatisticsEventSummaryDelta> to JMS queue
+     (statistics-event/summary/delta/batch)
 
-Summary listener
-  -> Applies summary deltas with pessimistic locking (concurrency 1-10)
+Summary listener (processSummaryDeltaBatch)
+  -> Applies each delta in the batch with pessimistic per-row locking
+     (default concurrency 1)
 ```
 
 ### Buffered Event Upserts
@@ -198,8 +200,9 @@ Each context can define its own time bucket size via `StatisticsContextConfigura
 | `org.coldis.library.service.statistics.event.deleteexpired.cron` | `0 0 3 * * *` | Expired event cleanup schedule (3 AM daily) |
 | `org.coldis.library.service.statistics.event.deleteexpired.batch-size` | `1000` | Batch size for expired event deletion |
 | `org.coldis.library.service.statistics.event.container-factory` | `jmsListenerContainerFactory` | JMS listener container factory bean for event listeners (upsert + deleteExpired) |
-| `org.coldis.library.service.statistics.summary.buffer.cron` | `0 * * * * *` | Summary delta buffer flush schedule (every minute) |
-| `org.coldis.library.service.statistics.summary.processsummarydelta.concurrency` | `1-10` | JMS concurrency for summary delta processing |
+| `org.coldis.library.service.statistics.summary.buffer.cron` | `0 */5 * * * *` | Summary delta buffer flush schedule (every 5 minutes) |
+| `org.coldis.library.service.statistics.summary.buffer.batch-size` | `100` | Max deltas per JMS summary delta batch message |
+| `org.coldis.library.service.statistics.summary.processsummarydelta.concurrency` | `1` | JMS concurrency for the summary delta batch listener |
 | `org.coldis.library.service.statistics.summary.container-factory` | `jmsListenerContainerFactory` | JMS listener container factory bean for the summary delta listener |
 
 ## Usage

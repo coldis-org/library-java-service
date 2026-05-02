@@ -161,15 +161,14 @@ public class StatisticsEventServiceComponent {
     StatisticsEventServiceComponent.LOGGER.debug("Flushing event buffer.");
     final List<StatisticsEvent> drained = new ArrayList<>();
     this.eventBuffer.flushLocalBuffer(drained::add);
-    if (drained.isEmpty()) {
-      return;
-    }
-    final int batchSize = Math.max(1, this.upsertBatchSize);
-    for (int from = 0; from < drained.size(); from += batchSize) {
-      final int to = Math.min(from + batchSize, drained.size());
-      final ArrayList<StatisticsEvent> chunk = new ArrayList<>(drained.subList(from, to));
-      this.jmsTemplate.convertAndSend(
-          StatisticsEventServiceComponent.UPSERT_BATCH_QUEUE, (Serializable) chunk);
+    if (!drained.isEmpty()) {
+      final int batchSize = Math.max(1, this.upsertBatchSize);
+      for (int from = 0; from < drained.size(); from += batchSize) {
+        final int to = Math.min(from + batchSize, drained.size());
+        final ArrayList<StatisticsEvent> chunk = new ArrayList<>(drained.subList(from, to));
+        this.jmsTemplate.convertAndSend(
+            StatisticsEventServiceComponent.UPSERT_BATCH_QUEUE, (Serializable) chunk);
+      }
     }
   }
 
@@ -189,42 +188,41 @@ public class StatisticsEventServiceComponent {
       containerFactory =
           "${org.coldis.library.service.statistics.event.container-factory:jmsListenerContainerFactory}")
   public void processEventUpsertBatch(final List<StatisticsEvent> events) throws BusinessException {
-    if (events == null || events.isEmpty()) {
-      return;
-    }
-    // Serialize cross-instance writers per-key. While we hold these locks, no other instance can
-    // run the upsert path for the same keys — so the MERGE's old-state snapshot is stable.
-    final List<String> lockKeys = new ArrayList<>(events.size());
-    for (final StatisticsEvent event : events) {
-      lockKeys.add(
-          StatisticsEventServiceComponent.LOCK_KEY_PREFIX
-              + event.getContext()
-              + "|" + event.getOwnerKey()
-              + "|" + event.getDimensionName());
-    }
-    this.lockService.lockKeys(
-        LockBehavior.WAIT_AND_LOCK,
-        this.lockType,
-        StatisticsEventServiceComponent.LOCK_NAMESPACE,
-        lockKeys);
-    // Single round-trip: insert/update + capture old state for delta computation.
-    final List<StatisticsEventUpsertResult> results =
-        this.statisticsEventRepository.upsertBatch(events);
-    final Map<StatisticsEventKey, StatisticsEventUpsertResult> resultByKey =
-        new HashMap<>(results.size());
-    for (final StatisticsEventUpsertResult result : results) {
-      resultByKey.put(result.key(), result);
-    }
-    for (final StatisticsEvent incoming : events) {
-      final StatisticsEventUpsertResult result = resultByKey.get(incoming.getId());
-      if (result == null || !result.applied()) {
-        StatisticsEventServiceComponent.LOGGER.debug(
-            "Dropping stale event: context={}, owner={}, dimension={}, incomingEmittedAt={}",
-            incoming.getContext(), incoming.getOwnerKey(), incoming.getDimensionName(),
-            incoming.getEmittedAt());
-        continue;
+    if (events != null && !events.isEmpty()) {
+      // Serialize cross-instance writers per-key. While we hold these locks, no other instance can
+      // run the upsert path for the same keys — so the MERGE's old-state snapshot is stable.
+      final List<String> lockKeys = new ArrayList<>(events.size());
+      for (final StatisticsEvent event : events) {
+        lockKeys.add(
+            StatisticsEventServiceComponent.LOCK_KEY_PREFIX
+                + event.getContext()
+                + "|" + event.getOwnerKey()
+                + "|" + event.getDimensionName());
       }
-      this.bufferSummaryDeltasForUpsert(result, incoming);
+      this.lockService.lockKeys(
+          LockBehavior.WAIT_AND_LOCK,
+          this.lockType,
+          StatisticsEventServiceComponent.LOCK_NAMESPACE,
+          lockKeys);
+      // Single round-trip: insert/update + capture old state for delta computation.
+      final List<StatisticsEventUpsertResult> results =
+          this.statisticsEventRepository.upsertBatch(events);
+      final Map<StatisticsEventKey, StatisticsEventUpsertResult> resultByKey =
+          new HashMap<>(results.size());
+      for (final StatisticsEventUpsertResult result : results) {
+        resultByKey.put(result.key(), result);
+      }
+      for (final StatisticsEvent incoming : events) {
+        final StatisticsEventUpsertResult result = resultByKey.get(incoming.getId());
+        if (result != null && result.applied()) {
+          this.bufferSummaryDeltasForUpsert(result, incoming);
+        } else {
+          StatisticsEventServiceComponent.LOGGER.debug(
+              "Dropping stale event: context={}, owner={}, dimension={}, incomingEmittedAt={}",
+              incoming.getContext(), incoming.getOwnerKey(), incoming.getDimensionName(),
+              incoming.getEmittedAt());
+        }
+      }
     }
   }
 

@@ -1,6 +1,7 @@
 package org.coldis.library.service.statistics;
 
 import jakarta.annotation.PreDestroy;
+import java.io.Serializable;
 import java.math.BigDecimal;
 import java.math.MathContext;
 import java.time.Duration;
@@ -57,8 +58,13 @@ public class StatisticsEventSummaryServiceComponent {
   /** JMS template. */
   @Autowired private JmsTemplate jmsTemplate;
 
-  /** Internal queue for summary delta processing. */
-  private static final String SUMMARY_DELTA_QUEUE = "statistics-event/summary/delta";
+  /** Internal queue for buffered summary delta batches. */
+  private static final String SUMMARY_DELTA_BATCH_QUEUE = "statistics-event/summary/delta/batch";
+
+  /** Maximum number of deltas sent in a single batch message. */
+  @org.springframework.beans.factory.annotation.Value(
+      "${org.coldis.library.service.statistics.summary.buffer.batch-size:100}")
+  private int deltaBatchSize;
 
   /** Local buffer for summary deltas. */
   private final BufferedReducer<StatisticsEventSummaryKey, StatisticsEventSummaryDelta>
@@ -76,43 +82,54 @@ public class StatisticsEventSummaryServiceComponent {
   }
 
   /**
-   * Flushes the summary delta buffer, sending each reduced delta to the internal JMS queue.
+   * Drains the summary delta buffer and dispatches batches to the delta batch queue. Runs on a
+   * schedule and on shutdown.
    */
   @PreDestroy
   @Scheduled(
       cron =
-          "${org.coldis.library.service.statistics.summary.buffer.cron:0 * * * * *}")
+          "${org.coldis.library.service.statistics.summary.buffer.cron:0 */5 * * * *}")
   public void flushSummaryDeltaBuffer() {
     StatisticsEventSummaryServiceComponent.LOGGER.debug("Flushing summary delta buffer.");
-    this.summaryDeltaBuffer.flushLocalBuffer(
-        delta -> {
-            StatisticsEventSummaryServiceComponent.LOGGER.debug(
-                "Sending summary delta to JMS: context={}, dimension={}, dateTime={}",
-                delta.getContext(), delta.getDimensionName(), delta.getDateTime());
-            this.jmsTemplate.convertAndSend(
-                StatisticsEventSummaryServiceComponent.SUMMARY_DELTA_QUEUE, delta);
-        });
+    final List<StatisticsEventSummaryDelta> drained = new ArrayList<>();
+    this.summaryDeltaBuffer.flushLocalBuffer(drained::add);
+    if (!drained.isEmpty()) {
+      final int batchSize = Math.max(1, this.deltaBatchSize);
+      for (int from = 0; from < drained.size(); from += batchSize) {
+        final int to = Math.min(from + batchSize, drained.size());
+        final ArrayList<StatisticsEventSummaryDelta> chunk =
+            new ArrayList<>(drained.subList(from, to));
+        this.jmsTemplate.convertAndSend(
+            StatisticsEventSummaryServiceComponent.SUMMARY_DELTA_BATCH_QUEUE,
+            (Serializable) chunk);
+      }
+    }
   }
 
   /**
-   * Processes a summary delta from the internal JMS queue.
+   * Processes a buffered summary delta batch from the internal JMS queue. Each delta is applied
+   * within the same transaction; per-row locking is handled by {@link #applyDelta}.
    *
-   * @param delta The summary delta.
+   * @param deltas The batch of deltas to apply.
    */
 
   @Transactional(propagation = Propagation.REQUIRED)
   @JmsListener(
-      destination = StatisticsEventSummaryServiceComponent.SUMMARY_DELTA_QUEUE,
+      destination = StatisticsEventSummaryServiceComponent.SUMMARY_DELTA_BATCH_QUEUE,
       concurrency =
-          "${org.coldis.library.service.statistics.summary.processsummarydelta.concurrency:1-10}",
+          "${org.coldis.library.service.statistics.summary.processsummarydelta.concurrency:1}",
       containerFactory =
           "${org.coldis.library.service.statistics.summary.container-factory:jmsListenerContainerFactory}")
 
-  public void processSummaryDelta(final StatisticsEventSummaryDelta delta) {
-    StatisticsEventSummaryServiceComponent.LOGGER.debug(
-        "Processing summary delta from JMS: context={}, dimension={}, dateTime={}",
-        delta.getContext(), delta.getDimensionName(), delta.getDateTime());
-    this.applyDelta(delta);
+  public void processSummaryDeltaBatch(final List<StatisticsEventSummaryDelta> deltas) {
+    if (deltas != null && !deltas.isEmpty()) {
+      for (final StatisticsEventSummaryDelta delta : deltas) {
+        StatisticsEventSummaryServiceComponent.LOGGER.debug(
+            "Processing summary delta from JMS batch: context={}, dimension={}, dateTime={}",
+            delta.getContext(), delta.getDimensionName(), delta.getDateTime());
+        this.applyDelta(delta);
+      }
+    }
   }
 
   // ---- Validation helpers ----
