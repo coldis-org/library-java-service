@@ -363,6 +363,30 @@ public class EnhancedMessageConverterTest extends ContainerTestHelper {
 	}
 
 	/**
+	 * Sends alternating JSON and Fory messages of the same type to a single
+	 * queue and confirms the listener decodes both. Validates the converter's
+	 * routing in {@link EnhancedJmsMessageConverter#fromDynamicMessage} is the
+	 * basis for migration scenarios where in-flight JSON-encoded messages
+	 * coexist with new Fory-encoded ones on the same destination.
+	 */
+	@Test
+	public void testReceiveMixedEncodingsOnSameQueue() throws Exception {
+		for (final DtoTestObject testData : EnhancedMessageConverterTest.TEST_DATA) {
+			EnhancedMessageConverterTest.currentTestMessage = null;
+			this.jmsTemplate.setMessageConverter(this.enhancedJmsMessageConverter);
+			this.jmsTemplate.convertAndSend("message/original", testData);
+			Assertions.assertTrue(TestHelper.waitUntilValid(() -> EnhancedMessageConverterTest.currentTestMessage,
+					message -> (message != null) && message.equals(testData), TestHelper.LONG_WAIT, TestHelper.SHORT_WAIT));
+
+			EnhancedMessageConverterTest.currentTestMessage = null;
+			this.jmsTemplate.setMessageConverter(this.internalEnhancedJmsMessageConverter);
+			this.jmsTemplate.convertAndSend("message/original", testData);
+			Assertions.assertTrue(TestHelper.waitUntilValid(() -> EnhancedMessageConverterTest.currentTestMessage,
+					message -> (message != null) && message.equals(testData), TestHelper.LONG_WAIT, TestHelper.SHORT_WAIT));
+		}
+	}
+
+	/**
 	 * Tests the JSON JMS message converter.
 	 *
 	 * @throws Exception If the test fails.
