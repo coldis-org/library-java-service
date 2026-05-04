@@ -1,8 +1,8 @@
 package org.coldis.library.service.serialization;
 
-import org.apache.fury.BaseFury;
-import org.apache.fury.Fury;
-import org.apache.fury.config.Language;
+import org.apache.fory.BaseFory;
+import org.apache.fory.Fory;
+import org.apache.fory.config.Language;
 import org.coldis.library.serialization.OptimizedSerializationHelper;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.beans.factory.annotation.Value;
@@ -14,7 +14,7 @@ import org.springframework.context.annotation.Configuration;
  * Optimized serialization auto configuration.
  */
 @Configuration
-@ConditionalOnClass({ Fury.class })
+@ConditionalOnClass({ Fory.class })
 public class OptmizedSerializationAutoConfiguration {
 
 	/**
@@ -31,12 +31,12 @@ public class OptmizedSerializationAutoConfiguration {
 	 */
 	@Bean
 	@Qualifier(value = "javaOptimizedSerializer")
-	public BaseFury javaOptimizedSerializer(
+	public BaseFory javaOptimizedSerializer(
 			@Value("${org.coldis.configuration.service.optimized-serializer.java.min-pool-size:3}")
 			final Integer minPoolSize,
 			@Value("${org.coldis.configuration.service.optimized-serializer.java.max-pool-size:30}")
 			final Integer maxPoolSize) {
-		final BaseFury serializer = OptimizedSerializationHelper.createSerializer(true, minPoolSize, maxPoolSize, Language.JAVA, this.typePackages);
+		final BaseFory serializer = OptimizedSerializationHelper.createSerializer(true, minPoolSize, maxPoolSize, Language.JAVA, this.typePackages);
 		return serializer;
 	}
 

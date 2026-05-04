@@ -2,7 +2,7 @@ package org.coldis.library.service.jms;
 
 import java.util.Set;
 
-import org.apache.fury.BaseFury;
+import org.apache.fory.BaseFory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.beans.factory.annotation.Value;
@@ -40,7 +40,7 @@ public class JmsConverterAutoConfiguration {
 	 */
 	@Autowired
 	@Qualifier(value = "javaOptimizedSerializer")
-	private BaseFury optimizedSerializer;
+	private BaseFory optimizedSerializer;
 
 	/**
 	 * Enhanced JMS message converter.

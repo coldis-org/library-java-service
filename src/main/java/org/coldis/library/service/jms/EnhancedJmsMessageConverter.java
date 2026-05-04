@@ -14,7 +14,7 @@ import org.apache.commons.collections4.EnumerationUtils;
 import org.apache.commons.collections4.MapUtils;
 import org.apache.commons.lang3.ObjectUtils;
 import org.apache.commons.lang3.StringUtils;
-import org.apache.fury.BaseFury;
+import org.apache.fory.BaseFory;
 import org.coldis.library.dto.DtoOrigin;
 import org.coldis.library.dto.DtoType;
 import org.coldis.library.dto.DtoTypeMetadata;
@@ -78,7 +78,7 @@ public class EnhancedJmsMessageConverter extends SimpleMessageConverter {
 	/**
 	 * Optimized serializer.
 	 */
-	private final BaseFury optimizedSerializer;
+	private final BaseFory optimizedSerializer;
 
 	/** Use optimized serializer. */
 	private Boolean useOptimizedSerializer = false;
@@ -97,7 +97,7 @@ public class EnhancedJmsMessageConverter extends SimpleMessageConverter {
 	public EnhancedJmsMessageConverter(
 			final JmsConverterProperties jmsConverterProperties,
 			final ObjectMapper objectMapper,
-			final BaseFury optimizedSerializer,
+			final BaseFory optimizedSerializer,
 			final Boolean useOptimizedSerializer,
 			final Set<String> includeSessionAttributesAsMessageHeaders) {
 		super();
@@ -112,7 +112,7 @@ public class EnhancedJmsMessageConverter extends SimpleMessageConverter {
 	public EnhancedJmsMessageConverter(
 			final JmsConverterProperties jmsConverterProperties,
 			final ObjectMapper objectMapper,
-			final BaseFury optimizedSerializer,
+			final BaseFory optimizedSerializer,
 			final Set<String> includeSessionAttributesAsMessageHeaders) {
 		this(jmsConverterProperties, objectMapper, optimizedSerializer, false, includeSessionAttributesAsMessageHeaders);
 	}
