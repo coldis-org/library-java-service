@@ -36,8 +36,28 @@ public class OptmizedSerializationAutoConfiguration {
 			final Integer minPoolSize,
 			@Value("${org.coldis.configuration.service.optimized-serializer.java.max-pool-size:30}")
 			final Integer maxPoolSize) {
-		final BaseFory serializer = OptimizedSerializationHelper.createSerializer(true, minPoolSize, maxPoolSize, Language.JAVA, this.typePackages);
+		final BaseFory serializer = OptimizedSerializationHelper.createSerializer(true, minPoolSize, maxPoolSize, Language.JAVA, false, this.typePackages);
 		return serializer;
+	}
+
+	/**
+	 * Dto-prioritized optimized serializer. Used on outbound paths when the
+	 * payload is a Dto: it writes the Dto under the shared logical type name
+	 * so a peer reading with {@link #javaOptimizedSerializer(Integer, Integer)}
+	 * (Model-prioritized) deserializes the wire bytes back as a Model.
+	 *
+	 * @param  minPoolSize Min pool size.
+	 * @param  maxPoolSize Max pool size.
+	 * @return             Dto-prioritized serializer.
+	 */
+	@Bean
+	@Qualifier(value = "javaDtoOptimizedSerializer")
+	public BaseFory javaDtoOptimizedSerializer(
+			@Value("${org.coldis.configuration.service.optimized-serializer.java.min-pool-size:3}")
+			final Integer minPoolSize,
+			@Value("${org.coldis.configuration.service.optimized-serializer.java.max-pool-size:30}")
+			final Integer maxPoolSize) {
+		return OptimizedSerializationHelper.createSerializer(true, minPoolSize, maxPoolSize, Language.JAVA, true, this.typePackages);
 	}
 
 }

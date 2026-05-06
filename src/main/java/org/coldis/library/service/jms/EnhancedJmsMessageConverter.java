@@ -76,9 +76,17 @@ public class EnhancedJmsMessageConverter extends SimpleMessageConverter {
 	private final ObjectMapper objectMapper;
 
 	/**
-	 * Optimized serializer.
+	 * Optimized serializer used for outbound (write) messages.
 	 */
-	private final BaseFory optimizedSerializer;
+	private final BaseFory outboundOptimizedSerializer;
+
+	/**
+	 * Optimized serializer used for inbound (read) messages. Allowed to
+	 * differ from the outbound one when, e.g., the producer needs a
+	 * Dto-prioritized configuration so that a peer reading with the
+	 * Model-prioritized one canonicalizes to the Model.
+	 */
+	private final BaseFory inboundOptimizedSerializer;
 
 	/** Use optimized serializer. */
 	private Boolean useOptimizedSerializer = false;
@@ -93,28 +101,54 @@ public class EnhancedJmsMessageConverter extends SimpleMessageConverter {
 
 	private final Map<String, Class<?>> preferredClassesCache = MapUtils.synchronizedMap(new HashMap<>());
 
-	/** Constructor. */
+	/**
+	 * Constructor with separate outbound and inbound optimized serializers.
+	 *
+	 * @param jmsConverterProperties                 JMS converter properties.
+	 * @param objectMapper                           Object mapper.
+	 * @param outboundOptimizedSerializer            Optimized serializer for
+	 *                                                   writes.
+	 * @param inboundOptimizedSerializer             Optimized serializer for
+	 *                                                   reads.
+	 * @param useOptimizedSerializer                 Whether outbound writes
+	 *                                                   should default to
+	 *                                                   optimized serialization.
+	 * @param includeSessionAttributesAsMessageHeaders Session attributes to
+	 *                                                   include as headers.
+	 */
+	public EnhancedJmsMessageConverter(
+			final JmsConverterProperties jmsConverterProperties,
+			final ObjectMapper objectMapper,
+			final BaseFory outboundOptimizedSerializer,
+			final BaseFory inboundOptimizedSerializer,
+			final Boolean useOptimizedSerializer,
+			final Set<String> includeSessionAttributesAsMessageHeaders) {
+		super();
+		this.jmsConverterProperties = jmsConverterProperties;
+		this.objectMapper = objectMapper;
+		this.outboundOptimizedSerializer = outboundOptimizedSerializer;
+		this.inboundOptimizedSerializer = inboundOptimizedSerializer;
+		this.useOptimizedSerializer = useOptimizedSerializer;
+		this.includeSessionAttributesAsMessageHeaders = includeSessionAttributesAsMessageHeaders;
+	}
+
+	/** Constructor with the same optimized serializer for both directions. */
 	public EnhancedJmsMessageConverter(
 			final JmsConverterProperties jmsConverterProperties,
 			final ObjectMapper objectMapper,
 			final BaseFory optimizedSerializer,
 			final Boolean useOptimizedSerializer,
 			final Set<String> includeSessionAttributesAsMessageHeaders) {
-		super();
-		this.jmsConverterProperties = jmsConverterProperties;
-		this.objectMapper = objectMapper;
-		this.optimizedSerializer = optimizedSerializer;
-		this.useOptimizedSerializer = useOptimizedSerializer;
-		this.includeSessionAttributesAsMessageHeaders = includeSessionAttributesAsMessageHeaders;
+		this(jmsConverterProperties, objectMapper, optimizedSerializer, optimizedSerializer, useOptimizedSerializer, includeSessionAttributesAsMessageHeaders);
 	}
 
-	/** Constructor. */
+	/** Constructor with the same optimized serializer for both directions. */
 	public EnhancedJmsMessageConverter(
 			final JmsConverterProperties jmsConverterProperties,
 			final ObjectMapper objectMapper,
 			final BaseFory optimizedSerializer,
 			final Set<String> includeSessionAttributesAsMessageHeaders) {
-		this(jmsConverterProperties, objectMapper, optimizedSerializer, false, includeSessionAttributesAsMessageHeaders);
+		this(jmsConverterProperties, objectMapper, optimizedSerializer, optimizedSerializer, false, includeSessionAttributesAsMessageHeaders);
 	}
 
 	/** Clear preferred classes cache. */
@@ -220,7 +254,7 @@ public class EnhancedJmsMessageConverter extends SimpleMessageConverter {
 			final Session session) {
 		Message message = null;
 		try {
-			final byte[] actualPayload = this.optimizedSerializer.serialize(payload);
+			final byte[] actualPayload = this.outboundOptimizedSerializer.serialize(payload);
 			message = session.createBytesMessage();
 			((BytesMessage) message).writeBytes(actualPayload);
 			message.setBooleanProperty(EnhancedJmsMessageConverter.OPTIMIZED_SERIALIZER_PARAMETER, true);
@@ -302,7 +336,7 @@ public class EnhancedJmsMessageConverter extends SimpleMessageConverter {
 			// Sends a non-simple message.
 			if (!this.isSimpleMessage(payload)) {
 				// If optimized serializer is enabled.
-				if ((this.optimizedSerializer != null) && this.useOptimizedSerializer) {
+				if ((this.outboundOptimizedSerializer != null) && this.useOptimizedSerializer) {
 					message = this.toSerializedMessage(payload, session);
 				}
 				// If optimized serializer is not enabled.
@@ -352,7 +386,7 @@ public class EnhancedJmsMessageConverter extends SimpleMessageConverter {
 		Object object;
 		final byte[] messageBytes = new byte[(int) bytesMessage.getBodyLength()];
 		bytesMessage.readBytes(messageBytes);
-		object = this.optimizedSerializer.deserialize(messageBytes);
+		object = this.inboundOptimizedSerializer.deserialize(messageBytes);
 		return object;
 	}
 
@@ -437,7 +471,7 @@ public class EnhancedJmsMessageConverter extends SimpleMessageConverter {
 		Object object = null;
 
 		// If it is an optimized serializer message.
-		final boolean optimizedSerializerUsed = (this.optimizedSerializer != null)
+		final boolean optimizedSerializerUsed = (this.inboundOptimizedSerializer != null)
 				&& (message.propertyExists(EnhancedJmsMessageConverter.OPTIMIZED_SERIALIZER_PARAMETER)
 						&& message.getBooleanProperty(EnhancedJmsMessageConverter.OPTIMIZED_SERIALIZER_PARAMETER));
 		if (optimizedSerializerUsed && message instanceof final BytesMessage bytesMessage) {

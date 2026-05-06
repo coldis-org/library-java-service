@@ -99,6 +99,16 @@ public class EnhancedMessageConverterTest extends ContainerTestHelper {
 	@Qualifier("internalEnhancedJmsMessageConverter")
 	private EnhancedJmsMessageConverter internalEnhancedJmsMessageConverter;
 
+	/** Dto-prioritized optimized serializer. */
+	@Autowired
+	@Qualifier("javaDtoOptimizedSerializer")
+	private org.apache.fory.BaseFory dtoOptimizedSerializer;
+
+	/** Model-prioritized optimized serializer. */
+	@Autowired
+	@Qualifier("javaOptimizedSerializer")
+	private org.apache.fory.BaseFory modelOptimizedSerializer;
+
 	/** Original message converter captured before tests modify it. */
 	private org.springframework.jms.support.converter.MessageConverter originalMessageConverter;
 
@@ -402,6 +412,32 @@ public class EnhancedMessageConverterTest extends ContainerTestHelper {
 			Assertions.assertTrue(TestHelper.waitUntilValid(() -> EnhancedMessageConverterTest.currentTestMessage,
 					message -> (message != null) && message.equals(ObjectMapperHelper.convert(this.objectMapper, testData, DtoTestObjectDto.class, true)),
 					TestHelper.LONG_WAIT, TestHelper.SHORT_WAIT));
+		}
+	}
+
+	/**
+	 * Cross-class round-trip at the serializer layer (no listener): a Dto
+	 * is written by a producer wired with the Dto-prioritized Fory and
+	 * read back by a consumer wired with the Model-prioritized one. The
+	 * payload should come out as a Model. Isolates the cross-class story
+	 * from listener-binding concerns.
+	 *
+	 * @throws Exception If the test fails.
+	 */
+	@Test
+	public void testCrossClassRoundTripWithSwappedSerializers() throws Exception {
+		final EnhancedJmsMessageConverter crossClassConverter = new EnhancedJmsMessageConverter(this.jmsConverterProperties, this.objectMapper,
+				this.dtoOptimizedSerializer, this.modelOptimizedSerializer, true, java.util.Set.of());
+		this.jmsTemplate.setMessageConverter(crossClassConverter);
+		for (final DtoTestObject testData : EnhancedMessageConverterTest.TEST_DATA) {
+			final DtoTestObjectDto dto = ObjectMapperHelper.convert(this.objectMapper, testData, DtoTestObjectDto.class, true);
+			this.jmsTemplate.convertAndSend("message/cross-class-roundtrip", dto);
+			final Object received = this.jmsTemplate.receiveAndConvert("message/cross-class-roundtrip");
+
+			Assertions.assertNotNull(received);
+			Assertions.assertInstanceOf(DtoTestObject.class, received,
+					"Expected Model after dto-prio sender + model-prio receiver, got " + received.getClass().getName());
+			Assertions.assertEquals(testData.getId(), ((DtoTestObject) received).getId());
 		}
 	}
 
