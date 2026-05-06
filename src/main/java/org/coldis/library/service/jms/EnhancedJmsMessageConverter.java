@@ -78,7 +78,7 @@ public class EnhancedJmsMessageConverter extends SimpleMessageConverter {
 	/**
 	 * Optimized serializer used for outbound (write) messages.
 	 */
-	private final BaseFory outboundOptimizedSerializer;
+	private BaseFory outboundOptimizedSerializer;
 
 	/**
 	 * Optimized serializer used for inbound (read) messages. Allowed to
@@ -86,7 +86,7 @@ public class EnhancedJmsMessageConverter extends SimpleMessageConverter {
 	 * Dto-prioritized configuration so that a peer reading with the
 	 * Model-prioritized one canonicalizes to the Model.
 	 */
-	private final BaseFory inboundOptimizedSerializer;
+	private BaseFory inboundOptimizedSerializer;
 
 	/** Use optimized serializer. */
 	private Boolean useOptimizedSerializer = false;
@@ -154,6 +154,26 @@ public class EnhancedJmsMessageConverter extends SimpleMessageConverter {
 	/** Clear preferred classes cache. */
 	public void clearPreferredClassesCache() {
 		this.preferredClassesCache.clear();
+	}
+
+	/**
+	 * Replaces the outbound optimized serializer.
+	 *
+	 * @param outboundOptimizedSerializer New outbound serializer.
+	 */
+	public void setOutboundOptimizedSerializer(
+			final BaseFory outboundOptimizedSerializer) {
+		this.outboundOptimizedSerializer = outboundOptimizedSerializer;
+	}
+
+	/**
+	 * Replaces the inbound optimized serializer.
+	 *
+	 * @param inboundOptimizedSerializer New inbound serializer.
+	 */
+	public void setInboundOptimizedSerializer(
+			final BaseFory inboundOptimizedSerializer) {
+		this.inboundOptimizedSerializer = inboundOptimizedSerializer;
 	}
 
 	/**
