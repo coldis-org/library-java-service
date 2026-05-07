@@ -106,7 +106,7 @@ public class EnhancedMessageConverterTest extends ContainerTestHelper {
 
 	/** Model-prioritized optimized serializer. */
 	@Autowired
-	@Qualifier("javaOptimizedSerializer")
+	@Qualifier("javaModelOptimizedSerializer")
 	private org.apache.fory.BaseFory modelOptimizedSerializer;
 
 	/** Original message converter captured before tests modify it. */

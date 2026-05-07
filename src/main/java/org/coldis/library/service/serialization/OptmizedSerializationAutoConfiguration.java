@@ -13,15 +13,15 @@ import org.springframework.context.annotation.Configuration;
 import org.springframework.context.annotation.Primary;
 
 /**
- * Optimized serialization auto configuration. Exposes two default Fory beans
- * (plus an opt-in Dto-prioritized one) so callers can pick the right
- * registration scope for their use case:
+ * Optimized serialization auto configuration. Exposes three Fory beans so
+ * callers can pick the right registration scope for their use case:
  *
  * <ul>
- *   <li>{@code javaCloneOptimizedSerializer} — {@link RegistrationScope#ALL},
- *       in-process use such as deep cloning. Every scanned class registers
- *       under its FQN.</li>
- *   <li>{@code javaOptimizedSerializer} — {@link RegistrationScope#MODELS},
+ *   <li>{@code javaOptimizedSerializer} — {@link RegistrationScope#ALL},
+ *       {@link Primary}. Every scanned class registers under its FQN. Default
+ *       for in-process use such as deep cloning, and the safest by-type
+ *       {@code @Autowired BaseFory} target.</li>
+ *   <li>{@code javaModelOptimizedSerializer} — {@link RegistrationScope#MODELS},
  *       intended for inbound JMS paths and consumer JVMs that read messages
  *       directly into Model types. Registers Models under their shared
  *       typeName when available; paired DTOs are skipped.</li>
@@ -40,36 +40,36 @@ public class OptmizedSerializationAutoConfiguration {
 	private String[] typePackages;
 
 	/**
-	 * Default Model-scoped optimized serializer — Models register under shared
-	 * typeName, paired DTOs are skipped.
+	 * All-scoped optimized serializer — every scanned class registers under its
+	 * FQN. Suitable for deep cloning and other in-process round-trips where the
+	 * shared-typeName mechanism would only add collision risk. Marked
+	 * {@link Primary} so by-type {@code @Autowired BaseFory} injections land on
+	 * the safest default (works for any class), and consumers that need a
+	 * specific scope opt in via the {@code @Qualifier}.
 	 */
 	@Bean
+	@Primary
 	@Qualifier(value = "javaOptimizedSerializer")
 	public BaseFory javaOptimizedSerializer(
 			@Value("${org.coldis.configuration.service.optimized-serializer.java.min-pool-size:3}")
 			final Integer minPoolSize,
 			@Value("${org.coldis.configuration.service.optimized-serializer.java.max-pool-size:30}")
 			final Integer maxPoolSize) {
-		return OptimizedSerializationHelper.createModelSerializer(true, minPoolSize, maxPoolSize, Language.JAVA, this.typePackages);
+		return OptimizedSerializationHelper.createAllSerializer(true, minPoolSize, maxPoolSize, Language.JAVA, this.typePackages);
 	}
 
 	/**
-	 * Clone-scoped optimized serializer — every scanned class registers under
-	 * its FQN. Suitable for deep cloning and other in-process round-trips
-	 * where the shared-typeName mechanism would only add collision risk. Marked
-	 * {@link Primary} so by-type {@code @Autowired BaseFory} injections land
-	 * on the safest default (works for any class), and consumers that need a
-	 * specific scope opt in via the {@code @Qualifier}.
+	 * Model-scoped optimized serializer — Models register under shared typeName,
+	 * paired DTOs are skipped.
 	 */
 	@Bean
-	@Primary
-	@Qualifier(value = "javaCloneOptimizedSerializer")
-	public BaseFory javaCloneOptimizedSerializer(
+	@Qualifier(value = "javaModelOptimizedSerializer")
+	public BaseFory javaModelOptimizedSerializer(
 			@Value("${org.coldis.configuration.service.optimized-serializer.java.min-pool-size:3}")
 			final Integer minPoolSize,
 			@Value("${org.coldis.configuration.service.optimized-serializer.java.max-pool-size:30}")
 			final Integer maxPoolSize) {
-		return OptimizedSerializationHelper.createAllSerializer(true, minPoolSize, maxPoolSize, Language.JAVA, this.typePackages);
+		return OptimizedSerializationHelper.createModelSerializer(true, minPoolSize, maxPoolSize, Language.JAVA, this.typePackages);
 	}
 
 	/**

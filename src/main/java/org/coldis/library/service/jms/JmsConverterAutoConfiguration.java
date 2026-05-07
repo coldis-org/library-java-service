@@ -39,7 +39,7 @@ public class JmsConverterAutoConfiguration {
 	 * Optimized serializer.
 	 */
 	@Autowired
-	@Qualifier(value = "javaOptimizedSerializer")
+	@Qualifier(value = "javaModelOptimizedSerializer")
 	private BaseFory optimizedSerializer;
 
 	/**
