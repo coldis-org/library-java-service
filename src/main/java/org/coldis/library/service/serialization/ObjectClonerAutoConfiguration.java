@@ -36,7 +36,7 @@ public class ObjectClonerAutoConfiguration {
 	@Bean
 	@Qualifier(value = "defaultCloner")
 	public CompositeObjectCloner defaultCloner(
-			@Qualifier("javaOptimizedSerializer")
+			@Qualifier("javaCloneOptimizedSerializer")
 			final BaseFory fory,
 			@Qualifier("jsonMapper")
 			final ObjectMapper jsonMapper) {
