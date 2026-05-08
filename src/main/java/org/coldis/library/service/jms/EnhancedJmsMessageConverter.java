@@ -282,7 +282,7 @@ public class EnhancedJmsMessageConverter extends SimpleMessageConverter {
 		// If the object cannot be serialized.
 		catch (final Exception exception) {
 			// Logs it.
-			EnhancedJmsMessageConverter.LOGGER.error("Object could not be serialized: ", exception.getLocalizedMessage());
+			EnhancedJmsMessageConverter.LOGGER.warn("Object could not be serialized: {}", exception.getLocalizedMessage());
 			EnhancedJmsMessageConverter.LOGGER.debug("Object could not be serialized.", exception);
 		}
 		return message;
@@ -334,7 +334,7 @@ public class EnhancedJmsMessageConverter extends SimpleMessageConverter {
 			// If the object cannot be converted from JSON.
 			catch (final Exception exception) {
 				// Logs it.
-				EnhancedJmsMessageConverter.LOGGER.error("Object could not be serialized to JSON: ", exception.getLocalizedMessage());
+				EnhancedJmsMessageConverter.LOGGER.warn("Object could not be serialized to JSON: {}", exception.getLocalizedMessage());
 				EnhancedJmsMessageConverter.LOGGER.debug("Object could not be serialized to JSON.", exception);
 			}
 		}
