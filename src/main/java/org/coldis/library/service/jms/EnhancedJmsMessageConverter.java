@@ -500,11 +500,17 @@ public class EnhancedJmsMessageConverter extends SimpleMessageConverter {
 		Object object = null;
 
 		// If it is an optimized serializer message.
-		final boolean optimizedSerializerUsed = (this.optimizedDeserializer != null)
-				&& (message.propertyExists(EnhancedJmsMessageConverter.OPTIMIZED_SERIALIZER_PARAMETER)
-						&& message.getBooleanProperty(EnhancedJmsMessageConverter.OPTIMIZED_SERIALIZER_PARAMETER));
+		final boolean messageMarkedOptimized = message.propertyExists(EnhancedJmsMessageConverter.OPTIMIZED_SERIALIZER_PARAMETER)
+				&& message.getBooleanProperty(EnhancedJmsMessageConverter.OPTIMIZED_SERIALIZER_PARAMETER);
+		final boolean optimizedSerializerUsed = (this.optimizedDeserializer != null) && messageMarkedOptimized;
 		if (optimizedSerializerUsed && message instanceof final BytesMessage bytesMessage) {
 			object = this.fromSerializedMessage(bytesMessage);
+		}
+		// Producer explicitly marked the wire as optimized but this converter has no deserializer
+		// to decode it. Refuse to fall through to JSON — Fory wire bytes are not parseable as JSON
+		// and the silent attempt only hides the configuration mismatch.
+		else if (messageMarkedOptimized) {
+			throw new MessageConversionException("Message marked as optimized-serialized but no optimized deserializer is configured on this converter.");
 		}
 		// If the message has a prefered type.
 		else if (message.propertyExists(EnhancedJmsMessageConverter.PREFERED_TYPE_PARAMETER)) {
