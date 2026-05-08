@@ -407,11 +407,16 @@ public class EnhancedJmsMessageConverter extends SimpleMessageConverter {
 	 */
 	private Object fromSerializedMessage(
 			final BytesMessage bytesMessage) throws JMSException {
-		Object object;
 		final byte[] messageBytes = new byte[(int) bytesMessage.getBodyLength()];
 		bytesMessage.readBytes(messageBytes);
-		object = this.optimizedDeserializer.deserialize(messageBytes);
-		return object;
+		try {
+			return this.optimizedDeserializer.deserialize(messageBytes);
+		}
+		catch (final RuntimeException exception) {
+			EnhancedJmsMessageConverter.LOGGER.warn("Object could not be deserialized: {}", exception.getLocalizedMessage());
+			EnhancedJmsMessageConverter.LOGGER.debug("Object could not be deserialized.", exception);
+			throw exception;
+		}
 	}
 
 	/**
@@ -446,7 +451,7 @@ public class EnhancedJmsMessageConverter extends SimpleMessageConverter {
 			preferedClass = (CollectionUtils.isEmpty(availablePreferedClasses) ? null
 					: ClassUtils.forName(availablePreferedClasses.getFirst(), Thread.currentThread().getContextClassLoader()));
 			if (preferedClass == null) {
-				EnhancedJmsMessageConverter.LOGGER.error("Prefered class could not be loaded from name: " + preferedClassesNames);
+				EnhancedJmsMessageConverter.LOGGER.error("Prefered class could not be loaded from name: {}", preferedClassesNames);
 			}
 			// Caches the preferred class.
 			this.preferredClassesCache.put(preferedClassesNamesAttribute, preferedClass);
@@ -480,7 +485,7 @@ public class EnhancedJmsMessageConverter extends SimpleMessageConverter {
 		}
 		// Logs errors.
 		catch (final Exception exception) {
-			EnhancedJmsMessageConverter.LOGGER.error("Object could not be converted from JSON: ", exception.getLocalizedMessage());
+			EnhancedJmsMessageConverter.LOGGER.error("Object could not be converted from JSON: {}", exception.getLocalizedMessage());
 			EnhancedJmsMessageConverter.LOGGER.debug("Object could not be converted from JSON.", exception);
 		}
 		return object;
