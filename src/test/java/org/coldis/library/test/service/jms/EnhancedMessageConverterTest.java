@@ -416,6 +416,38 @@ public class EnhancedMessageConverterTest extends ContainerTestHelper {
 	}
 
 	/**
+	 * Migration-coexistence scenario: a JSON-only producer (legacy / non-Fory
+	 * caller, no optimized serializer wired) publishes to a queue read by a
+	 * cross-Fory consumer (Dto outbound, Model inbound, optimized enabled).
+	 * The Fory-aware consumer must still decode the JSON-wire message — Fory
+	 * being configured on the receive side cannot break legitimate JSON
+	 * producers in the ecosystem.
+	 *
+	 * @throws Exception If the test fails.
+	 */
+	@Test
+	public void testCrossForyConsumerHandlesJsonProducer() throws Exception {
+		final EnhancedJmsMessageConverter jsonOnlyProducer = new EnhancedJmsMessageConverter(this.jmsConverterProperties, this.objectMapper, null, null, false,
+				java.util.Set.of());
+		final EnhancedJmsMessageConverter crossForyConsumer = new EnhancedJmsMessageConverter(this.jmsConverterProperties, this.objectMapper,
+				this.dtoOptimizedSerializer, this.modelOptimizedSerializer, true, java.util.Set.of());
+
+		for (final DtoTestObject testData : EnhancedMessageConverterTest.TEST_DATA) {
+			final DtoTestObjectDto dto = ObjectMapperHelper.convert(this.objectMapper, testData, DtoTestObjectDto.class, true);
+			this.jmsTemplate.setMessageConverter(jsonOnlyProducer);
+			this.jmsTemplate.convertAndSend("message/json-to-cross-fory", dto);
+
+			this.jmsTemplate.setMessageConverter(crossForyConsumer);
+			final Object received = this.jmsTemplate.receiveAndConvert("message/json-to-cross-fory");
+
+			Assertions.assertNotNull(received, "Cross-Fory consumer should decode JSON-wire messages.");
+			Assertions.assertInstanceOf(DtoTestObject.class, received,
+					"JSON producer + cross-Fory consumer should decode to Model under originalTypePrecedence=true; got " + received.getClass().getName());
+			Assertions.assertEquals(testData.getId(), ((DtoTestObject) received).getId());
+		}
+	}
+
+	/**
 	 * Cross-class round-trip at the serializer layer (no listener): a Dto
 	 * is written by a producer wired with the Dto-prioritized Fory and
 	 * read back by a consumer wired with the Model-prioritized one. The
