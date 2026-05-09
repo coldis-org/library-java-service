@@ -270,7 +270,7 @@ public class BatchService {
 			final String keySuffix) throws BusinessException {
 		// Synchronizes the batch (preventing to happen in parallel).
 		final String key = this.getKey(keySuffix);
-		final KeyValue<Typable> batchExecutor = this.keyValueService.findById(key, LockBehavior.LOCK_FAIL_FAST, true);
+		final KeyValue<Typable> batchExecutor = this.keyValueService.findById(key, LockBehavior.LOCK_SKIP, true);
 		if (batchExecutor != null) {
 			@SuppressWarnings("unchecked")
 			final BatchExecutor<Type> batchExecutorValue = (BatchExecutor<Type>) batchExecutor.getValue();
@@ -352,12 +352,7 @@ public class BatchService {
 	)
 	public <Type> void resumeAsync(
 			final String keySuffix) throws BusinessException {
-		try {
 			this.resume(keySuffix);
-		}
-		catch (final BatchExpiredException exception) {
-			BatchService.LOGGER.debug("Error processing batch '" + keySuffix + "'.", exception);
-		}
 	}
 
 	/**

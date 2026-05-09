@@ -85,5 +85,4 @@ public class OptmizedSerializationAutoConfiguration {
 			final Integer maxPoolSize) {
 		return OptimizedSerializationHelper.createDtoSerializer(true, minPoolSize, maxPoolSize, Language.JAVA, this.typePackages);
 	}
-
 }
