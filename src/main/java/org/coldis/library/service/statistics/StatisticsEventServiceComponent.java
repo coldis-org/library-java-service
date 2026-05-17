@@ -16,6 +16,8 @@ import org.coldis.library.model.SimpleMessage;
 import org.coldis.library.persistence.LockBehavior;
 import org.coldis.library.persistence.lock.LockServiceComponent;
 import org.coldis.library.persistence.lock.LockType;
+import org.coldis.library.service.jms.JmsMessage;
+import org.coldis.library.service.jms.JmsTemplateHelper;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -78,6 +80,9 @@ public class StatisticsEventServiceComponent {
   /** JMS template. */
   @Autowired private JmsTemplate jmsTemplate;
 
+  /** JMS template helper (supports last-value keys for queue-level deduplication). */
+  @Autowired private JmsTemplateHelper jmsTemplateHelper;
+
   /** Statistics event repository. */
   @Autowired private StatisticsEventRepository statisticsEventRepository;
 
@@ -106,7 +111,6 @@ public class StatisticsEventServiceComponent {
    * @return The statistics event.
    * @throws BusinessException If the event cannot be found.
    */
-
   public StatisticsEvent findById(final StatisticsEventKey id, final Boolean forUpdate)
       throws BusinessException {
     final StatisticsEvent statisticsEvent =
@@ -123,52 +127,68 @@ public class StatisticsEventServiceComponent {
   }
 
   /**
-   * Buffers a statistics event for deferred upsert. Validates and truncates synchronously so
-   * callers see input errors immediately, but the actual DB write happens asynchronously via the
-   * upsert batch queue.
+   * Deletes a statistics event and decrements the corresponding summary.
    *
-   * @param statisticsEvent The statistics event.
-   * @throws BusinessException If validation fails.
+   * @param statisticsEvent The statistics event to delete.
    */
-  public void upsertStatisticsEvent(final StatisticsEvent statisticsEvent)
-      throws BusinessException {
-    StatisticsEventServiceComponent.LOGGER.debug(
-        "Buffering event: context={}, owner={}, dimension={}, value={}",
-        statisticsEvent.getContext(), statisticsEvent.getOwnerKey(),
-        statisticsEvent.getDimensionName(), statisticsEvent.getDimensionValue());
-    // Truncates the date time using the context configuration.
-    statisticsEvent.setDateTime(
-        this.statisticsContextConfigurationServiceComponent.truncateDateTime(
-            statisticsEvent.getContext(), statisticsEvent.getDateTime()));
-    // Default emittedAt to now so the latest-emission-wins ordering invariant holds even when
-    // callers don't set it.
-    if (statisticsEvent.getEmittedAt() == null) {
-      statisticsEvent.setEmittedAt(DateTimeHelper.getCurrentLocalDateTime());
-    }
-    this.validator.validateAndThrowViolations(statisticsEvent);
-    this.eventBuffer.reduce(statisticsEvent.getId(), statisticsEvent);
+  @Transactional(propagation = Propagation.REQUIRED)
+  public void deleteStatisticsEvent(final StatisticsEvent statisticsEvent) {
+    this.statisticsEventRepository.delete(statisticsEvent);
+    final StatisticsEventSummaryDelta delta =
+        new StatisticsEventSummaryDelta(
+            statisticsEvent.getContext(),
+            statisticsEvent.getDimensionName(),
+            statisticsEvent.getDateTime());
+    delta.addDelta(
+        statisticsEvent.getDimensionValue(), -1, statisticsEvent.getWeight().negate());
+    this.statisticsEventSummaryServiceComponent.bufferDelta(delta.getKey(), delta);
   }
 
   /**
-   * Drains the upsert buffer and dispatches batches to the upsert batch queue. Runs on a schedule
-   * and on shutdown.
+   * Computes and buffers the summary deltas implied by applying {@code incoming} given the
+   * pre-update state captured in {@code result}.
    */
-  @PreDestroy
-  @Scheduled(
-      cron =
-          "${org.coldis.library.service.statistics.event.buffer.cron:0 * * * * *}")
-  public void flushEventBuffer() {
-    StatisticsEventServiceComponent.LOGGER.debug("Flushing event buffer.");
-    final List<StatisticsEvent> drained = new ArrayList<>();
-    this.eventBuffer.flushLocalBuffer(drained::add);
-    if (!drained.isEmpty()) {
-      final int batchSize = Math.max(1, this.upsertBatchSize);
-      for (int from = 0; from < drained.size(); from += batchSize) {
-        final int to = Math.min(from + batchSize, drained.size());
-        final ArrayList<StatisticsEvent> chunk = new ArrayList<>(drained.subList(from, to));
-        this.jmsTemplate.convertAndSend(
-            StatisticsEventServiceComponent.UPSERT_BATCH_QUEUE, (Serializable) chunk);
+  private void bufferSummaryDeltasForUpsert(
+      final StatisticsEventUpsertResult result, final StatisticsEvent incoming) {
+    final String newDimensionValue = incoming.getDimensionValue();
+    final LocalDateTime newDateTime = incoming.getDateTime();
+    final boolean isNew = result.wasInserted();
+    final String oldDimensionValue = isNew ? null : result.oldDimensionValue();
+    final BigDecimal oldWeight = isNew ? null : result.oldWeight();
+    final LocalDateTime oldDateTime = isNew ? null : result.oldDateTime();
+    final boolean dateTimeChanged = !isNew && !oldDateTime.equals(newDateTime);
+    final boolean dimensionValueChanged = isNew || !oldDimensionValue.equals(newDimensionValue);
+    final boolean weightChanged =
+        !isNew && oldWeight.compareTo(incoming.getWeight()) != 0;
+    if (dateTimeChanged) {
+      // Decrement from old bucket.
+      final StatisticsEventSummaryDelta oldDelta =
+          new StatisticsEventSummaryDelta(
+              incoming.getContext(), incoming.getDimensionName(), oldDateTime);
+      oldDelta.addDelta(oldDimensionValue, -1, oldWeight.negate());
+      this.statisticsEventSummaryServiceComponent.bufferDelta(oldDelta.getKey(), oldDelta);
+      // Increment in new bucket.
+      final StatisticsEventSummaryDelta newDelta =
+          new StatisticsEventSummaryDelta(
+              incoming.getContext(), incoming.getDimensionName(), newDateTime);
+      newDelta.addDelta(newDimensionValue, 1, incoming.getWeight());
+      this.statisticsEventSummaryServiceComponent.bufferDelta(newDelta.getKey(), newDelta);
+    } else if (dimensionValueChanged) {
+      final StatisticsEventSummaryDelta delta =
+          new StatisticsEventSummaryDelta(
+              incoming.getContext(), incoming.getDimensionName(), newDateTime);
+      if (!isNew) {
+        delta.addDelta(oldDimensionValue, -1, oldWeight.negate());
       }
+      delta.addDelta(newDimensionValue, 1, incoming.getWeight());
+      this.statisticsEventSummaryServiceComponent.bufferDelta(delta.getKey(), delta);
+    } else if (weightChanged) {
+      final StatisticsEventSummaryDelta delta =
+          new StatisticsEventSummaryDelta(
+              incoming.getContext(), incoming.getDimensionName(), newDateTime);
+      delta.addDelta(
+          newDimensionValue, 0, incoming.getWeight().subtract(oldWeight));
+      this.statisticsEventSummaryServiceComponent.bufferDelta(delta.getKey(), delta);
     }
   }
 
@@ -227,69 +247,30 @@ public class StatisticsEventServiceComponent {
   }
 
   /**
-   * Computes and buffers the summary deltas implied by applying {@code incoming} given the
-   * pre-update state captured in {@code result}.
-   */
-  private void bufferSummaryDeltasForUpsert(
-      final StatisticsEventUpsertResult result, final StatisticsEvent incoming) {
-    final String newDimensionValue = incoming.getDimensionValue();
-    final LocalDateTime newDateTime = incoming.getDateTime();
-    final boolean isNew = result.wasInserted();
-    final String oldDimensionValue = isNew ? null : result.oldDimensionValue();
-    final BigDecimal oldWeight = isNew ? null : result.oldWeight();
-    final LocalDateTime oldDateTime = isNew ? null : result.oldDateTime();
-    final boolean dateTimeChanged = !isNew && !oldDateTime.equals(newDateTime);
-    final boolean dimensionValueChanged = isNew || !oldDimensionValue.equals(newDimensionValue);
-    final boolean weightChanged =
-        !isNew && oldWeight.compareTo(incoming.getWeight()) != 0;
-    if (dateTimeChanged) {
-      // Decrement from old bucket.
-      final StatisticsEventSummaryDelta oldDelta =
-          new StatisticsEventSummaryDelta(
-              incoming.getContext(), incoming.getDimensionName(), oldDateTime);
-      oldDelta.addDelta(oldDimensionValue, -1, oldWeight.negate());
-      this.statisticsEventSummaryServiceComponent.bufferDelta(oldDelta.getKey(), oldDelta);
-      // Increment in new bucket.
-      final StatisticsEventSummaryDelta newDelta =
-          new StatisticsEventSummaryDelta(
-              incoming.getContext(), incoming.getDimensionName(), newDateTime);
-      newDelta.addDelta(newDimensionValue, 1, incoming.getWeight());
-      this.statisticsEventSummaryServiceComponent.bufferDelta(newDelta.getKey(), newDelta);
-    } else if (dimensionValueChanged) {
-      final StatisticsEventSummaryDelta delta =
-          new StatisticsEventSummaryDelta(
-              incoming.getContext(), incoming.getDimensionName(), newDateTime);
-      if (!isNew) {
-        delta.addDelta(oldDimensionValue, -1, oldWeight.negate());
-      }
-      delta.addDelta(newDimensionValue, 1, incoming.getWeight());
-      this.statisticsEventSummaryServiceComponent.bufferDelta(delta.getKey(), delta);
-    } else if (weightChanged) {
-      final StatisticsEventSummaryDelta delta =
-          new StatisticsEventSummaryDelta(
-              incoming.getContext(), incoming.getDimensionName(), newDateTime);
-      delta.addDelta(
-          newDimensionValue, 0, incoming.getWeight().subtract(oldWeight));
-      this.statisticsEventSummaryServiceComponent.bufferDelta(delta.getKey(), delta);
-    }
-  }
-
-  /**
-   * Deletes a statistics event and decrements the corresponding summary.
+   * Buffers a statistics event for deferred upsert. Validates and truncates synchronously so
+   * callers see input errors immediately, but the actual DB write happens asynchronously via the
+   * upsert batch queue.
    *
-   * @param statisticsEvent The statistics event to delete.
+   * @param statisticsEvent The statistics event.
+   * @throws BusinessException If validation fails.
    */
-  @Transactional(propagation = Propagation.REQUIRED)
-  public void deleteStatisticsEvent(final StatisticsEvent statisticsEvent) {
-    this.statisticsEventRepository.delete(statisticsEvent);
-    final StatisticsEventSummaryDelta delta =
-        new StatisticsEventSummaryDelta(
-            statisticsEvent.getContext(),
-            statisticsEvent.getDimensionName(),
-            statisticsEvent.getDateTime());
-    delta.addDelta(
-        statisticsEvent.getDimensionValue(), -1, statisticsEvent.getWeight().negate());
-    this.statisticsEventSummaryServiceComponent.bufferDelta(delta.getKey(), delta);
+  public void upsertStatisticsEvent(final StatisticsEvent statisticsEvent)
+      throws BusinessException {
+    StatisticsEventServiceComponent.LOGGER.debug(
+        "Buffering event: context={}, owner={}, dimension={}, value={}",
+        statisticsEvent.getContext(), statisticsEvent.getOwnerKey(),
+        statisticsEvent.getDimensionName(), statisticsEvent.getDimensionValue());
+    // Truncates the date time using the context configuration.
+    statisticsEvent.setDateTime(
+        this.statisticsContextConfigurationServiceComponent.truncateDateTime(
+            statisticsEvent.getContext(), statisticsEvent.getDateTime()));
+    // Default emittedAt to now so the latest-emission-wins ordering invariant holds even when
+    // callers don't set it.
+    if (statisticsEvent.getEmittedAt() == null) {
+      statisticsEvent.setEmittedAt(DateTimeHelper.getCurrentLocalDateTime());
+    }
+    this.validator.validateAndThrowViolations(statisticsEvent);
+    this.eventBuffer.reduce(statisticsEvent.getId(), statisticsEvent);
   }
 
   /**
@@ -306,37 +287,71 @@ public class StatisticsEventServiceComponent {
   }
 
   /**
-   * Scheduled trigger that sends a message to the delete-expired queue to start the deletion
-   * process.
+   * Drains the upsert buffer and dispatches batches to the upsert batch queue. Runs on a schedule
+   * and on shutdown.
    */
+  @PreDestroy
   @Scheduled(
       cron =
-          "${org.coldis.library.service.statistics.event.deleteexpired.cron:0 0 3 * * *}")
-  public void scheduleDeleteExpired() {
-    this.jmsTemplate.convertAndSend(
-        StatisticsEventServiceComponent.DELETE_EXPIRED_QUEUE, "delete-expired");
+          "${org.coldis.library.service.statistics.event.buffer.cron:0 * * * * *}")
+  public void flushEventBuffer() {
+    StatisticsEventServiceComponent.LOGGER.debug("Flushing event buffer.");
+    final List<StatisticsEvent> drained = new ArrayList<>();
+    this.eventBuffer.flushLocalBuffer(drained::add);
+    if (!drained.isEmpty()) {
+      final int batchSize = Math.max(1, this.upsertBatchSize);
+      for (int from = 0; from < drained.size(); from += batchSize) {
+        final int to = Math.min(from + batchSize, drained.size());
+        final ArrayList<StatisticsEvent> chunk = new ArrayList<>(drained.subList(from, to));
+        this.jmsTemplate.convertAndSend(
+            StatisticsEventServiceComponent.UPSERT_BATCH_QUEUE, (Serializable) chunk);
+      }
+    }
   }
 
   /**
-   * Deletes a batch of expired statistics events. If rows were deleted, sends another message to
-   * continue the loop via JMS.
+   * Deletes a batch of expired statistics events. If rows were deleted, re-enqueues itself to
+   * continue the loop. The re-enqueue uses a last-value key so the queue holds at most one pending
+   * trigger — duplicates from scheduler + self-rescheduling collapse.
    *
    * @param message Trigger message.
    */
-
   @Transactional(propagation = Propagation.REQUIRED)
   @JmsListener(
       destination = StatisticsEventServiceComponent.DELETE_EXPIRED_QUEUE,
       concurrency = "1",
-      containerFactory = "${org.coldis.library.service.statistics.event.container-factory:jmsListenerContainerFactory}")
-
+      containerFactory =
+          "${org.coldis.library.service.statistics.event.container-factory:jmsListenerContainerFactory}")
   public void deleteExpiredEvents(final String message) {
     final int deleted =
         this.statisticsEventRepository.deleteExpired(
             DateTimeHelper.getCurrentLocalDateTime(), this.deleteExpiredBatchSize);
     if (deleted > 0) {
-      this.jmsTemplate.convertAndSend(
-          StatisticsEventServiceComponent.DELETE_EXPIRED_QUEUE, "delete-expired");
+      this.sendDeleteExpiredTrigger();
     }
+  }
+
+  /**
+   * Scheduled trigger that enqueues a delete-expired message. Uses a last-value key so the queue
+   * holds at most one pending trigger.
+   */
+  @Scheduled(
+      cron =
+          "${org.coldis.library.service.statistics.event.deleteexpired.cron:0 0 3 * * *}")
+  public void scheduleDeleteExpired() {
+    this.sendDeleteExpiredTrigger();
+  }
+
+  /**
+   * Enqueues a delete-expired trigger with a fixed last-value key so duplicate enqueues collapse
+   * at the broker (only one pending trigger is ever needed — the listener self-reschedules).
+   */
+  private void sendDeleteExpiredTrigger() {
+    this.jmsTemplateHelper.send(
+        this.jmsTemplate,
+        new JmsMessage<String>()
+            .withDestination(StatisticsEventServiceComponent.DELETE_EXPIRED_QUEUE)
+            .withMessage("delete-expired")
+            .withLastValueKey(StatisticsEventServiceComponent.DELETE_EXPIRED_QUEUE));
   }
 }
