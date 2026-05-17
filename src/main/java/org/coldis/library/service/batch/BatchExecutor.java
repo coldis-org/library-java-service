@@ -349,18 +349,9 @@ public class BatchExecutor<Type> implements Typable {
 	 */
 	@JsonView({ ModelView.Persistent.class, ModelView.Public.class })
 	public Duration getTryToFinishWithin() {
-		// Flat 3-way fallback. Nested Objects.requireNonNullElse NPE'd when both
-		// tryToFinishWithin and finishWithin were null (the inner call required a non-null
-		// defaultObj before the outer Duration.ofHours(12L) fallback could apply).
-		final Duration value;
-		if (this.tryToFinishWithin != null) {
-			value = this.tryToFinishWithin;
-		} else if (this.finishWithin != null) {
-			value = this.finishWithin;
-		} else {
-			value = Duration.ofHours(12L);
-		}
-		this.tryToFinishWithin = value;
+		// No default — adaptive pacing only applies when the caller explicitly opted in. A null
+		// return means the caller is in fixed-rate mode; consumers must null-check before using
+		// it for delay computation.
 		return this.tryToFinishWithin;
 	}
 
@@ -402,7 +393,12 @@ public class BatchExecutor<Type> implements Typable {
 	 */
 	@JsonView({ ModelView.Persistent.class, ModelView.Public.class })
 	public Duration getFinishWithin() {
-		this.finishWithin = Objects.requireNonNullElse(this.finishWithin, this.getTryToFinishWithin().multipliedBy(3L));
+		if (this.finishWithin == null) {
+			// Default from tryToFinishWithin if the caller opted in; else a hard 36h fallback so
+			// fixed-rate callers that forgot to set finishWithin don't NPE on first access.
+			final Duration adaptiveTarget = this.getTryToFinishWithin();
+			this.finishWithin = adaptiveTarget != null ? adaptiveTarget.multipliedBy(3L) : Duration.ofHours(36L);
+		}
 		return this.finishWithin;
 	}
 
@@ -794,7 +790,7 @@ public class BatchExecutor<Type> implements Typable {
 	@JsonView({ ModelView.Persistent.class, ModelView.Public.class })
 	public Duration getActualDelayBetweenRuns() {
 		Duration actualDelayBetweenRuns = this.getDelayBetweenRuns();
-		if ((this.getExpectedCount() != null) && (this.getExpectedCount() > 0) && (this.getLastProcessedCount() != null)) {
+		if ((this.getTryToFinishWithin() != null) && (this.getExpectedCount() != null) && (this.getExpectedCount() > 0) && (this.getLastProcessedCount() != null)) {
 			final long expectedLeftCount = this.getExpectedCount() - this.getLastProcessedCount();
 			// Roundup to avoid underestimating batches (truncation inflates delay).
 			final long expectedTotalBatches = (this.getExpectedCount() + this.getSize() - 1) / this.getSize();
