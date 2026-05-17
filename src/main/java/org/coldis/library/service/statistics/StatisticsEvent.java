@@ -31,7 +31,8 @@ import org.coldis.library.persistence.model.AbstractTimestampableEntity;
     indexes = {
       @Index(
           name = "idx_statistics_event_context_dimension_datetime",
-          columnList = "context, dimension_name, date_time")
+          columnList = "context, dimension_name, date_time"),
+      @Index(name = "idx_statistics_event_expired_at", columnList = "expired_at")
     })
 public class StatisticsEvent extends AbstractTimestampableEntity
     implements Expirable, Reduceable<StatisticsEvent> {
