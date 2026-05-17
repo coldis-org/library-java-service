@@ -158,7 +158,10 @@ public class BatchExecutor<Type> implements Typable {
 	}
 
 	/**
-	 * No arguments constructor.
+	 * No-arg constructor kept for Jackson deserialization and minimal callers that prefer setters.
+	 * For new code, prefer one of the mode-specific factories: {@link #withAdaptiveRate}
+	 * (count-driven pacing) or {@link #withFixedRate} (caller-controlled pacing with hard
+	 * deadline).
 	 */
 	public BatchExecutor(final Class<Type> itemType) {
 		super();
@@ -166,85 +169,80 @@ public class BatchExecutor<Type> implements Typable {
 	}
 
 	/**
-	 * Constructor with arguments.
+	 * Adaptive-target factory: the executor tries to finish within {@code tryToFinishWithin} by
+	 * adjusting inter-batch delays from the second run onwards (it uses the previous run's total
+	 * item count to estimate pacing). {@code delayBetweenRuns} is the first-run baseline used
+	 * before any count-derived adjustment is available — it's required because the count is
+	 * unknown on the very first run.
 	 *
-	 * @param itemTypeName          Item type name.
+	 * <p>{@code finishWithin} (hard deadline, defaults to {@code 3 × tryToFinishWithin}) and
+	 * {@code cleansWithin} (retention, defaults to {@code 5 × finishWithin}) are left to setters,
+	 * since the defaults derived from {@code tryToFinishWithin} are usually what callers want.
+	 *
+	 * @param itemType              Item type.
 	 * @param keySuffix             Key suffix.
 	 * @param size                  Batch size.
-	 * @param expectedCount         Expected processing count.
-	 * @param tryToFinishWithin     Tries finishing within.
-	 * @param delayBetweenRuns      Delay to add between runs.
+	 * @param tryToFinishWithin     Soft target for completion — drives adaptive delay.
+	 * @param delayBetweenRuns      First-run baseline delay (also fallback if count unavailable).
 	 * @param actionBeanName        Action bean name.
 	 * @param actionDelegateMethods Action delegate methods.
 	 * @param arguments             Arguments used to get next batch.
 	 */
-	public BatchExecutor(
-			final String itemTypeName,
+	public static <T> BatchExecutor<T> withAdaptiveRate(
+			final Class<T> itemType,
 			final String keySuffix,
 			final Long size,
-			final Long expectedCount,
 			final Duration tryToFinishWithin,
 			final Duration delayBetweenRuns,
 			final String actionBeanName,
 			final Map<BatchAction, String> actionDelegateMethods,
 			final Map<String, String> arguments) {
-		super();
-		this.itemTypeName = itemTypeName;
-		this.keySuffix = keySuffix;
-		this.size = size;
-		this.expectedCount = expectedCount;
-		this.tryToFinishWithin = tryToFinishWithin;
-		this.delayBetweenRuns = delayBetweenRuns;
-		this.actionBeanName = actionBeanName;
-		this.actionDelegateMethods = actionDelegateMethods;
-		this.arguments = arguments;
+		final BatchExecutor<T> executor = new BatchExecutor<>(itemType);
+		executor.keySuffix = keySuffix;
+		executor.size = size;
+		executor.tryToFinishWithin = tryToFinishWithin;
+		executor.delayBetweenRuns = delayBetweenRuns;
+		executor.actionBeanName = actionBeanName;
+		executor.actionDelegateMethods = actionDelegateMethods;
+		executor.arguments = arguments;
+		return executor;
 	}
 
 	/**
-	 * Constructor with arguments.
+	 * Fixed-rate factory: the caller controls pacing via {@code delayBetweenRuns} and {@code
+	 * finishWithin} caps the run as a hard deadline (e.g. to keep a daily batch from spilling into
+	 * the next day's window). No adaptive throttling, no dependency on previous-run counts —
+	 * suitable for ad-hoc / configurable jobs where total work isn't predictable.
 	 *
-	 * @param itemTypeName          Item type name.
+	 * <p>{@code cleansWithin} (retention) defaults to {@code 5 × finishWithin} via setter.
+	 *
+	 * @param itemType              Item type.
 	 * @param keySuffix             Key suffix.
 	 * @param size                  Batch size.
-	 * @param expectedCount         Expected processing count.
-	 * @param tryToFinishWithin     Tries finishing within.
-	 * @param delayBetweenRuns      Delay to add between runs.
-	 * @param finishWithin          Maximum interval to finish the batch.
-	 * @param cleansWithin          Maximum interval to keep the batch persisted.
+	 * @param delayBetweenRuns      Delay between successive runs.
+	 * @param finishWithin          Hard deadline after which the batch stops.
 	 * @param actionBeanName        Action bean name.
 	 * @param actionDelegateMethods Action delegate methods.
-	 * @param messagesTemplates     Messages templates.
-	 * @param slackChannels         Slack channels to communicate.
 	 * @param arguments             Arguments used to get next batch.
 	 */
-	public BatchExecutor(
-			final String itemTypeName,
+	public static <T> BatchExecutor<T> withFixedRate(
+			final Class<T> itemType,
 			final String keySuffix,
 			final Long size,
-			final Long expectedCount,
-			final Duration tryToFinishWithin,
 			final Duration delayBetweenRuns,
 			final Duration finishWithin,
-			final Duration cleansWithin,
 			final String actionBeanName,
 			final Map<BatchAction, String> actionDelegateMethods,
-			final Map<BatchAction, String> messagesTemplates,
-			final Map<BatchAction, String> slackChannels,
 			final Map<String, String> arguments) {
-		super();
-		this.itemTypeName = itemTypeName;
-		this.keySuffix = keySuffix;
-		this.size = size;
-		this.expectedCount = expectedCount;
-		this.tryToFinishWithin = tryToFinishWithin;
-		this.delayBetweenRuns = delayBetweenRuns;
-		this.finishWithin = finishWithin;
-		this.cleansWithin = cleansWithin;
-		this.actionBeanName = actionBeanName;
-		this.actionDelegateMethods = actionDelegateMethods;
-		this.messagesTemplates = messagesTemplates;
-		this.slackChannels = slackChannels;
-		this.arguments = arguments;
+		final BatchExecutor<T> executor = new BatchExecutor<>(itemType);
+		executor.keySuffix = keySuffix;
+		executor.size = size;
+		executor.delayBetweenRuns = delayBetweenRuns;
+		executor.finishWithin = finishWithin;
+		executor.actionBeanName = actionBeanName;
+		executor.actionDelegateMethods = actionDelegateMethods;
+		executor.arguments = arguments;
+		return executor;
 	}
 
 	/**
@@ -351,7 +349,18 @@ public class BatchExecutor<Type> implements Typable {
 	 */
 	@JsonView({ ModelView.Persistent.class, ModelView.Public.class })
 	public Duration getTryToFinishWithin() {
-		this.tryToFinishWithin = Objects.requireNonNullElse(Objects.requireNonNullElse(this.tryToFinishWithin, this.finishWithin), Duration.ofHours(12L));
+		// Flat 3-way fallback. Nested Objects.requireNonNullElse NPE'd when both
+		// tryToFinishWithin and finishWithin were null (the inner call required a non-null
+		// defaultObj before the outer Duration.ofHours(12L) fallback could apply).
+		final Duration value;
+		if (this.tryToFinishWithin != null) {
+			value = this.tryToFinishWithin;
+		} else if (this.finishWithin != null) {
+			value = this.finishWithin;
+		} else {
+			value = Duration.ofHours(12L);
+		}
+		this.tryToFinishWithin = value;
 		return this.tryToFinishWithin;
 	}
 

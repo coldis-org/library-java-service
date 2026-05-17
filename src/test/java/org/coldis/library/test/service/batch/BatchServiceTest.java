@@ -160,8 +160,9 @@ public class BatchServiceTest extends ContainerTestHelper {
 	public void testBatchInTime() throws Exception {
 
 		// Makes sure the batch is not started.
-		final BatchExecutor<BatchObject> testBatchExecutor = new BatchExecutor<>(BatchObject.class.getName(), "testBatchInTime", 10L, null, null,
-				Duration.ofMillis(100), Duration.ofMinutes(1), Duration.ofMinutes(15), "batchTestService", null, null, null, null);
+		final BatchExecutor<BatchObject> testBatchExecutor = BatchExecutor.withFixedRate(BatchObject.class, "testBatchInTime", 10L,
+				Duration.ofMillis(100), Duration.ofMinutes(1), "batchTestService", null, null);
+		testBatchExecutor.setCleansWithin(Duration.ofMinutes(15));
 		final String batchKey = this.batchService.getKey(testBatchExecutor.getKeySuffix());
 
 		// Record should not exist.
@@ -207,8 +208,9 @@ public class BatchServiceTest extends ContainerTestHelper {
 	public void testBatchNotInTime() throws Exception {
 
 		// Makes sure the batch is not started.
-		final BatchExecutor<BatchObject> testBatchExecutor = new BatchExecutor<>(BatchObject.class.getName(), "testBatchNotInTime", 10L, null, null,
-				Duration.ofMillis(100), Duration.ofMillis(500), Duration.ofMinutes(15), "batchTestService", null, null, null, null);
+		final BatchExecutor<BatchObject> testBatchExecutor = BatchExecutor.withFixedRate(BatchObject.class, "testBatchNotInTime", 10L,
+				Duration.ofMillis(100), Duration.ofMillis(500), "batchTestService", null, null);
+		testBatchExecutor.setCleansWithin(Duration.ofMinutes(15));
 		final String batchKey = this.batchService.getKey(testBatchExecutor.getKeySuffix());
 
 		// Record should not exist.
@@ -273,8 +275,9 @@ public class BatchServiceTest extends ContainerTestHelper {
 	public void testBatchCancel() throws Exception {
 
 		// Makes sure the batch is not started.
-		final BatchExecutor<BatchObject> testBatchExecutor = new BatchExecutor<>(BatchObject.class.getName(), "testBatchCancel", 10L, null, null,
-				Duration.ofMillis(100), Duration.ofMinutes(1), Duration.ofMinutes(15), "batchTestService", null, null, null, null);
+		final BatchExecutor<BatchObject> testBatchExecutor = BatchExecutor.withFixedRate(BatchObject.class, "testBatchCancel", 10L,
+				Duration.ofMillis(100), Duration.ofMinutes(1), "batchTestService", null, null);
+		testBatchExecutor.setCleansWithin(Duration.ofMinutes(15));
 		final String batchKey = this.batchService.getKey(testBatchExecutor.getKeySuffix());
 
 		// Record should not exist.
@@ -331,8 +334,9 @@ public class BatchServiceTest extends ContainerTestHelper {
 	public void testBatchWithExpectedSize() throws Exception {
 
 		// Starts the batch.
-		final BatchExecutor<BatchObject> testBatchExecutor = new BatchExecutor<>(BatchObject.class.getName(), "testBatchCancel", 10L, 100L,
-				Duration.ofSeconds(20), null, "batchTestService", null, null);
+		final BatchExecutor<BatchObject> testBatchExecutor = BatchExecutor.withAdaptiveRate(BatchObject.class, "testBatchCancel", 10L,
+				Duration.ofSeconds(20), Duration.ofMillis(100), "batchTestService", null, null);
+		testBatchExecutor.setExpectedCount(100L);
 		final String batchKey = this.batchService.getKey(testBatchExecutor.getKeySuffix());
 		this.batchService.start(testBatchExecutor, false, false);
 
