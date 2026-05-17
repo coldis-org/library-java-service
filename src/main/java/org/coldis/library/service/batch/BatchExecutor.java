@@ -169,6 +169,16 @@ public class BatchExecutor<Type> implements Typable {
 	}
 
 	/**
+	 * String-based variant of {@link #BatchExecutor(Class)} for callers that only have the type name
+	 * (e.g. dynamic / configurable batches where the item class isn't statically known). The generic
+	 * parameter is unbound on construction.
+	 */
+	public BatchExecutor(final String itemTypeName) {
+		super();
+		this.itemTypeName = itemTypeName;
+	}
+
+	/**
 	 * Adaptive-target factory: the executor tries to finish within {@code tryToFinishWithin} by
 	 * adjusting inter-batch delays from the second run onwards (it uses the previous run's total
 	 * item count to estimate pacing). {@code delayBetweenRuns} is the first-run baseline used
@@ -197,7 +207,24 @@ public class BatchExecutor<Type> implements Typable {
 			final String actionBeanName,
 			final Map<BatchAction, String> actionDelegateMethods,
 			final Map<String, String> arguments) {
-		final BatchExecutor<T> executor = new BatchExecutor<>(itemType);
+		return BatchExecutor.<T>withAdaptiveRate(itemType.getName(), keySuffix, size, tryToFinishWithin, delayBetweenRuns, actionBeanName, actionDelegateMethods,
+				arguments);
+	}
+
+	/**
+	 * String-typed variant of {@link #withAdaptiveRate(Class, String, Long, Duration, Duration, String, Map, Map)}
+	 * for callers that only have the item type name (dynamic / configurable batches).
+	 */
+	public static <T> BatchExecutor<T> withAdaptiveRate(
+			final String itemTypeName,
+			final String keySuffix,
+			final Long size,
+			final Duration tryToFinishWithin,
+			final Duration delayBetweenRuns,
+			final String actionBeanName,
+			final Map<BatchAction, String> actionDelegateMethods,
+			final Map<String, String> arguments) {
+		final BatchExecutor<T> executor = new BatchExecutor<>(itemTypeName);
 		executor.keySuffix = keySuffix;
 		executor.size = size;
 		executor.tryToFinishWithin = tryToFinishWithin;
@@ -234,7 +261,24 @@ public class BatchExecutor<Type> implements Typable {
 			final String actionBeanName,
 			final Map<BatchAction, String> actionDelegateMethods,
 			final Map<String, String> arguments) {
-		final BatchExecutor<T> executor = new BatchExecutor<>(itemType);
+		return BatchExecutor.<T>withFixedRate(itemType.getName(), keySuffix, size, delayBetweenRuns, finishWithin, actionBeanName, actionDelegateMethods,
+				arguments);
+	}
+
+	/**
+	 * String-typed variant of {@link #withFixedRate(Class, String, Long, Duration, Duration, String, Map, Map)}
+	 * for callers that only have the item type name (dynamic / configurable batches).
+	 */
+	public static <T> BatchExecutor<T> withFixedRate(
+			final String itemTypeName,
+			final String keySuffix,
+			final Long size,
+			final Duration delayBetweenRuns,
+			final Duration finishWithin,
+			final String actionBeanName,
+			final Map<BatchAction, String> actionDelegateMethods,
+			final Map<String, String> arguments) {
+		final BatchExecutor<T> executor = new BatchExecutor<>(itemTypeName);
 		executor.keySuffix = keySuffix;
 		executor.size = size;
 		executor.delayBetweenRuns = delayBetweenRuns;
