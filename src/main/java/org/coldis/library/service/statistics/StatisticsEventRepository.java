@@ -52,6 +52,6 @@ public interface StatisticsEventRepository
       nativeQuery = true,
       value =
           "DELETE FROM statistics_event WHERE ctid IN ("
-              + "SELECT ctid FROM statistics_event WHERE expired_at < :now LIMIT :limit)")
+              + "SELECT ctid FROM statistics_event WHERE expired_at IS NOT NULL AND expired_at < :now LIMIT :limit)")
   int deleteExpired(@Param("now") LocalDateTime now, @Param("limit") int limit);
 }
