@@ -173,7 +173,7 @@ public class BatchService {
 	 */
 	@Transactional(
 			propagation = Propagation.REQUIRES_NEW,
-			timeoutString = "${org.coldis.library.service.transaction.minutes-timeout}"
+			timeoutString = "${org.coldis.configuration.service.batch-transaction-timeout:${org.coldis.library.service.transaction.longest-timeout}}"
 	)
 	protected <Type> Type executeBatch(
 			final BatchExecutor<Type> batchExecutorValue) throws BusinessException {
@@ -213,7 +213,7 @@ public class BatchService {
 	)
 	@Transactional(
 			propagation = Propagation.REQUIRED,
-			timeoutString = "${org.coldis.library.service.transaction.hour-timeout}"
+			timeoutString = "${org.coldis.configuration.service.batch-transaction-timeout:${org.coldis.library.service.transaction.longest-timeout}}"
 	)
 	private void deleteAsync(
 			final Map<String, Object> message) throws BusinessException {
@@ -259,7 +259,7 @@ public class BatchService {
 	@Transactional(
 			propagation = Propagation.REQUIRED,
 			noRollbackFor = Throwable.class,
-			timeoutString = "${org.coldis.library.service.transaction.hour-timeout}"
+			timeoutString = "${org.coldis.configuration.service.batch-transaction-timeout:${org.coldis.library.service.transaction.longest-timeout}}"
 	)
 	@RequestMapping(
 			method = RequestMethod.PUT,
@@ -348,7 +348,7 @@ public class BatchService {
 	)
 	@Transactional(
 			propagation = Propagation.REQUIRED,
-			timeoutString = "${org.coldis.library.service.transaction.hour-timeout}"
+			timeoutString = "${org.coldis.configuration.service.batch-transaction-timeout:${org.coldis.library.service.transaction.longest-timeout}}"
 	)
 	public <Type> void resumeAsync(
 			final String keySuffix) throws BusinessException {
@@ -379,7 +379,7 @@ public class BatchService {
 	@Transactional(
 			propagation = Propagation.REQUIRED,
 			noRollbackFor = Throwable.class,
-			timeoutString = "${org.coldis.library.service.transaction.hour-timeout}"
+			timeoutString = "${org.coldis.configuration.service.batch-transaction-timeout:${org.coldis.library.service.transaction.longest-timeout}}"
 	)
 	@RequestMapping(method = RequestMethod.POST)
 	public <Type> void start(
@@ -424,7 +424,7 @@ public class BatchService {
 	@Transactional(
 			propagation = Propagation.REQUIRED,
 			noRollbackFor = Throwable.class,
-			timeoutString = "${org.coldis.library.service.transaction.hour-timeout}"
+			timeoutString = "${org.coldis.configuration.service.batch-transaction-timeout:${org.coldis.library.service.transaction.longest-timeout}}"
 	)
 	@RequestMapping(
 			method = RequestMethod.DELETE,
