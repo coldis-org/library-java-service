@@ -834,19 +834,28 @@ public class BatchExecutor<Type> implements Typable {
 	@JsonView({ ModelView.Persistent.class, ModelView.Public.class })
 	public Duration getActualDelayBetweenRuns() {
 		Duration actualDelayBetweenRuns = this.getDelayBetweenRuns();
-		if ((this.getTryToFinishWithin() != null) && (this.getExpectedCount() != null) && (this.getExpectedCount() > 0) && (this.getLastProcessedCount() != null)) {
-			final long expectedLeftCount = this.getExpectedCount() - this.getLastProcessedCount();
-			// Roundup to avoid underestimating batches (truncation inflates delay).
-			final long expectedTotalBatches = (this.getExpectedCount() + this.getSize() - 1) / this.getSize();
-			final Long expectedLeftBatchCount = (expectedLeftCount + this.getSize() - 1) / this.getSize();
+		if (this.getTryToFinishWithin() != null) {
 			final Duration timeSinceStarted = Duration.between(this.getLastStartedAt(), DateTimeHelper.getCurrentLocalDateTime());
 			final Duration timeUntilFinishTarget = this.getTryToFinishWithin().minus(timeSinceStarted);
-			final Duration timeForEachFutureBatch = (timeUntilFinishTarget.isNegative() ? Duration.ZERO
-					: timeUntilFinishTarget
-							// When processed exceeds expected, increase divisor to reduce delay.
-						.dividedBy(Math.max(1L, expectedLeftBatchCount <= 0 ? expectedTotalBatches <= 0 ? 100 : expectedTotalBatches * 10 : expectedLeftBatchCount)));
-			actualDelayBetweenRuns = (timeForEachFutureBatch == Duration.ZERO ? Duration.ZERO
-					: timeForEachFutureBatch.minus(this.getLastBatchProcessingTime()));
+			if ((this.getExpectedCount() != null) && (this.getExpectedCount() > 0) && (this.getLastProcessedCount() != null)) {
+				final long expectedLeftCount = this.getExpectedCount() - this.getLastProcessedCount();
+				// Roundup to avoid underestimating batches (truncation inflates delay).
+				final long expectedTotalBatches = (this.getExpectedCount() + this.getSize() - 1) / this.getSize();
+				final Long expectedLeftBatchCount = (expectedLeftCount + this.getSize() - 1) / this.getSize();
+				final Duration timeForEachFutureBatch = (timeUntilFinishTarget.isNegative() ? Duration.ZERO
+						: timeUntilFinishTarget
+								// When processed exceeds expected, increase divisor to reduce delay.
+							.dividedBy(Math.max(1L, expectedLeftBatchCount <= 0 ? expectedTotalBatches <= 0 ? 100 : expectedTotalBatches * 10 : expectedLeftBatchCount)));
+				actualDelayBetweenRuns = (timeForEachFutureBatch == Duration.ZERO ? Duration.ZERO
+						: timeForEachFutureBatch.minus(this.getLastBatchProcessingTime()));
+			}
+			// Aggressively tend toward zero as the finish target is reached.
+			if (timeUntilFinishTarget.isNegative() || timeUntilFinishTarget.isZero()) {
+				actualDelayBetweenRuns = Duration.ZERO;
+			}
+			else if (actualDelayBetweenRuns.isNegative() || actualDelayBetweenRuns.compareTo(timeUntilFinishTarget) > 0) {
+				actualDelayBetweenRuns = timeUntilFinishTarget;
+			}
 		}
 		return actualDelayBetweenRuns;
 	}
@@ -886,7 +895,7 @@ public class BatchExecutor<Type> implements Typable {
 	 */
 	public void reset(
 			final Boolean useLastCountAsExpected) {
-		if (useLastCountAsExpected && (this.getLastFinishedAt() != null)) {
+		if (useLastCountAsExpected && this.isFinished()) {
 			this.setExpectedCount(this.getLastProcessedCount());
 		}
 		this.setLastStartedAt(null);
