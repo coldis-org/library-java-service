@@ -21,6 +21,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
+import org.springframework.cache.annotation.Cacheable;
 import org.springframework.http.HttpStatus;
 import org.springframework.jms.annotation.JmsListener;
 import org.springframework.jms.core.JmsTemplate;
@@ -341,6 +342,29 @@ public class StatisticsEventSummaryServiceComponent {
   // ---- Period queries ----
 
   /**
+   * Fetches the raw list of summaries for a context and dimension within a date range. Both
+   * date-time parameters must already be truncated to the configured interval. Result is cached.
+   *
+   * @param context Context.
+   * @param dimensionName Dimension name.
+   * @param startDateTime Start date time (truncated).
+   * @param endDateTime End date time (truncated).
+   * @return The list of summaries in the period.
+   */
+  @Cacheable(
+      cacheManager = "minutesExpirationLocalCacheManager",
+      value = "StatisticsEventSummaryServiceComponent.findSummariesByPeriod")
+  @Transactional(propagation = Propagation.NOT_SUPPORTED, readOnly = true)
+  public List<StatisticsEventSummary> findSummariesByPeriod(
+      final String context,
+      final String dimensionName,
+      final LocalDateTime startDateTime,
+      final LocalDateTime endDateTime) {
+    return this.statisticsEventSummaryRepository.findByPeriod(
+        context, dimensionName, startDateTime, endDateTime);
+  }
+
+  /**
    * Finds all summaries for a context and dimension within a date range and merges them into a
    * single aggregated summary.
    *
@@ -351,7 +375,7 @@ public class StatisticsEventSummaryServiceComponent {
    * @return The aggregated statistics event summary.
    * @throws BusinessException If no summaries are found in the period.
    */
-
+  @Transactional(propagation = Propagation.NOT_SUPPORTED, readOnly = true)
   public StatisticsEventSummary findByPeriod(
       final String context,
       final String dimensionName,
@@ -359,7 +383,7 @@ public class StatisticsEventSummaryServiceComponent {
       final LocalDateTime endDateTime)
       throws BusinessException {
     final List<StatisticsEventSummary> summaries =
-        this.statisticsEventSummaryRepository.findByPeriod(
+        this.findSummariesByPeriod(
             context,
             dimensionName,
             this.statisticsContextConfigurationServiceComponent.truncateDateTime(
@@ -531,7 +555,7 @@ public class StatisticsEventSummaryServiceComponent {
     final PeriodAggregation agg = new PeriodAggregation();
     for (int windowIndex = 0; windowIndex < windowStarts.size(); windowIndex++) {
       final List<StatisticsEventSummary> summaries =
-          this.statisticsEventSummaryRepository.findByPeriod(
+          this.findSummariesByPeriod(
               context, dimensionName, windowStarts.get(windowIndex), windowEnds.get(windowIndex));
       if (summaries != null && !summaries.isEmpty()) {
         long total = 0L;
@@ -630,8 +654,7 @@ public class StatisticsEventSummaryServiceComponent {
 
     // Queries reference window.
     final List<StatisticsEventSummary> refSummaries =
-        this.statisticsEventSummaryRepository.findByPeriod(
-            context, dimensionName, refStart, refEnd);
+        this.findSummariesByPeriod(context, dimensionName, refStart, refEnd);
 
     // Builds the result.
     final StatisticsEventSummaryComparison comparison = new StatisticsEventSummaryComparison();

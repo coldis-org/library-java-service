@@ -7,6 +7,8 @@ import jakarta.persistence.Convert;
 import jakarta.persistence.Entity;
 import jakarta.persistence.Id;
 import jakarta.persistence.IdClass;
+import jakarta.persistence.Index;
+import jakarta.persistence.Table;
 import jakarta.persistence.Transient;
 import jakarta.validation.constraints.NotEmpty;
 import jakarta.validation.constraints.NotNull;
@@ -26,6 +28,12 @@ import org.coldis.library.persistence.model.AbstractTimestampableEntity;
  */
 @Entity
 @IdClass(value = StatisticsEventSummaryKey.class)
+@Table(
+    indexes = {
+      @Index(
+          name = "idx_statistics_event_summary_context_dimension_datetime",
+          columnList = "context, dimension_name, date_time")
+    })
 public class StatisticsEventSummary extends AbstractTimestampableEntity {
 
   /** Serial. */
