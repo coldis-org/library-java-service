@@ -140,10 +140,12 @@ public class BatchService {
 				final String key = this.getKey(executor.getKeySuffix());
 				final Type lastProcessed = executor.getLastProcessed();
 				final Long duration = (executor.getLastStartedAt().until(DateTimeHelper.getCurrentLocalDateTime(), ChronoUnit.MINUTES));
+				final Long batchDuration = executor.getLastBatchProcessingTime().toSeconds();
 				final Properties messageProperties = new Properties();
 				messageProperties.put("key", key);
 				messageProperties.put("lastProcessed", Objects.toString(lastProcessed));
 				messageProperties.put("duration", duration.toString());
+				messageProperties.put("batchDuration", batchDuration.toString());
 				// Gets the message from the template.
 				final String message = BatchService.PLACEHOLDER_HELPER.replacePlaceholders(template, messageProperties);
 				// If there is a message.
@@ -294,26 +296,27 @@ public class BatchService {
 					}
 					else {
 						batchExecutorValue.resume();
-						this.log(batchExecutorValue, BatchAction.RESUME);
 					}
 
 					// Runs the batch until the next id does not change.
 					final LocalDateTime batchStartedAt = DateTimeHelper.getCurrentLocalDateTime();
+					batchExecutorValue.setLastBatchStartedAt(batchStartedAt);
 					final Type nextLastProcessed = this.executeBatch(batchExecutorValue);
 					final LocalDateTime batchFinishedAt = DateTimeHelper.getCurrentLocalDateTime();
-					batchExecutorValue.setLastBatchStartedAt(batchStartedAt);
 					batchExecutorValue.setLastBatchFinishedAt(batchFinishedAt);
 					batchExecutorValue.setLastProcessed(nextLastProcessed);
 					previousLastProcessed = currentLastProcessed;
 					currentLastProcessed = nextLastProcessed;
 
 					// If there is no new data, finishes the batch.
+					batchExecutorValue.setLastBatchError(null);
 					if (Objects.equals(previousLastProcessed, currentLastProcessed)) {
 						batchExecutorValue.finish();
 						this.log(batchExecutorValue, BatchAction.FINISH);
 						batchExecutorValue.setLastFinishedAt(DateTimeHelper.getCurrentLocalDateTime());
 					}
 					else {
+						this.log(batchExecutorValue, BatchAction.RESUME);
 						this.queueResumeAsync(keySuffix, batchExecutorValue.getNextBatchStartingAt());
 					}
 
@@ -325,6 +328,8 @@ public class BatchService {
 				catch (final Throwable throwable) {
 					BatchService.LOGGER.error("Error processing batch '" + key + "': " + throwable.getLocalizedMessage());
 					BatchService.LOGGER.debug("Error processing batch '" + key + "'.", throwable);
+					batchExecutorValue.setLastBatchFinishedAt(DateTimeHelper.getCurrentLocalDateTime());
+					batchExecutorValue.setLastBatchError(throwable.getLocalizedMessage());
 					if (!(throwable instanceof final RetriableIn retriableException) || (retriableException.getRetryIn() != null)) {
 						this.queueResumeAsync(keySuffix, DateTimeHelper.getCurrentLocalDateTime().plus(batchExecutorValue.getActualDelayBetweenRuns()));
 					}

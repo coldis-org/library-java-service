@@ -150,6 +150,9 @@ public class BatchExecutor<Type> implements Typable {
 	/** Last batch finished at. */
 	private LocalDateTime lastBatchFinishedAt;
 
+	/** Last batch error. */
+	private String lastBatchError;
+
 	/**
 	 * No arguments constructor.
 	 */
@@ -564,8 +567,8 @@ public class BatchExecutor<Type> implements Typable {
 	public Map<BatchAction, String> getMessagesTemplates() {
 		this.messagesTemplates = (this.messagesTemplates == null
 				? new HashMap<>(Map.of(BatchAction.START, "Starting batch for '${key}'.", BatchAction.RESUME,
-						"Resuming batch for '${key}' from object '${lastProcessed}'.", BatchAction.FINISH,
-						"Finishing batch for '${key}' at object '${lastProcessed}' in '${duration}' minutes."))
+						"Batch '${key}' processed chunk at '${lastProcessed}' in '${batchDuration}' seconds.", BatchAction.FINISH,
+						"Finishing batch for '${key}' at object '${lastProcessed}' successfully in '${duration}' minutes ('${batchDuration}' seconds for last run)."))
 				: this.messagesTemplates);
 		return this.messagesTemplates;
 	}
@@ -824,6 +827,18 @@ public class BatchExecutor<Type> implements Typable {
 	public Duration getLastBatchProcessingTime() {
 		return (this.getLastBatchStartedAt() == null) || (this.getLastBatchFinishedAt() == null) ? Duration.ZERO
 				: Duration.between(this.getLastBatchStartedAt(), this.getLastBatchFinishedAt());
+	}
+
+	/** Gets the lastBatchError. */
+	@JsonView({ ModelView.Persistent.class, ModelView.Public.class })
+	public String getLastBatchError() {
+		return this.lastBatchError;
+	}
+
+	/** Sets the lastBatchError. */
+	public void setLastBatchError(
+			final String lastBatchError) {
+		this.lastBatchError = lastBatchError;
 	}
 
 	/**
