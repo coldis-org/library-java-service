@@ -383,10 +383,10 @@ public class BatchService {
 	public <Type> void queueResumeAsync(
 			final String keySuffix,
 			final LocalDateTime scheduledFor) throws BusinessException {
-		final Duration delay = Duration.ofMillis((scheduledFor == null) || scheduledFor.isBefore(DateTimeHelper.getCurrentLocalDateTime()) ? 0L
-				: ChronoUnit.MILLIS.between(DateTimeHelper.getCurrentLocalDateTime(), scheduledFor));
 		this.jmsTemplateHelper.send(this.jmsTemplate,
-				new JmsMessage<>().withDestination(BatchService.RESUME_QUEUE).withFixedDelay(delay).withLastValueKey(keySuffix).withMessage(keySuffix));
+				new JmsMessage<>().withDestination(BatchService.RESUME_QUEUE)
+						.withScheduledAt(Objects.requireNonNullElse(scheduledFor, DateTimeHelper.getCurrentLocalDateTime()))
+						.withLastValueKey(keySuffix).withMessage(keySuffix));
 	}
 
 	/**
