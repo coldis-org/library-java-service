@@ -281,9 +281,19 @@ public class BatchService {
 			if (batchExecutorValue == null) {
 				this.keyValueService.delete(key);
 			}
-			// Resumes the batch if not empty.
+			// Resumes the batch if not empty and not finished.
 			else if ((batchExecutorValue.getLastFinishedAt() == null)
 					|| !batchExecutorValue.getLastFinishedAt().isAfter(batchExecutorValue.getLastStartedAt())) {
+				// Drops if expired or cancelled.
+				if (batchExecutorValue.isExpired()) {
+					BatchService.LOGGER.debug("Dropping expired resume for batch '{}'.", key);
+				}
+				// Drops the resume if it arrived before the next scheduled run.
+				else if ((batchExecutorValue.getNextBatchStartingAt() != null)
+						&& batchExecutorValue.getNextBatchStartingAt().isAfter(DateTimeHelper.getCurrentLocalDateTime())) {
+					BatchService.LOGGER.debug("Dropping early resume for batch '{}', next run at {}.", key, batchExecutorValue.getNextBatchStartingAt());
+				}
+				else {
 				try {
 					// Gets the next id to be processed.
 					Type previousLastProcessed = null;
@@ -335,7 +345,11 @@ public class BatchService {
 					}
 					throw throwable;
 				}
+				}
 			}
+		}
+		else {
+			BatchService.LOGGER.debug("Dropping concurrent resume for batch '{}'.", key);
 		}
 
 	}
@@ -497,8 +511,9 @@ public class BatchService {
 					if (batchExecutorValue.shouldBeCleaned()) {
 						this.queueDeleteAsync(batchExecutor.getKey(), true);
 					}
-					// Makes sure non-expired are still running.
-					else if (batchExecutorValue.getNextBatchStartingAt() != null) {
+					// Rescues overdue batches (only if past their scheduled start, to avoid replacing valid pending scheduled messages).
+					else if ((batchExecutorValue.getNextBatchStartingAt() != null)
+							&& !batchExecutorValue.getNextBatchStartingAt().isAfter(DateTimeHelper.getCurrentLocalDateTime())) {
 						this.queueResumeAsync(batchExecutorValue.getKeySuffix(), batchExecutorValue.getNextBatchStartingAt());
 					}
 				}
