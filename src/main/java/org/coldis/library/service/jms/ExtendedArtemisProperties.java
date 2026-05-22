@@ -586,4 +586,65 @@ public class ExtendedArtemisProperties extends ArtemisProperties implements Arte
 		this.cacheLevel = cacheLevel;
 	}
 
+	/**
+	 * Queue depth at which dynamic credit scaling activates. Below this value
+	 * credits are passed through unchanged (one message at a time). Above it,
+	 * credits grow proportionally with depth. When null, dynamic credit scaling
+	 * is disabled entirely.
+	 */
+	private Long dynamicCreditsDepthThreshold;
+
+	/**
+	 * Multiplier applied to the proportional credit grant once depth exceeds
+	 * {@link #dynamicCreditsDepthThreshold}. A value of {@code 1.0} means
+	 * credits scale 1-for-1 with depth multiples; {@code 2.0} doubles the rate.
+	 * Defaults to {@code 1.0} when not set.
+	 */
+	private Double dynamicCreditsMultiplier;
+
+	/**
+	 * Maximum credits that can be granted in a single replenishment, in bytes.
+	 * Acts as a ceiling so consumers never prefetch more than this amount
+	 * regardless of queue depth. Defaults to {@code 10485760} (10 MB) when not set.
+	 */
+	private Integer dynamicCreditsMaxCredits;
+
+	/**
+	 * How long (in milliseconds) to cache queue depth readings used by the dynamic
+	 * credit interceptor. Defaults to {@code 5000} ms when not set.
+	 */
+	private Long dynamicCreditsCacheTtl;
+
+	public Long getDynamicCreditsDepthThreshold() {
+		return this.dynamicCreditsDepthThreshold;
+	}
+
+	public void setDynamicCreditsDepthThreshold(final Long dynamicCreditsDepthThreshold) {
+		this.dynamicCreditsDepthThreshold = dynamicCreditsDepthThreshold;
+	}
+
+	public double getDynamicCreditsMultiplier() {
+		return this.dynamicCreditsMultiplier != null ? this.dynamicCreditsMultiplier : 1.0;
+	}
+
+	public void setDynamicCreditsMultiplier(final Double dynamicCreditsMultiplier) {
+		this.dynamicCreditsMultiplier = dynamicCreditsMultiplier;
+	}
+
+	public int getDynamicCreditsMaxCredits() {
+		return this.dynamicCreditsMaxCredits != null ? this.dynamicCreditsMaxCredits : 10 * 1024 * 1024;
+	}
+
+	public void setDynamicCreditsMaxCredits(final Integer dynamicCreditsMaxCredits) {
+		this.dynamicCreditsMaxCredits = dynamicCreditsMaxCredits;
+	}
+
+	public long getDynamicCreditsCacheTtl() {
+		return this.dynamicCreditsCacheTtl != null ? this.dynamicCreditsCacheTtl : 5000L;
+	}
+
+	public void setDynamicCreditsCacheTtl(final Long dynamicCreditsCacheTtl) {
+		this.dynamicCreditsCacheTtl = dynamicCreditsCacheTtl;
+	}
+
 }

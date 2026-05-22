@@ -429,6 +429,27 @@ public class JmsConfigurationHelper {
 			connectionFactory.setRetryIntervalMultiplier(retryIntervalMultiplier);
 		}
 
+		// dynamicCredits — activate when depthThreshold is set
+		final Long dynamicCreditsDepthThreshold = actualProperties.getDynamicCreditsDepthThreshold();
+		if (dynamicCreditsDepthThreshold != null) {
+			// windowSize=0 is required: it makes the consumer send back actual message bytes
+			// as credits, which the interceptor then scales proportionally to queue depth.
+			connectionFactory.setConsumerWindowSize(0);
+			final DynamicCreditClientInterceptor interceptor = new DynamicCreditClientInterceptor(
+					connectionFactory,
+					dynamicCreditsDepthThreshold,
+					actualProperties.getDynamicCreditsMultiplier(),
+					actualProperties.getDynamicCreditsMaxCredits(),
+					actualProperties.getDynamicCreditsCacheTtl());
+			connectionFactory.getServerLocator().addOutgoingInterceptor(interceptor);
+			JmsConfigurationHelper.LOGGER.info(
+					"Configuring JMS ConnectionFactory - dynamic credits enabled: depthThreshold={} multiplier={} maxCredits={} cacheTtlMs={}",
+					dynamicCreditsDepthThreshold,
+					actualProperties.getDynamicCreditsMultiplier(),
+					actualProperties.getDynamicCreditsMaxCredits(),
+					actualProperties.getDynamicCreditsCacheTtl());
+		}
+
 	}
 
 	/**
