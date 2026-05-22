@@ -5,6 +5,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Random;
+import java.util.concurrent.CountDownLatch;
 
 import org.coldis.library.exception.IntegrationException;
 import org.coldis.library.helper.DateTimeHelper;
@@ -28,6 +29,12 @@ public class BatchTestService {
 	public static Long processedLatestCompleteBatch = 0L;
 	public static Long processedLatestPartialBatch = 0L;
 
+	/** Counted down when the first item of an iteration begins executing. */
+	public static volatile CountDownLatch executingSignal = null;
+
+	/** Batch awaits on this before processing each item (used to hold the row lock open). */
+	public static volatile CountDownLatch holdLatch = null;
+
 	/**
 	 * @see org.coldis.library.persistence.batch.BatchExecutor#start()
 	 */
@@ -35,6 +42,8 @@ public class BatchTestService {
 		BatchTestService.processedAlways = 0L;
 		BatchTestService.processedLatestCompleteBatch = 0L;
 		BatchTestService.processedLatestPartialBatch = 0L;
+		BatchTestService.executingSignal = null;
+		BatchTestService.holdLatch = null;
 	}
 
 	/**
@@ -85,6 +94,19 @@ public class BatchTestService {
 		if (BatchTestService.processedLatestPartialBatch >= 10) {
 			throw new IntegrationException();
 		}
+		final CountDownLatch signal = BatchTestService.executingSignal;
+		if (signal != null) {
+			signal.countDown();
+		}
+		final CountDownLatch hold = BatchTestService.holdLatch;
+		if (hold != null) {
+			try {
+				hold.await();
+			}
+			catch (final InterruptedException exception) {
+				Thread.currentThread().interrupt();
+			}
+		}
 		try {
 			BatchTestService.processedAlways++;
 			BatchTestService.processedLatestCompleteBatch++;
@@ -92,7 +114,7 @@ public class BatchTestService {
 		}
 		catch (final Exception exception) {
 		}
-		BatchTestService.LOGGER.info("Batch item processed. Total of {} items processed.", 
+		BatchTestService.LOGGER.info("Batch item processed. Total of {} items processed.",
 				BatchTestService.processedLatestCompleteBatch);
 	}
 }

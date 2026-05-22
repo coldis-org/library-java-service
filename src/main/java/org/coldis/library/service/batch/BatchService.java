@@ -327,7 +327,7 @@ public class BatchService {
 					}
 					else {
 						this.log(batchExecutorValue, BatchAction.RESUME);
-						this.queueResumeAsync(keySuffix, batchExecutorValue.getNextBatchStartingAt());
+						this.queueResumeAsync(keySuffix, batchExecutorValue.getNextBatchStartingAt(), true);
 					}
 
 					// Saves the executor.
@@ -383,10 +383,17 @@ public class BatchService {
 	public <Type> void queueResumeAsync(
 			final String keySuffix,
 			final LocalDateTime scheduledFor) throws BusinessException {
+		this.queueResumeAsync(keySuffix, scheduledFor, false);
+	}
+
+	public <Type> void queueResumeAsync(
+			final String keySuffix,
+			final LocalDateTime scheduledFor,
+			final boolean afterCommit) throws BusinessException {
 		this.jmsTemplateHelper.send(this.jmsTemplate,
 				new JmsMessage<>().withDestination(BatchService.RESUME_QUEUE)
 						.withScheduledAt(Objects.requireNonNullElse(scheduledFor, DateTimeHelper.getCurrentLocalDateTime()))
-						.withLastValueKey(keySuffix).withMessage(keySuffix));
+						.withLastValueKey(keySuffix).withMessage(keySuffix).withAfterCommit(afterCommit));
 	}
 
 	/**

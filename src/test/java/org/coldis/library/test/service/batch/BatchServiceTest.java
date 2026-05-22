@@ -5,6 +5,9 @@ import java.time.Duration;
 import java.time.LocalDateTime;
 import java.time.temporal.ChronoUnit;
 import java.util.List;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 
 import org.coldis.library.exception.BusinessException;
 import org.coldis.library.helper.DateTimeHelper;
@@ -326,6 +329,55 @@ public class BatchServiceTest extends ContainerTestHelper {
 		catch (final Exception exception) {
 		}
 
+	}
+
+	/**
+	 * Verifies that a concurrent resume attempt on a running batch is dropped immediately (SKIP
+	 * LOCKED) rather than blocking until the running transaction commits (WAIT_AND_LOCK). The test
+	 * holds the batch execution open via a CountDownLatch, fires a concurrent resume from a
+	 * background thread while the row lock is held, and asserts the background call completes in
+	 * well under the hold duration.
+	 */
+	@Test
+	public void testConcurrentResumeIsDroppedNotBlocked() throws Exception {
+		final CountDownLatch batchExecuting = new CountDownLatch(1);
+		final CountDownLatch batchCanProceed = new CountDownLatch(1);
+		BatchTestService.executingSignal = batchExecuting;
+		BatchTestService.holdLatch = batchCanProceed;
+
+		try {
+			final BatchExecutor<BatchObject> executor = BatchExecutor.withFixedRate(BatchObject.class, "testSkipLock", 10L, Duration.ZERO,
+					Duration.ofMinutes(5), "batchTestService", null, null);
+			this.batchService.start(executor, false, false);
+
+			// Wait until the first item has started (row lock is now held by the JMS listener's transaction).
+			Assertions.assertTrue(batchExecuting.await(10, TimeUnit.SECONDS), "Batch should start executing");
+
+			// Call resume() from a background thread while the row is locked.
+			final CompletableFuture<Long> concurrentResume = CompletableFuture.supplyAsync(() -> {
+				final long start = System.currentTimeMillis();
+				try {
+					this.batchService.resume(executor.getKeySuffix());
+				}
+				catch (final Exception ignored) {
+				}
+				return System.currentTimeMillis() - start;
+			});
+
+			// Hold the batch locked for 1 second, then release.
+			Thread.sleep(1000);
+			batchCanProceed.countDown();
+
+			// SKIP LOCKED: the concurrent resume should have completed in << 1 second.
+			// WAIT_AND_LOCK: it would have blocked for ~1 second, failing this assertion.
+			final long elapsed = concurrentResume.get(5, TimeUnit.SECONDS);
+			Assertions.assertTrue(elapsed < 500,
+					"Concurrent resume took " + elapsed + "ms — expected < 500ms (SKIP LOCKED); a result near 1000ms means WAIT_AND_LOCK is in effect");
+		}
+		finally {
+			BatchTestService.executingSignal = null;
+			BatchTestService.holdLatch = null;
+		}
 	}
 
 	/** Tests executing the batch within a specific time. */
