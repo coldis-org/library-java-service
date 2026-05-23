@@ -375,6 +375,9 @@ public class StatisticsEventSummaryServiceComponent {
    * @return The aggregated statistics event summary.
    * @throws BusinessException If no summaries are found in the period.
    */
+  @Cacheable(
+      cacheManager = "secondsExpirationLocalCacheManager",
+      value = "StatisticsEventSummaryServiceComponent.findByPeriod")
   @Transactional(propagation = Propagation.NOT_SUPPORTED, readOnly = true)
   public StatisticsEventSummary findByPeriod(
       final String context,
@@ -622,6 +625,9 @@ public class StatisticsEventSummaryServiceComponent {
    * @throws BusinessException If no data is found in any of the sampled periods.
    */
 
+  @Cacheable(
+      cacheManager = "secondsExpirationLocalCacheManager",
+      value = "StatisticsEventSummaryServiceComponent.compareByPeriod")
   public StatisticsEventSummaryComparison compareByPeriod(
       final String context,
       final String dimensionName,
@@ -715,6 +721,9 @@ public class StatisticsEventSummaryServiceComponent {
    * @throws BusinessException If no data is found in any of the sampled periods.
    */
 
+  @Cacheable(
+      cacheManager = "secondsExpirationLocalCacheManager",
+      value = "StatisticsEventSummaryServiceComponent.singleDimensionProbabilityByPeriod")
   public StatisticsEventSingleDimensionProbability singleDimensionProbabilityByPeriod(
       final String context,
       final StatisticsValuedEventDimension dimension,
@@ -789,6 +798,9 @@ public class StatisticsEventSummaryServiceComponent {
    * @throws BusinessException If no data is found for any dimension.
    */
 
+  @Cacheable(
+      cacheManager = "secondsExpirationLocalCacheManager",
+      value = "StatisticsEventSummaryServiceComponent.naiveMultiDimensionProbabilityByPeriod")
   public StatisticsEventNaiveMultiDimensionProbability naiveMultiDimensionProbabilityByPeriod(
       final String context,
       final List<StatisticsValuedEventDimension> dimensions,
