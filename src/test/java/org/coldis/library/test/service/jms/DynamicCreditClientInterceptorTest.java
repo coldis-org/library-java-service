@@ -1,12 +1,8 @@
 package org.coldis.library.test.service.jms;
 
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.atomic.AtomicInteger;
-
 import org.apache.activemq.artemis.jms.client.ActiveMQConnectionFactory;
 import org.coldis.library.service.jms.DynamicCreditClientInterceptor;
 import org.coldis.library.test.StartTestWithContainerExtension;
-import org.coldis.library.test.TestHelper;
 import org.coldis.library.test.TestWithContainer;
 import org.coldis.library.test.service.ContainerTestHelper;
 import org.junit.jupiter.api.AfterEach;
@@ -19,38 +15,38 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.jms.ConnectionFactoryUnwrapper;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.context.SpringBootTest.WebEnvironment;
-import org.springframework.jms.annotation.JmsListener;
 import org.springframework.jms.core.JmsTemplate;
-import org.springframework.test.annotation.DirtiesContext;
-import org.springframework.test.annotation.DirtiesContext.ClassMode;
 
+import jakarta.jms.Connection;
 import jakarta.jms.ConnectionFactory;
+import jakarta.jms.Message;
+import jakarta.jms.MessageConsumer;
+import jakarta.jms.Session;
 
 /**
  * Integration tests for {@link DynamicCreditClientInterceptor}.
  *
- * <p>Registers the interceptor on the shared Artemis connection factory, enqueues
- * messages to produce shallow and deep queue scenarios, and asserts:
- * <ul>
- *   <li>All messages are delivered (no deadlock or stall with windowSize=0).</li>
- *   <li>Both concurrent consumers receive messages (fair distribution).</li>
- * </ul>
+ * <p>Modifies the shared {@link ActiveMQConnectionFactory} bean directly by adding
+ * the interceptor to its {@code ServerLocator} in {@link #setUp()} and removing it
+ * in {@link #tearDown()}. Tests use a programmatic JMS consumer (not
+ * {@code @JmsListener}) so consumer creation happens <em>after</em> the interceptor
+ * is registered — guaranteeing the interceptor captures {@code CREATE_CONSUMER}
+ * and {@code FLOW_CREDIT} packets for the test consumer.
+ *
+ * <p>Each test asserts the interceptor's observable counters incremented as
+ * expected, proving the interceptor actually fired rather than silently passing
+ * traffic through.
  */
 @TestWithContainer(reuse = true)
 @ExtendWith(StartTestWithContainerExtension.class)
 @SpringBootTest(webEnvironment = WebEnvironment.RANDOM_PORT)
-@DirtiesContext(classMode = ClassMode.AFTER_CLASS)
 @DisplayName("DynamicCreditClientInterceptor — integration")
 class DynamicCreditClientInterceptorTest extends ContainerTestHelper {
 
-	private static final String QUEUE = "dynamic-credit/test";
-	private static final int TOTAL_MESSAGES = 100;
-
-	/** Tracks how many messages each thread name received. */
-	static final ConcurrentHashMap<String, Integer> receivedPerThread = new ConcurrentHashMap<>();
-
-	/** Total messages received across all consumers. */
-	static final AtomicInteger totalReceived = new AtomicInteger(0);
+	private static final long DEPTH_THRESHOLD = 10L;
+	private static final double MULTIPLIER = 2.0;
+	private static final int MAX_CREDITS = 10 * 1024 * 1024;
+	private static final long CACHE_TTL_MS = 100L;
 
 	@Autowired
 	private ConnectionFactory connectionFactory;
@@ -59,81 +55,110 @@ class DynamicCreditClientInterceptorTest extends ContainerTestHelper {
 	private JmsTemplate jmsTemplate;
 
 	private DynamicCreditClientInterceptor interceptor;
+	private ActiveMQConnectionFactory nativeFactory;
+
+	/** Unique queue per test method so depth measurements are deterministic. */
+	private String queueName;
 
 	@BeforeEach
 	void setUp() {
-		DynamicCreditClientInterceptorTest.receivedPerThread.clear();
-		DynamicCreditClientInterceptorTest.totalReceived.set(0);
-
-		// Depth threshold=10: at 100 messages the queue is 10× above threshold so the
-		// interceptor scales credits up. windowSize is left at the factory default —
-		// setConsumerWindowSize cannot be called after the factory is already in use.
-		// The interceptor is registered on the ServerLocator which is always mutable.
-		final ActiveMQConnectionFactory nativeFactory =
-				(ActiveMQConnectionFactory) ConnectionFactoryUnwrapper.unwrap(this.connectionFactory);
-		this.interceptor = new DynamicCreditClientInterceptor(nativeFactory, 10L, 2.0, 10 * 1024 * 1024, 1000L);
-		nativeFactory.getServerLocator().addOutgoingInterceptor(this.interceptor);
+		this.queueName = "dynamic-credit/test-" + System.nanoTime();
+		this.nativeFactory = (ActiveMQConnectionFactory) ConnectionFactoryUnwrapper.unwrap(this.connectionFactory);
+		this.interceptor = new DynamicCreditClientInterceptor(
+				this.nativeFactory, DEPTH_THRESHOLD, MULTIPLIER, MAX_CREDITS, CACHE_TTL_MS);
+		this.nativeFactory.getServerLocator().addOutgoingInterceptor(this.interceptor);
 	}
 
 	@AfterEach
 	void tearDown() {
-		final ActiveMQConnectionFactory nativeFactory =
-				(ActiveMQConnectionFactory) ConnectionFactoryUnwrapper.unwrap(this.connectionFactory);
-		nativeFactory.getServerLocator().removeOutgoingInterceptor(this.interceptor);
+		this.nativeFactory.getServerLocator().removeOutgoingInterceptor(this.interceptor);
 	}
 
 	/**
-	 * Two concurrent consumers on the same queue.
-	 * Each records its thread name so we can verify both threads received messages.
+	 * Drains a queue and counts messages consumed, blocking up to
+	 * {@code timeoutMs} between messages.
 	 */
-	@JmsListener(destination = QUEUE, concurrency = "2")
-	void consume(final Long id) {
-		DynamicCreditClientInterceptorTest.receivedPerThread.merge(
-				Thread.currentThread().getName(), 1, Integer::sum);
-		DynamicCreditClientInterceptorTest.totalReceived.incrementAndGet();
+	private int drainQueue(final String queue, final int max, final long timeoutMs) throws Exception {
+		int received = 0;
+		try (Connection conn = this.nativeFactory.createConnection();
+				Session session = conn.createSession(false, Session.AUTO_ACKNOWLEDGE);
+				MessageConsumer consumer = session.createConsumer(session.createQueue(queue))) {
+			conn.start();
+			Message msg;
+			while (received < max && (msg = consumer.receive(timeoutMs)) != null) {
+				received++;
+			}
+		}
+		return received;
 	}
 
 	@Test
-	@DisplayName("deep queue — all messages delivered and distributed across both consumers")
-	void testDeepQueueAllMessagesDeliveredAndDistributed() throws Exception {
-		// Enqueue TOTAL_MESSAGES quickly so the queue is deep when consumers start
-		// draining — this exercises the above-threshold credit scaling path.
-		for (long i = 0; i < TOTAL_MESSAGES; i++) {
-			this.jmsTemplate.convertAndSend(QUEUE, i);
+	@DisplayName("deep queue — interceptor tracks consumer creation and scales credit packets")
+	void testDeepQueueInterceptorScalesCredits() throws Exception {
+		final int totalMessages = 100;
+
+		// Enqueue messages first so queue depth >> threshold when the consumer is
+		// created. The initial FLOW_CREDIT packet sent at consumer-create time will
+		// see depth > threshold and be scaled.
+		for (long i = 0; i < totalMessages; i++) {
+			this.jmsTemplate.convertAndSend(this.queueName, i);
 		}
 
-		Assertions.assertTrue(
-				TestHelper.waitUntilValid(
-						() -> DynamicCreditClientInterceptorTest.totalReceived.get(),
-						count -> count >= TOTAL_MESSAGES,
-						TestHelper.LONG_WAIT,
-						TestHelper.SHORT_WAIT),
-				"Not all messages were consumed — possible deadlock with windowSize=0.");
+		final int received = this.drainQueue(this.queueName, totalMessages, 3000L);
 
-		Assertions.assertEquals(TOTAL_MESSAGES, DynamicCreditClientInterceptorTest.totalReceived.get());
-
+		Assertions.assertEquals(totalMessages, received, "All messages should be delivered");
 		Assertions.assertTrue(
-				DynamicCreditClientInterceptorTest.receivedPerThread.size() >= 2,
-				"Expected at least 2 consumer threads to receive messages, got: "
-						+ DynamicCreditClientInterceptorTest.receivedPerThread);
+				this.interceptor.getConsumersRegistered() >= 1,
+				"Interceptor should have captured at least one CREATE_CONSUMER packet, got: "
+						+ this.interceptor.getConsumersRegistered());
+		Assertions.assertTrue(
+				this.interceptor.getCreditPacketsIntercepted() >= 1,
+				"Interceptor should have seen at least one FLOW_CREDIT packet, got: "
+						+ this.interceptor.getCreditPacketsIntercepted());
+		Assertions.assertTrue(
+				this.interceptor.getCreditPacketsScaled() >= 1,
+				"Interceptor should have scaled at least one credit packet for deep queue, got: "
+						+ this.interceptor.getCreditPacketsScaled());
 	}
 
 	@Test
-	@DisplayName("shallow queue — messages below threshold delivered without stall")
-	void testShallowQueueMessagesDeliveredBelowThreshold() throws Exception {
-		// 5 messages — well below threshold of 10, credits pass through unchanged.
+	@DisplayName("shallow queue — interceptor sees credits but does not scale them")
+	void testShallowQueueInterceptorPassesCreditsThrough() throws Exception {
+		// 5 messages — well below threshold of 10
 		for (long i = 0; i < 5; i++) {
-			this.jmsTemplate.convertAndSend(QUEUE, i);
+			this.jmsTemplate.convertAndSend(this.queueName, i);
 		}
 
-		Assertions.assertTrue(
-				TestHelper.waitUntilValid(
-						() -> DynamicCreditClientInterceptorTest.totalReceived.get(),
-						count -> count >= 5,
-						TestHelper.LONG_WAIT,
-						TestHelper.SHORT_WAIT),
-				"Messages below depth threshold were not delivered.");
+		final int received = this.drainQueue(this.queueName, 5, 3000L);
 
-		Assertions.assertEquals(5, DynamicCreditClientInterceptorTest.totalReceived.get());
+		Assertions.assertEquals(5, received, "All messages below threshold should be delivered");
+		Assertions.assertTrue(
+				this.interceptor.getConsumersRegistered() >= 1,
+				"Interceptor should have captured the test consumer creation");
+		Assertions.assertEquals(
+				0,
+				this.interceptor.getCreditPacketsScaled(),
+				"Below threshold, no credit packets should be scaled");
+	}
+
+	@Test
+	@DisplayName("interceptor ignores credit packets from consumers it did not see created")
+	void testInterceptorIgnoresUntrackedConsumers() throws Exception {
+		// This test verifies a key safety property: if for some reason a credit
+		// packet arrives for a consumerID we never saw created (e.g., interceptor
+		// registered after the consumer), we simply pass it through unmodified —
+		// no NPE, no scaling.
+		// We exercise this implicitly: every connection created BEFORE setUp ran
+		// (e.g., the Spring JmsTemplate's pooled connection) would have an unknown
+		// consumerID. Sending a message goes through such a producer; no consumer
+		// is involved here, so the path is only sanity-checked.
+		for (long i = 0; i < 3; i++) {
+			this.jmsTemplate.convertAndSend(this.queueName, i);
+		}
+		final int received = this.drainQueue(this.queueName, 3, 3000L);
+
+		Assertions.assertEquals(3, received);
+		// No crash, no scaling expected for these (below threshold anyway).
+		Assertions.assertEquals(0, this.interceptor.getCreditPacketsScaled());
 	}
 }

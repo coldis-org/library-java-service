@@ -2,10 +2,12 @@ package org.coldis.library.service.jms;
 
 import java.lang.reflect.Field;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicLong;
 
 import org.apache.activemq.artemis.api.core.ActiveMQException;
 import org.apache.activemq.artemis.api.core.Interceptor;
 import org.apache.activemq.artemis.api.core.SimpleString;
+import org.apache.activemq.artemis.api.core.client.ActiveMQClient;
 import org.apache.activemq.artemis.api.core.client.ClientSession;
 import org.apache.activemq.artemis.api.core.client.ClientSessionFactory;
 import org.apache.activemq.artemis.core.protocol.core.Packet;
@@ -75,6 +77,15 @@ public class DynamicCreditClientInterceptor implements Interceptor {
 	private volatile ClientSession querySession;
 	private final Object querySessionLock = new Object();
 
+	/** Total consumer-create packets seen by this interceptor. */
+	private final AtomicLong consumersRegistered = new AtomicLong(0);
+
+	/** Total flow-credit packets seen by this interceptor. */
+	private final AtomicLong creditPacketsIntercepted = new AtomicLong(0);
+
+	/** Flow-credit packets where the credit value was modified (scaled). */
+	private final AtomicLong creditPacketsScaled = new AtomicLong(0);
+
 	public DynamicCreditClientInterceptor(
 			final ActiveMQConnectionFactory factory,
 			final long depthThreshold,
@@ -98,6 +109,7 @@ public class DynamicCreditClientInterceptor implements Interceptor {
 			final SimpleString queueName = msg.getQueueName();
 			if (queueName != null) {
 				this.consumerQueues.put(msg.getID(), queueName.toString());
+				this.consumersRegistered.incrementAndGet();
 			}
 		}
 		else if (type == CONSUMER_CREDITS_TYPE) {
@@ -110,6 +122,7 @@ public class DynamicCreditClientInterceptor implements Interceptor {
 	}
 
 	private void handleFlowCredit(final SessionConsumerFlowCreditMessage msg) {
+		this.creditPacketsIntercepted.incrementAndGet();
 		final String queueName = this.consumerQueues.get(msg.getConsumerID());
 		if (queueName == null) {
 			return;
@@ -120,12 +133,28 @@ public class DynamicCreditClientInterceptor implements Interceptor {
 		if (granted != requested) {
 			try {
 				DynamicCreditClientInterceptor.CREDITS_FIELD.setInt(msg, granted);
+				this.creditPacketsScaled.incrementAndGet();
 				LOGGER.debug("DynamicCredit — queue={} depth={} requested={} granted={}", queueName, depth, requested, granted);
 			}
 			catch (final IllegalAccessException e) {
 				LOGGER.warn("DynamicCredit — could not modify credits field, skipping", e);
 			}
 		}
+	}
+
+	/** Total consumer-create packets seen. */
+	public long getConsumersRegistered() {
+		return this.consumersRegistered.get();
+	}
+
+	/** Total flow-credit packets seen (including those not modified). */
+	public long getCreditPacketsIntercepted() {
+		return this.creditPacketsIntercepted.get();
+	}
+
+	/** Flow-credit packets whose credit value was actually modified by the scaling logic. */
+	public long getCreditPacketsScaled() {
+		return this.creditPacketsScaled.get();
 	}
 
 	/**
@@ -173,7 +202,16 @@ public class DynamicCreditClientInterceptor implements Interceptor {
 				if (this.querySession == null) {
 					try {
 						final ClientSessionFactory csf = this.factory.getServerLocator().createSessionFactory();
-						this.querySession = csf.createSession(true, true);
+						// Use the factory's configured credentials so the session authenticates
+						// the same way as regular consumer/producer sessions.
+						this.querySession = csf.createSession(
+								this.factory.getUser(),
+								this.factory.getPassword(),
+								false,
+								true,
+								true,
+								false,
+								ActiveMQClient.DEFAULT_ACK_BATCH_SIZE);
 					}
 					catch (final Exception e) {
 						LOGGER.warn("DynamicCredit — could not create query session: {}", e.getMessage());
