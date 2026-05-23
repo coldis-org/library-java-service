@@ -1,5 +1,13 @@
 package org.coldis.library.test.service.jms;
 
+import java.lang.reflect.Field;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
+
+import org.apache.activemq.artemis.core.protocol.core.impl.wireformat.SessionConsumerFlowCreditMessage;
 import org.apache.activemq.artemis.jms.client.ActiveMQConnectionFactory;
 import org.coldis.library.service.jms.DynamicCreditClientInterceptor;
 import org.coldis.library.test.StartTestWithContainerExtension;
@@ -11,12 +19,16 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.jms.ConnectionFactoryUnwrapper;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.context.SpringBootTest.WebEnvironment;
 import org.springframework.jms.core.JmsTemplate;
 
+import ch.qos.logback.classic.Logger;
+import ch.qos.logback.classic.spi.ILoggingEvent;
+import ch.qos.logback.core.read.ListAppender;
 import jakarta.jms.Connection;
 import jakarta.jms.ConnectionFactory;
 import jakarta.jms.Message;
@@ -160,5 +172,90 @@ class DynamicCreditClientInterceptorTest extends ContainerTestHelper {
 		Assertions.assertEquals(3, received);
 		// No crash, no scaling expected for these (below threshold anyway).
 		Assertions.assertEquals(0, this.interceptor.getCreditPacketsScaled());
+	}
+
+	/**
+	 * Reproduces the production warning {@code AMQ212051: Invalid concurrent session
+	 * usage}. The interceptor's {@code querySession} is shared across consumer
+	 * threads, and Artemis's {@link org.apache.activemq.artemis.api.core.client.ClientSession}
+	 * is not thread-safe. Without synchronization on the {@code queueQuery} call,
+	 * concurrent FLOW_CREDIT intercepts from different consumers trip the warning.
+	 *
+	 * <p>The test pre-seeds the consumer→queue map with many distinct entries so the
+	 * depth cache cannot mask the issue, captures Artemis client logs, fires
+	 * interceptor calls from many threads in lockstep, then asserts no warning was
+	 * logged.
+	 */
+	@Test
+	@DisplayName("concurrent intercept does not trigger Artemis 'concurrent session usage' warning")
+	void testConcurrentInterceptDoesNotWarnAboutSessionThreadSafety() throws Exception {
+		final int threads = 16;
+		final int queriesPerThread = 5;
+
+		// Seed consumerQueues with distinct (consumerID, queueName) pairs so every
+		// queueQuery call is a fresh cache miss.
+		final Field consumerQueuesField = DynamicCreditClientInterceptor.class.getDeclaredField("consumerQueues");
+		consumerQueuesField.setAccessible(true);
+		@SuppressWarnings("unchecked")
+		final ConcurrentHashMap<Long, String> consumerQueues =
+				(ConcurrentHashMap<Long, String>) consumerQueuesField.get(this.interceptor);
+		for (int t = 0; t < threads; t++) {
+			for (int q = 0; q < queriesPerThread; q++) {
+				consumerQueues.put((long) (t * 1000 + q), "concurrent-test/" + t + "/" + q);
+			}
+		}
+
+		// Capture WARN logs from the Artemis client logger to detect AMQ212051.
+		final Logger artemisLogger = (Logger) LoggerFactory.getLogger("org.apache.activemq.artemis.core.client");
+		final ListAppender<ILoggingEvent> appender = new ListAppender<>();
+		appender.start();
+		artemisLogger.addAppender(appender);
+
+		try {
+			final CountDownLatch start = new CountDownLatch(1);
+			final CountDownLatch done = new CountDownLatch(threads);
+			final ExecutorService pool = Executors.newFixedThreadPool(threads);
+			try {
+				for (int t = 0; t < threads; t++) {
+					final int tid = t;
+					pool.submit(() -> {
+						try {
+							start.await();
+							for (int q = 0; q < queriesPerThread; q++) {
+								final long consumerId = tid * 1000L + q;
+								final SessionConsumerFlowCreditMessage credit =
+										new SessionConsumerFlowCreditMessage(consumerId, 1024);
+								this.interceptor.intercept(credit, null);
+							}
+						}
+						catch (final Throwable e) {
+							throw new RuntimeException(e);
+						}
+						finally {
+							done.countDown();
+						}
+					});
+				}
+				start.countDown();
+				Assertions.assertTrue(done.await(30, TimeUnit.SECONDS),
+						"Concurrent intercepts didn't complete in time");
+			}
+			finally {
+				pool.shutdownNow();
+			}
+
+			final boolean foundConcurrentWarning = appender.list.stream()
+					.anyMatch(e -> {
+						final String msg = e.getFormattedMessage();
+						return (msg != null)
+								&& (msg.contains("AMQ212051") || msg.contains("concurrent session usage"));
+					});
+			Assertions.assertFalse(foundConcurrentWarning,
+					"Artemis logged a concurrent session usage warning — the interceptor's "
+							+ "querySession is being used concurrently without synchronization.");
+		}
+		finally {
+			artemisLogger.detachAppender(appender);
+		}
 	}
 }

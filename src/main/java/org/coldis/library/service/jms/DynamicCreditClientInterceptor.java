@@ -187,7 +187,13 @@ public class DynamicCreditClientInterceptor implements Interceptor {
 			if (session == null) {
 				return 0L;
 			}
-			final long depth = session.queueQuery(SimpleString.of(queueName)).getMessageCount();
+			// Artemis ClientSession is not thread-safe; serialize the queueQuery call
+			// across all interceptor threads. Cache hits above avoid this lock entirely,
+			// so contention is bounded to one query per queue per cacheTtlMillis.
+			final long depth;
+			synchronized (session) {
+				depth = session.queueQuery(SimpleString.of(queueName)).getMessageCount();
+			}
 			this.depthCache.put(queueName, new long[] { depth, now });
 			return depth;
 		}
