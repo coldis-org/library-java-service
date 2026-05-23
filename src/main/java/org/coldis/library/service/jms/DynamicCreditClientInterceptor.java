@@ -23,11 +23,12 @@ import org.slf4j.LoggerFactory;
  * Client-side outgoing interceptor that dynamically scales consumer credit
  * requests based on current queue depth.
  *
- * <p>Requires {@code consumerWindowSize = 0} (set automatically by
- * {@link JmsConfigurationHelper} when this interceptor is enabled). In that
- * mode the consumer sends back the actual message bytes after each delivery,
- * so {@code requested} is always self-calibrated to the real message size —
- * no separate size configuration needed.
+ * <p>Works with any {@code consumerWindowSize}. With the typical positive
+ * window (e.g. 64KB), {@code requested} represents accumulated message bytes
+ * since the last credit replenishment, and scaling multiplies that batch.
+ * With {@code consumerWindowSize = 0}, {@code requested} carries the actual
+ * size of each individual message, giving strict 1-at-a-time fairness below
+ * the threshold and per-message scaling above it.
  *
  * <p>Behaviour:
  * <ul>

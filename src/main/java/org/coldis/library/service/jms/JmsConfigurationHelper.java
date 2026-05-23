@@ -432,9 +432,10 @@ public class JmsConfigurationHelper {
 		// dynamicCredits — activate when depthThreshold is set
 		final Long dynamicCreditsDepthThreshold = actualProperties.getDynamicCreditsDepthThreshold();
 		if (dynamicCreditsDepthThreshold != null) {
-			// windowSize=0 is required: it makes the consumer send back actual message bytes
-			// as credits, which the interceptor then scales proportionally to queue depth.
-			connectionFactory.setConsumerWindowSize(0);
+			// Note: consumerWindowSize is not forced here. The interceptor scales credits
+			// relative to whatever value the consumer sends. Operators wanting strict
+			// 1-message-at-a-time fairness below the threshold should set
+			// spring.artemis.consumer-window-size=0 explicitly.
 			final DynamicCreditClientInterceptor interceptor = new DynamicCreditClientInterceptor(
 					connectionFactory,
 					dynamicCreditsDepthThreshold,

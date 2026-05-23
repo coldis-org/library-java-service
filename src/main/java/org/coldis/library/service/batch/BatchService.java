@@ -322,11 +322,9 @@ public class BatchService {
 					batchExecutorValue.setLastBatchError(null);
 					if (Objects.equals(previousLastProcessed, currentLastProcessed)) {
 						batchExecutorValue.finish();
-						this.log(batchExecutorValue, BatchAction.FINISH);
 						batchExecutorValue.setLastFinishedAt(DateTimeHelper.getCurrentLocalDateTime());
 					}
 					else {
-						this.log(batchExecutorValue, BatchAction.RESUME);
 						this.queueResumeAsync(keySuffix, batchExecutorValue.getNextBatchStartingAt(), true);
 					}
 
@@ -344,6 +342,13 @@ public class BatchService {
 						this.queueResumeAsync(keySuffix, DateTimeHelper.getCurrentLocalDateTime().plus(batchExecutorValue.getActualDelayBetweenRuns()));
 					}
 					throw throwable;
+				}
+				// Emit per-page template message exactly once, regardless of outcome,
+				// so the duration is always logged. FINISH on the terminal success
+				// path (lastFinishedAt was set above); RESUME otherwise.
+				finally {
+					this.log(batchExecutorValue,
+							batchExecutorValue.isFinished() ? BatchAction.FINISH : BatchAction.RESUME);
 				}
 				}
 			}
@@ -390,10 +395,19 @@ public class BatchService {
 			final String keySuffix,
 			final LocalDateTime scheduledFor,
 			final boolean afterCommit) throws BusinessException {
-		this.jmsTemplateHelper.send(this.jmsTemplate,
-				new JmsMessage<>().withDestination(BatchService.RESUME_QUEUE)
-						.withScheduledAt(Objects.requireNonNullElse(scheduledFor, DateTimeHelper.getCurrentLocalDateTime()))
-						.withLastValueKey(keySuffix).withMessage(keySuffix).withAfterCommit(afterCommit));
+		// Null scheduledFor means "deliver immediately" — leave scheduledAt unset so no
+		// HDR_SCHEDULED_DELIVERY_TIME is added. This avoids wall-clock vs DateTimeHelper
+		// mismatches (e.g. tests that advance the simulated clock would otherwise schedule
+		// delivery far in the wall-clock future).
+		final JmsMessage<String> jmsMessage = new JmsMessage<String>()
+				.withDestination(BatchService.RESUME_QUEUE)
+				.withLastValueKey(keySuffix)
+				.withMessage(keySuffix)
+				.withAfterCommit(afterCommit);
+		if (scheduledFor != null) {
+			jmsMessage.withScheduledAt(scheduledFor);
+		}
+		this.jmsTemplateHelper.send(this.jmsTemplate, jmsMessage);
 	}
 
 	/**
