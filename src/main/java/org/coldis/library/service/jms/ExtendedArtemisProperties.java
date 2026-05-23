@@ -623,24 +623,24 @@ public class ExtendedArtemisProperties extends ArtemisProperties implements Arte
 		this.dynamicCreditsDepthThreshold = dynamicCreditsDepthThreshold;
 	}
 
-	public double getDynamicCreditsMultiplier() {
-		return this.dynamicCreditsMultiplier != null ? this.dynamicCreditsMultiplier : 1.0;
+	public Double getDynamicCreditsMultiplier() {
+		return this.dynamicCreditsMultiplier;
 	}
 
 	public void setDynamicCreditsMultiplier(final Double dynamicCreditsMultiplier) {
 		this.dynamicCreditsMultiplier = dynamicCreditsMultiplier;
 	}
 
-	public int getDynamicCreditsMaxCredits() {
-		return this.dynamicCreditsMaxCredits != null ? this.dynamicCreditsMaxCredits : 10 * 1024 * 1024;
+	public Integer getDynamicCreditsMaxCredits() {
+		return this.dynamicCreditsMaxCredits;
 	}
 
 	public void setDynamicCreditsMaxCredits(final Integer dynamicCreditsMaxCredits) {
 		this.dynamicCreditsMaxCredits = dynamicCreditsMaxCredits;
 	}
 
-	public long getDynamicCreditsCacheTtl() {
-		return this.dynamicCreditsCacheTtl != null ? this.dynamicCreditsCacheTtl : 5000L;
+	public Long getDynamicCreditsCacheTtl() {
+		return this.dynamicCreditsCacheTtl;
 	}
 
 	public void setDynamicCreditsCacheTtl(final Long dynamicCreditsCacheTtl) {
