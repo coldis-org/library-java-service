@@ -436,19 +436,32 @@ public class JmsConfigurationHelper {
 			// relative to whatever value the consumer sends. Operators wanting strict
 			// 1-message-at-a-time fairness below the threshold should set
 			// spring.artemis.consumer-window-size=0 explicitly.
+			// Sensible defaults applied at the wiring site so that a null here is visible
+			// in code (and via WARN log) rather than hidden inside the property getters.
+			// If a value falls back to its default, that indicates the property pipeline
+			// failed to resolve it from service.properties / overrides — diagnose accordingly.
+			final Double multiplierProp = actualProperties.getDynamicCreditsMultiplier();
+			final Integer maxCreditsProp = actualProperties.getDynamicCreditsMaxCredits();
+			final Long cacheTtlProp = actualProperties.getDynamicCreditsCacheTtl();
+			if ((multiplierProp == null) || (maxCreditsProp == null) || (cacheTtlProp == null)) {
+				JmsConfigurationHelper.LOGGER.warn(
+						"Configuring JMS ConnectionFactory - dynamic credits property fallback in effect: multiplier={} maxCredits={} cacheTtlMs={}. "
+								+ "Check spring.artemis.dynamic-credits-* property resolution.",
+						multiplierProp, maxCreditsProp, cacheTtlProp);
+			}
+			final double multiplier = (multiplierProp != null ? multiplierProp : 1.0);
+			final int maxCredits = (maxCreditsProp != null ? maxCreditsProp : 10 * 1024 * 1024);
+			final long cacheTtl = (cacheTtlProp != null ? cacheTtlProp : 5000L);
 			final DynamicCreditClientInterceptor interceptor = new DynamicCreditClientInterceptor(
 					connectionFactory,
 					dynamicCreditsDepthThreshold,
-					actualProperties.getDynamicCreditsMultiplier(),
-					actualProperties.getDynamicCreditsMaxCredits(),
-					actualProperties.getDynamicCreditsCacheTtl());
+					multiplier,
+					maxCredits,
+					cacheTtl);
 			connectionFactory.getServerLocator().addOutgoingInterceptor(interceptor);
 			JmsConfigurationHelper.LOGGER.info(
 					"Configuring JMS ConnectionFactory - dynamic credits enabled: depthThreshold={} multiplier={} maxCredits={} cacheTtlMs={}",
-					dynamicCreditsDepthThreshold,
-					actualProperties.getDynamicCreditsMultiplier(),
-					actualProperties.getDynamicCreditsMaxCredits(),
-					actualProperties.getDynamicCreditsCacheTtl());
+					dynamicCreditsDepthThreshold, multiplier, maxCredits, cacheTtl);
 		}
 
 	}
