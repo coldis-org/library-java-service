@@ -628,7 +628,7 @@ public class StatisticsEventSummaryServiceComponent {
   @Cacheable(
       cacheManager = "secondsExpirationLocalCacheManager",
       value = "StatisticsEventSummaryServiceComponent.compareByPeriod")
-  public StatisticsEventSummaryComparison compareByPeriod(
+  private StatisticsEventSummaryComparison compareByPeriodCached(
       final String context,
       final String dimensionName,
       final LocalDateTime referenceDateTime,
@@ -637,11 +637,9 @@ public class StatisticsEventSummaryServiceComponent {
       final ChronoUnit stepUnit,
       final Integer steps)
       throws BusinessException {
-    validateTotalWindow(windowUnit, windowSize, stepUnit, steps);
     final long truncationMinutes =
         this.statisticsContextConfigurationServiceComponent.getTruncationMinutes(context);
-    final LocalDateTime refStart =
-        StatisticsEvent.truncateDateTime(referenceDateTime, truncationMinutes);
+    final LocalDateTime refStart = referenceDateTime; // already truncated by caller
     final LocalDateTime refEnd =
         StatisticsEvent.truncateDateTime(
             referenceDateTime.plus(windowSize, windowUnit), truncationMinutes);
@@ -707,6 +705,30 @@ public class StatisticsEventSummaryServiceComponent {
   }
 
   /**
+   * Truncates {@code referenceDateTime} to the context's configured truncation interval before
+   * delegating to the cached implementation. This ensures the cache key is always the effective
+   * (post-truncation) datetime so callers that pass slightly different raw values within the same
+   * truncation bucket share the same cache entry.
+   */
+  public StatisticsEventSummaryComparison compareByPeriod(
+      final String context,
+      final String dimensionName,
+      final LocalDateTime referenceDateTime,
+      final ChronoUnit windowUnit,
+      final Integer windowSize,
+      final ChronoUnit stepUnit,
+      final Integer steps)
+      throws BusinessException {
+    validateTotalWindow(windowUnit, windowSize, stepUnit, steps);
+    final long truncationMinutes =
+        this.statisticsContextConfigurationServiceComponent.getTruncationMinutes(context);
+    final LocalDateTime truncatedReferenceDateTime =
+        StatisticsEvent.truncateDateTime(referenceDateTime, truncationMinutes);
+    return this.compareByPeriodCached(
+        context, dimensionName, truncatedReferenceDateTime, windowUnit, windowSize, stepUnit, steps);
+  }
+
+  /**
    * Computes the probability of a single dimension value based on historical distribution. The
    * reference period is included in the computation (unlike comparison, which excludes it).
    *
@@ -724,7 +746,7 @@ public class StatisticsEventSummaryServiceComponent {
   @Cacheable(
       cacheManager = "secondsExpirationLocalCacheManager",
       value = "StatisticsEventSummaryServiceComponent.singleDimensionProbabilityByPeriod")
-  public StatisticsEventSingleDimensionProbability singleDimensionProbabilityByPeriod(
+  private StatisticsEventSingleDimensionProbability singleDimensionProbabilityByPeriodCached(
       final String context,
       final StatisticsValuedEventDimension dimension,
       final LocalDateTime referenceDateTime,
@@ -733,13 +755,11 @@ public class StatisticsEventSummaryServiceComponent {
       final ChronoUnit stepUnit,
       final Integer steps)
       throws BusinessException {
-    validateTotalWindow(windowUnit, windowSize, stepUnit, steps);
     final long truncationMinutes =
         this.statisticsContextConfigurationServiceComponent.getTruncationMinutes(context);
     final String dimensionName = dimension.getDimensionName();
     final String dimensionValue = dimension.getDimensionValue();
-    final LocalDateTime refStart =
-        StatisticsEvent.truncateDateTime(referenceDateTime, truncationMinutes);
+    final LocalDateTime refStart = referenceDateTime; // already truncated by caller
     final LocalDateTime refEnd =
         StatisticsEvent.truncateDateTime(
             referenceDateTime.plus(windowSize, windowUnit), truncationMinutes);
@@ -780,6 +800,28 @@ public class StatisticsEventSummaryServiceComponent {
     probability.setStdDevCount(
         agg.counts.stdDevValues.getOrDefault(dimensionValue, BigDecimal.ZERO));
     return probability;
+  }
+
+  /**
+   * Truncates {@code referenceDateTime} before delegating to the cached implementation so the
+   * cache key is always the effective (post-truncation) datetime.
+   */
+  public StatisticsEventSingleDimensionProbability singleDimensionProbabilityByPeriod(
+      final String context,
+      final StatisticsValuedEventDimension dimension,
+      final LocalDateTime referenceDateTime,
+      final ChronoUnit windowUnit,
+      final Integer windowSize,
+      final ChronoUnit stepUnit,
+      final Integer steps)
+      throws BusinessException {
+    validateTotalWindow(windowUnit, windowSize, stepUnit, steps);
+    final long truncationMinutes =
+        this.statisticsContextConfigurationServiceComponent.getTruncationMinutes(context);
+    final LocalDateTime truncatedReferenceDateTime =
+        StatisticsEvent.truncateDateTime(referenceDateTime, truncationMinutes);
+    return this.singleDimensionProbabilityByPeriodCached(
+        context, dimension, truncatedReferenceDateTime, windowUnit, windowSize, stepUnit, steps);
   }
 
   /**
