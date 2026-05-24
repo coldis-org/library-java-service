@@ -80,6 +80,11 @@ public class BatchExecutor<Type> implements Typable {
 	private Duration delayBetweenRuns;
 
 	/**
+	 * Minimum delay between runs — floor applied after adaptive calculation. Defaults to 50ms if not set.
+	 */
+	private Duration minDelayBetweenRuns;
+
+	/**
 	 * Maximum interval to finish the batch.
 	 */
 	private Duration finishWithin;
@@ -431,6 +436,27 @@ public class BatchExecutor<Type> implements Typable {
 	public void setDelayBetweenRuns(
 			final Duration delayBetweenRuns) {
 		this.delayBetweenRuns = delayBetweenRuns;
+	}
+
+	/**
+	 * Gets the minDelayBetweenRuns.
+	 *
+	 * @return The minDelayBetweenRuns.
+	 */
+	@JsonView({ ModelView.Persistent.class, ModelView.Public.class })
+	public Duration getMinDelayBetweenRuns() {
+		this.minDelayBetweenRuns = Objects.requireNonNullElse(this.minDelayBetweenRuns, Duration.ofMillis(50));
+		return this.minDelayBetweenRuns;
+	}
+
+	/**
+	 * Sets the minDelayBetweenRuns.
+	 *
+	 * @param minDelayBetweenRuns New minDelayBetweenRuns.
+	 */
+	public void setMinDelayBetweenRuns(
+			final Duration minDelayBetweenRuns) {
+		this.minDelayBetweenRuns = minDelayBetweenRuns;
 	}
 
 	/**
@@ -868,9 +894,17 @@ public class BatchExecutor<Type> implements Typable {
 			if (timeUntilFinishTarget.isNegative() || timeUntilFinishTarget.isZero()) {
 				actualDelayBetweenRuns = Duration.ZERO;
 			}
-			else if (actualDelayBetweenRuns.isNegative() || actualDelayBetweenRuns.compareTo(timeUntilFinishTarget) > 0) {
+			else if (actualDelayBetweenRuns.isNegative()) {
+				// Behind schedule (last batch took longer than its time slot) — run next batch immediately.
+				actualDelayBetweenRuns = Duration.ZERO;
+			}
+			else if (actualDelayBetweenRuns.compareTo(timeUntilFinishTarget) > 0) {
 				actualDelayBetweenRuns = timeUntilFinishTarget;
 			}
+		}
+		// Apply minimum delay floor.
+		if (actualDelayBetweenRuns.compareTo(this.getMinDelayBetweenRuns()) < 0) {
+			actualDelayBetweenRuns = this.getMinDelayBetweenRuns();
 		}
 		return actualDelayBetweenRuns;
 	}
@@ -937,7 +971,7 @@ public class BatchExecutor<Type> implements Typable {
 	 */
 	@Override
 	public int hashCode() {
-		return Objects.hash(this.actionBeanName, this.actionDelegateMethods, this.arguments, this.cleansWithin, this.delayBetweenRuns, this.expectedCount,
+		return Objects.hash(this.actionBeanName, this.actionDelegateMethods, this.arguments, this.cleansWithin, this.delayBetweenRuns, this.minDelayBetweenRuns, this.expectedCount,
 				this.finishWithin, this.itemTypeName, this.keySuffix, this.lastBatchFinishedAt, this.lastBatchStartedAt, this.lastCancelledAt,
 				this.lastFinishedAt, this.lastProcessed, this.lastProcessedCount, this.lastStartedAt, this.lastTotalProcessingTime, this.messagesTemplates,
 				this.size, this.slackChannels, this.tryToFinishWithin);
@@ -958,7 +992,7 @@ public class BatchExecutor<Type> implements Typable {
 		final BatchExecutor other = (BatchExecutor) obj;
 		return Objects.equals(this.actionBeanName, other.actionBeanName) && Objects.equals(this.actionDelegateMethods, other.actionDelegateMethods)
 				&& Objects.equals(this.arguments, other.arguments) && Objects.equals(this.cleansWithin, other.cleansWithin)
-				&& Objects.equals(this.delayBetweenRuns, other.delayBetweenRuns) && Objects.equals(this.expectedCount, other.expectedCount)
+				&& Objects.equals(this.delayBetweenRuns, other.delayBetweenRuns) && Objects.equals(this.minDelayBetweenRuns, other.minDelayBetweenRuns) && Objects.equals(this.expectedCount, other.expectedCount)
 				&& Objects.equals(this.finishWithin, other.finishWithin) && Objects.equals(this.itemTypeName, other.itemTypeName)
 				&& Objects.equals(this.keySuffix, other.keySuffix) && Objects.equals(this.lastBatchFinishedAt, other.lastBatchFinishedAt)
 				&& Objects.equals(this.lastBatchStartedAt, other.lastBatchStartedAt) && Objects.equals(this.lastCancelledAt, other.lastCancelledAt)
