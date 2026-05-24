@@ -254,6 +254,9 @@ public class DynamicCreditClientInterceptor implements Interceptor {
 		}
 		catch (final Exception e) {
 			LOGGER.warn("DynamicCredit — could not query depth for queue '{}': {}", queueName, e.getMessage());
+			// Invalidate the session so it is recreated on the next call.
+			// Without this, a broker restart leaves the cached session permanently broken.
+			this.querySession = null;
 			return 0L;
 		}
 	}
