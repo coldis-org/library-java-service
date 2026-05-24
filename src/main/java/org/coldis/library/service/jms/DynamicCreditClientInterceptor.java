@@ -183,7 +183,7 @@ public class DynamicCreditClientInterceptor implements Interceptor {
 				// Grant exactly `requested` to stay at the cap.
 				outstanding.set(afterFreed + requested);
 				granted = requested;
-				LOGGER.info("DynamicCredit — cap reached: queue={} outstanding={} maxCredits={}", queueName, afterFreed, this.maxCredits);
+				LOGGER.debug("DynamicCredit — cap reached: queue={} outstanding={} maxCredits={}", queueName, afterFreed, this.maxCredits);
 			}
 			else {
 				// Headroom available — scale up based on pending queue depth.
