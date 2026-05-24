@@ -2,6 +2,7 @@ package org.coldis.library.service.jms;
 
 import java.lang.reflect.Field;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 
 import org.apache.activemq.artemis.api.core.ActiveMQException;
@@ -21,27 +22,35 @@ import org.slf4j.LoggerFactory;
 
 /**
  * Client-side outgoing interceptor that dynamically scales consumer credit
- * requests based on current queue depth.
+ * requests based on current queue depth, while enforcing a hard cap on total
+ * outstanding credits per consumer.
  *
- * <p>Works with any {@code consumerWindowSize}. With the typical positive
- * window (e.g. 64KB), {@code requested} represents accumulated message bytes
- * since the last credit replenishment, and scaling multiplies that batch.
- * With {@code consumerWindowSize = 0}, {@code requested} carries the actual
- * size of each individual message, giving strict 1-at-a-time fairness below
- * the threshold and per-message scaling above it.
+ * <p>Each consumer's outstanding credits are tracked across bursts. When a
+ * credit request arrives, {@code requested} represents bytes freed by a
+ * processed message. The interceptor:
+ * <ol>
+ *   <li>Subtracts {@code requested} from the consumer's outstanding count
+ *       (those bytes were consumed).</li>
+ *   <li>Computes how much headroom remains before {@code maxCredits}.</li>
+ *   <li>Scales the new grant proportionally to the queue's pending depth
+ *       ({@code messageCount - deliveringCount}), capped at the available
+ *       headroom so total outstanding never exceeds {@code maxCredits}.</li>
+ * </ol>
  *
- * <p>Behaviour:
+ * <p>This ensures {@code maxCredits} is a true cap on total in-flight bytes
+ * per consumer, not merely a per-burst limit.
+ *
+ * <p>Behaviour by depth:
  * <ul>
- *   <li>depth &le; {@code depthThreshold}: credits passed through unchanged
- *       (one message at a time, perfect fairness).</li>
- *   <li>depth &gt; {@code depthThreshold}: credits are multiplied proportionally
- *       — {@code grant = min(maxCredits, requested &times; (depth/threshold) &times; multiplier)}.
- *       This allows each consumer to prefetch more messages as the queue grows,
- *       improving throughput under batch load.</li>
+ *   <li>pending depth &le; {@code depthThreshold}: grant only what headroom
+ *       allows (at most {@code requested}), preserving fairness.</li>
+ *   <li>pending depth &gt; {@code depthThreshold}: grant
+ *       {@code min(headroom, requested &times; (depth/threshold) &times; multiplier)}
+ *       to increase throughput under load.</li>
  * </ul>
  *
- * <p>Queue depth is cached for {@code cacheTtlMillis} milliseconds to avoid
- * a broker round-trip on every credit packet.
+ * <p>Queue depth is cached for {@code cacheTtlMillis} milliseconds to bound
+ * broker round-trips.
  */
 public class DynamicCreditClientInterceptor implements Interceptor {
 
@@ -72,7 +81,14 @@ public class DynamicCreditClientInterceptor implements Interceptor {
 	/** consumerID → queue name, populated when consumers are created. */
 	private final ConcurrentHashMap<Long, String> consumerQueues = new ConcurrentHashMap<>();
 
-	/** queueName → {depth, timestampMillis}, invalidated after cacheTtlMillis. */
+	/**
+	 * consumerID → outstanding credits (bytes granted but not yet freed).
+	 * Decremented by {@code requested} on each credit packet (bytes consumed),
+	 * incremented by the final grant.
+	 */
+	private final ConcurrentHashMap<Long, AtomicInteger> consumerOutstanding = new ConcurrentHashMap<>();
+
+	/** queueName → {pendingDepth, timestampMillis}, invalidated after cacheTtlMillis. */
 	private final ConcurrentHashMap<String, long[]> depthCache = new ConcurrentHashMap<>();
 
 	private volatile ClientSession querySession;
@@ -110,6 +126,7 @@ public class DynamicCreditClientInterceptor implements Interceptor {
 			final SimpleString queueName = msg.getQueueName();
 			if (queueName != null) {
 				this.consumerQueues.put(msg.getID(), queueName.toString());
+				this.consumerOutstanding.put(msg.getID(), new AtomicInteger(0));
 				this.consumersRegistered.incrementAndGet();
 			}
 		}
@@ -117,7 +134,9 @@ public class DynamicCreditClientInterceptor implements Interceptor {
 			this.handleFlowCredit((SessionConsumerFlowCreditMessage) packet);
 		}
 		else if (type == CLOSE_CONSUMER_TYPE) {
-			this.consumerQueues.remove(((SessionConsumerCloseMessage) packet).getConsumerID());
+			final long id = ((SessionConsumerCloseMessage) packet).getConsumerID();
+			this.consumerQueues.remove(id);
+			this.consumerOutstanding.remove(id);
 		}
 		return true;
 	}
@@ -128,16 +147,49 @@ public class DynamicCreditClientInterceptor implements Interceptor {
 		if (queueName == null) {
 			return;
 		}
-		final long depth = this.getQueueDepth(queueName);
+		final AtomicInteger outstanding = this.consumerOutstanding.get(msg.getConsumerID());
+		if (outstanding == null) {
+			return;
+		}
+
 		final int requested = msg.getCredits();
-		final int granted = this.computeGranted(depth, requested);
+
+		// Compute the final grant atomically: account for freed bytes, then fill
+		// headroom up to maxCredits using depth-proportional scaling.
+		final int granted;
+		synchronized (outstanding) {
+			final int current = outstanding.get();
+			// Consumer freed `requested` bytes — reduce outstanding accordingly.
+			final int afterFreed = Math.max(0, current - requested);
+			// How much more can we push before hitting the cap?
+			final int headroom = this.maxCredits - afterFreed;
+			if (headroom <= 0) {
+				// Already at or above cap even after accounting for the freed bytes.
+				// Grant exactly `requested` to stay at the cap.
+				outstanding.set(afterFreed + requested);
+				granted = requested;
+			}
+			else {
+				// Headroom available — scale up based on pending queue depth.
+				final long pendingDepth = this.getPendingDepth(queueName);
+				final int scaled = this.computeGranted(pendingDepth, requested);
+				granted = Math.min(scaled, headroom);
+				outstanding.set(afterFreed + granted);
+			}
+		}
+
 		if (granted != requested) {
 			try {
 				DynamicCreditClientInterceptor.CREDITS_FIELD.setInt(msg, granted);
 				this.creditPacketsScaled.incrementAndGet();
-				LOGGER.debug("DynamicCredit — queue={} depth={} requested={} granted={}", queueName, depth, requested, granted);
+				LOGGER.debug("DynamicCredit — queue={} requested={} granted={} outstanding={}", queueName, requested, granted,
+						outstanding.get());
 			}
 			catch (final IllegalAccessException e) {
+				// Roll back the outstanding adjustment so the accounting stays consistent.
+				synchronized (outstanding) {
+					outstanding.addAndGet(requested - granted);
+				}
 				LOGGER.warn("DynamicCredit — could not modify credits field, skipping", e);
 			}
 		}
@@ -159,13 +211,14 @@ public class DynamicCreditClientInterceptor implements Interceptor {
 	}
 
 	/**
-	 * Returns the credits to grant given current queue depth and the amount the
+	 * Returns the credits to grant given pending queue depth and the amount the
 	 * consumer requested.
 	 *
 	 * <p>Below {@code depthThreshold}: returns {@code requested} unchanged.
 	 * <p>Above {@code depthThreshold}: returns
-	 * {@code min(maxCredits, requested × (depth/threshold) × multiplier)},
-	 * always at least {@code requested} so credits never decrease.
+	 * {@code requested × (depth/threshold) × multiplier},
+	 * always at least {@code requested}.  The caller caps this at the available
+	 * headroom so total outstanding never exceeds {@code maxCredits}.
 	 */
 	public int computeGranted(final long depth, final int requested) {
 		if (depth <= this.depthThreshold) {
@@ -173,10 +226,15 @@ public class DynamicCreditClientInterceptor implements Interceptor {
 		}
 		final double scale = (double) depth / this.depthThreshold * this.multiplier;
 		final long grant = (long) Math.ceil(requested * scale);
-		return (int) Math.min(this.maxCredits, Math.max(requested, grant));
+		return (int) Math.max(requested, grant);
 	}
 
-	private long getQueueDepth(final String queueName) {
+	/**
+	 * Returns pending (not-yet-dispatched) message count for the queue.
+	 * Uses {@code messageCount - deliveringCount} so that messages already
+	 * in-flight do not inflate the scaling signal.
+	 */
+	private long getPendingDepth(final String queueName) {
 		final long[] cached = this.depthCache.get(queueName);
 		final long now = System.currentTimeMillis();
 		if ((cached != null) && ((now - cached[1]) < this.cacheTtlMillis)) {
@@ -187,15 +245,12 @@ public class DynamicCreditClientInterceptor implements Interceptor {
 			if (session == null) {
 				return 0L;
 			}
-			// Artemis ClientSession is not thread-safe; serialize the queueQuery call
-			// across all interceptor threads. Cache hits above avoid this lock entirely,
-			// so contention is bounded to one query per queue per cacheTtlMillis.
-			final long depth;
+			final long pendingDepth;
 			synchronized (session) {
-				depth = session.queueQuery(SimpleString.of(queueName)).getMessageCount();
+				pendingDepth = session.queueQuery(SimpleString.of(queueName)).getMessageCount();
 			}
-			this.depthCache.put(queueName, new long[] { depth, now });
-			return depth;
+			this.depthCache.put(queueName, new long[] { pendingDepth, now });
+			return pendingDepth;
 		}
 		catch (final Exception e) {
 			LOGGER.warn("DynamicCredit — could not query depth for queue '{}': {}", queueName, e.getMessage());
@@ -209,8 +264,6 @@ public class DynamicCreditClientInterceptor implements Interceptor {
 				if (this.querySession == null) {
 					try {
 						final ClientSessionFactory csf = this.factory.getServerLocator().createSessionFactory();
-						// Use the factory's configured credentials so the session authenticates
-						// the same way as regular consumer/producer sessions.
 						this.querySession = csf.createSession(
 								this.factory.getUser(),
 								this.factory.getPassword(),

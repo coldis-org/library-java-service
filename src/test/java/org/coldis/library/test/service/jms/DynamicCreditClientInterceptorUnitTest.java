@@ -58,11 +58,12 @@ class DynamicCreditClientInterceptorUnitTest {
 	}
 
 	@Test
-	@DisplayName("very deep queue → caps at maxCredits")
-	void testVeryDeepQueueCapsAtMaxCredits() {
-		// Need depth such that ceil(requested × (depth/threshold) × multiplier) > maxCredits.
-		// ceil(500 × (2_000_000/100) × 2.0) = 20_000_000 > 10_485_760 → capped.
-		Assertions.assertEquals(MAX_CREDITS, this.interceptor.computeGranted(2_000_000L, REQUESTED));
+	@DisplayName("very deep queue → computeGranted returns uncapped scaled value; cap is enforced by handleFlowCredit headroom")
+	void testVeryDeepQueueReturnsScaledUncapped() {
+		// computeGranted no longer applies the maxCredits cap — that is the caller's
+		// responsibility via the outstanding-credit headroom.
+		// ceil(500 × (2_000_000/100) × 2.0) = 20_000_000
+		Assertions.assertEquals(20_000_000, this.interceptor.computeGranted(2_000_000L, REQUESTED));
 	}
 
 	@Test
