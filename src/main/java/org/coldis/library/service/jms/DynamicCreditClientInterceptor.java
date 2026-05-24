@@ -78,6 +78,13 @@ public class DynamicCreditClientInterceptor implements Interceptor {
 	private final long cacheTtlMillis;
 	private final ActiveMQConnectionFactory factory;
 
+	/**
+	 * True when the broker-side consumer window is positive — in that case the
+	 * broker already manages prefetch via its own window mechanism and this
+	 * interceptor would double-stack on top of it, so scaling is disabled.
+	 */
+	private final boolean disabled;
+
 	/** consumerID → queue name, populated when consumers are created. */
 	private final ConcurrentHashMap<Long, String> consumerQueues = new ConcurrentHashMap<>();
 
@@ -114,12 +121,20 @@ public class DynamicCreditClientInterceptor implements Interceptor {
 		this.multiplier = multiplier;
 		this.maxCredits = maxCredits;
 		this.cacheTtlMillis = cacheTtlMillis;
+		final int windowSize = (factory != null) ? factory.getServerLocator().getConsumerWindowSize() : 0;
+		this.disabled = windowSize > 0;
+		if (this.disabled) {
+			LOGGER.info("DynamicCredit — disabled: consumerWindowSize={} > 0, broker window handles prefetch", windowSize);
+		}
 	}
 
 	@Override
 	public boolean intercept(
 			final Packet packet,
 			final RemotingConnection connection) throws ActiveMQException {
+		if (this.disabled) {
+			return true;
+		}
 		final byte type = packet.getType();
 		if (type == CREATE_CONSUMER_TYPE) {
 			final SessionCreateConsumerMessage msg = (SessionCreateConsumerMessage) packet;
@@ -168,6 +183,7 @@ public class DynamicCreditClientInterceptor implements Interceptor {
 				// Grant exactly `requested` to stay at the cap.
 				outstanding.set(afterFreed + requested);
 				granted = requested;
+				LOGGER.info("DynamicCredit — cap reached: queue={} outstanding={} maxCredits={}", queueName, afterFreed, this.maxCredits);
 			}
 			else {
 				// Headroom available — scale up based on pending queue depth.
@@ -250,6 +266,15 @@ public class DynamicCreditClientInterceptor implements Interceptor {
 				pendingDepth = session.queueQuery(SimpleString.of(queueName)).getMessageCount();
 			}
 			this.depthCache.put(queueName, new long[] { pendingDepth, now });
+			// Log total outstanding across all consumers on this queue — fires at most
+			// once per cacheTtlMillis, giving a periodic credit-growth summary.
+			final long totalOutstanding = this.consumerQueues.entrySet().stream()
+					.filter(e -> queueName.equals(e.getValue()))
+					.mapToLong(e -> {
+						final AtomicInteger o = this.consumerOutstanding.get(e.getKey());
+						return (o != null) ? o.get() : 0L;
+					}).sum();
+			LOGGER.info("DynamicCredit — queue={} depth={} totalOutstanding={}", queueName, pendingDepth, totalOutstanding);
 			return pendingDepth;
 		}
 		catch (final Exception e) {
