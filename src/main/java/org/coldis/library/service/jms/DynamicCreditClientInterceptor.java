@@ -98,6 +98,11 @@ public class DynamicCreditClientInterceptor implements Interceptor {
 	/** queueName → {pendingDepth, timestampMillis}, invalidated after cacheTtlMillis. */
 	private final ConcurrentHashMap<String, long[]> depthCache = new ConcurrentHashMap<>();
 
+	/** queueName → last timestamp (ms) a scaling INFO log was emitted. */
+	private final ConcurrentHashMap<String, Long> lastScalingLogAt = new ConcurrentHashMap<>();
+
+	private static final long SCALING_LOG_INTERVAL_MS = 5 * 60 * 1000L;
+
 	private volatile ClientSession querySession;
 	private final Object querySessionLock = new Object();
 
@@ -200,6 +205,20 @@ public class DynamicCreditClientInterceptor implements Interceptor {
 				this.creditPacketsScaled.incrementAndGet();
 				LOGGER.debug("DynamicCredit — queue={} requested={} granted={} outstanding={}", queueName, requested, granted,
 						outstanding.get());
+				// Log once when scaling first kicks in, then at most once every 5 minutes per queue.
+				final long now = System.currentTimeMillis();
+				final Long lastLogged = this.lastScalingLogAt.get(queueName);
+				if ((lastLogged == null) || ((now - lastLogged) >= DynamicCreditClientInterceptor.SCALING_LOG_INTERVAL_MS)) {
+					this.lastScalingLogAt.put(queueName, now);
+					final long totalOutstanding = this.consumerQueues.entrySet().stream()
+							.filter(e -> queueName.equals(e.getValue()))
+							.mapToLong(e -> {
+								final AtomicInteger o = this.consumerOutstanding.get(e.getKey());
+								return (o != null) ? o.get() : 0L;
+							}).sum();
+					LOGGER.info("DynamicCredit — queue={} depth={} requested={} granted={} totalOutstanding={}", queueName,
+							this.depthCache.getOrDefault(queueName, new long[] { 0L, 0L })[0], requested, granted, totalOutstanding);
+				}
 			}
 			catch (final IllegalAccessException e) {
 				// Roll back the outstanding adjustment so the accounting stays consistent.
@@ -266,15 +285,6 @@ public class DynamicCreditClientInterceptor implements Interceptor {
 				pendingDepth = session.queueQuery(SimpleString.of(queueName)).getMessageCount();
 			}
 			this.depthCache.put(queueName, new long[] { pendingDepth, now });
-			// Log total outstanding across all consumers on this queue — fires at most
-			// once per cacheTtlMillis, giving a periodic credit-growth summary.
-			final long totalOutstanding = this.consumerQueues.entrySet().stream()
-					.filter(e -> queueName.equals(e.getValue()))
-					.mapToLong(e -> {
-						final AtomicInteger o = this.consumerOutstanding.get(e.getKey());
-						return (o != null) ? o.get() : 0L;
-					}).sum();
-			LOGGER.info("DynamicCredit — queue={} depth={} totalOutstanding={}", queueName, pendingDepth, totalOutstanding);
 			return pendingDepth;
 		}
 		catch (final Exception e) {
