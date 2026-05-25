@@ -183,19 +183,16 @@ public class DynamicCreditClientInterceptor implements Interceptor {
 			final int afterFreed = Math.max(0, current - requested);
 			// How much more can we push before hitting the cap?
 			final int headroom = this.maxCredits - afterFreed;
-			if (headroom <= 0) {
-				// Already at or above cap even after accounting for the freed bytes.
-				// Grant exactly `requested` to stay at the cap.
+			final long pendingDepth = this.getPendingDepth(queueName);
+			if ((headroom <= 0) || (pendingDepth <= this.depthThreshold)) {
+				// At cap or queue not deep enough to warrant scaling — pass through.
 				outstanding.set(afterFreed + requested);
 				granted = requested;
-				LOGGER.debug("DynamicCredit — cap reached: queue={} outstanding={} maxCredits={}", queueName, afterFreed, this.maxCredits);
 			}
 			else {
-				// Headroom available — scale up based on pending queue depth.
-				final long pendingDepth = this.getPendingDepth(queueName);
-				final int scaled = this.computeGranted(pendingDepth, requested);
-				granted = Math.min(scaled, headroom);
-				outstanding.set(afterFreed + granted);
+				// Queue is deep and headroom is available: top up to maxCredits in one shot.
+				granted = headroom;
+				outstanding.set(this.maxCredits);
 			}
 		}
 
