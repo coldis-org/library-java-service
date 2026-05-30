@@ -1069,6 +1069,43 @@ public class StatisticsEventServiceComponentTest extends ContainerTestHelper {
     final BigDecimal expectedJoint =
         spProbability.getProbability().multiply(mobileProbability.getProbability(), MC);
     assertBigDecimalEquals(expectedJoint, jointResult.getJointProbability(), TOLERANCE);
+
+    // Verifies the distinct-value (vocabulary) counts used for smoothing: city {sao-paulo, rio},
+    // device {mobile, desktop} -> V = 2 each.
+    Assertions.assertEquals(2, spProbability.getDistinctValueCount());
+    Assertions.assertEquals(2, mobileProbability.getDistinctValueCount());
+
+    // Verifies pooled Laplace smoothing: city=sao-paulo pooled 6/9, device=mobile pooled 6/9, each
+    // over V=2 with alpha=1 -> (6+1)/(9+2) = 7/11.
+    Assertions.assertEquals(7.0 / 11.0, spProbability.getSmoothedProbability().doubleValue(), 1e-9);
+    Assertions.assertEquals(
+        7.0 / 11.0, mobileProbability.getSmoothedProbability().doubleValue(), 1e-9);
+
+    // Verifies the joint smoothed probability (product of smoothed; never zero) and its log.
+    Assertions.assertEquals(
+        (7.0 / 11.0) * (7.0 / 11.0),
+        jointResult.getJointSmoothedProbability().doubleValue(),
+        1e-9);
+    Assertions.assertEquals(
+        2.0 * Math.log(7.0 / 11.0),
+        jointResult.getJointSmoothedLogProbability().doubleValue(),
+        1e-6);
+
+    // Verifies smoothing keeps an UNSEEN value's probability positive (the zero-collapse fix):
+    // raw probability is 0, but smoothed is (0+1)/(9+2) = 1/11.
+    this.cacheHelper.clearCaches();
+    final StatisticsEventSingleDimensionProbability unseenProbability =
+        this.statisticsEventSummaryServiceComponent.singleDimensionProbabilityByPeriod(
+            "test-joint",
+            new StatisticsValuedEventDimension("city", "brasilia"),
+            day3,
+            ChronoUnit.HOURS,
+            1,
+            ChronoUnit.DAYS,
+            3);
+    Assertions.assertEquals(0.0, unseenProbability.getProbability().doubleValue(), 1e-12);
+    Assertions.assertEquals(
+        1.0 / 11.0, unseenProbability.getSmoothedProbability().doubleValue(), 1e-9);
   }
 
   /**

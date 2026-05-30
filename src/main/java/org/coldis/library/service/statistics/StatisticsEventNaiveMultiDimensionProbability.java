@@ -39,6 +39,12 @@ public class StatisticsEventNaiveMultiDimensionProbability implements Serializab
   /** Joint probability (product of individual probabilities, assuming independence). */
   private BigDecimal jointProbability;
 
+  /** Joint smoothed probability (product of the per-dimension Laplace-smoothed probabilities; never zero). */
+  private BigDecimal jointSmoothedProbability;
+
+  /** Natural log of the joint smoothed probability (Σ ln of the per-dimension smoothed probabilities). */
+  private BigDecimal jointSmoothedLogProbability;
+
   /** Individual probabilities per dimension. */
   private List<StatisticsEventSingleDimensionProbability> individualProbabilities;
 
@@ -176,6 +182,46 @@ public class StatisticsEventNaiveMultiDimensionProbability implements Serializab
    */
   public void setJointProbability(final BigDecimal jointProbability) {
     this.jointProbability = jointProbability;
+  }
+
+  /**
+   * Gets the joint smoothed probability — product of the per-dimension Laplace-smoothed
+   * probabilities. Never zero, so it (and its log) stay finite even when a value was unseen.
+   *
+   * @return The joint smoothed probability.
+   */
+  @JsonView({ModelView.Persistent.class, ModelView.Public.class})
+  public BigDecimal getJointSmoothedProbability() {
+    return this.jointSmoothedProbability;
+  }
+
+  /**
+   * Sets the joint smoothed probability.
+   *
+   * @param jointSmoothedProbability New joint smoothed probability.
+   */
+  public void setJointSmoothedProbability(final BigDecimal jointSmoothedProbability) {
+    this.jointSmoothedProbability = jointSmoothedProbability;
+  }
+
+  /**
+   * Gets the natural log of the joint smoothed probability (Σ ln of the per-dimension smoothed
+   * probabilities) — the additive, finite log-likelihood of the attribute combination.
+   *
+   * @return The joint smoothed log probability.
+   */
+  @JsonView({ModelView.Persistent.class, ModelView.Public.class})
+  public BigDecimal getJointSmoothedLogProbability() {
+    return this.jointSmoothedLogProbability;
+  }
+
+  /**
+   * Sets the joint smoothed log probability.
+   *
+   * @param jointSmoothedLogProbability New joint smoothed log probability.
+   */
+  public void setJointSmoothedLogProbability(final BigDecimal jointSmoothedLogProbability) {
+    this.jointSmoothedLogProbability = jointSmoothedLogProbability;
   }
 
   /**

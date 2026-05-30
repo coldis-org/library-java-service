@@ -56,6 +56,12 @@ public class StatisticsEventSingleDimensionProbability implements Serializable {
   /** Standard deviation of the count across sampled periods. */
   private BigDecimal stdDevCount;
 
+  /** Number of distinct values observed for the dimension (vocabulary size used in smoothing). */
+  private Integer distinctValueCount;
+
+  /** Laplace-smoothed probability (pooled, never zero) so the joint and its log stay finite. */
+  private BigDecimal smoothedProbability;
+
   /** No arguments constructor. */
   public StatisticsEventSingleDimensionProbability() {}
 
@@ -304,6 +310,44 @@ public class StatisticsEventSingleDimensionProbability implements Serializable {
    */
   public void setStdDevCount(final BigDecimal stdDevCount) {
     this.stdDevCount = stdDevCount;
+  }
+
+  /**
+   * Gets the number of distinct values observed for the dimension (the smoothing vocabulary size).
+   *
+   * @return The distinct value count.
+   */
+  @JsonView({ModelView.Persistent.class, ModelView.Public.class})
+  public Integer getDistinctValueCount() {
+    return this.distinctValueCount;
+  }
+
+  /**
+   * Sets the distinct value count.
+   *
+   * @param distinctValueCount New distinct value count.
+   */
+  public void setDistinctValueCount(final Integer distinctValueCount) {
+    this.distinctValueCount = distinctValueCount;
+  }
+
+  /**
+   * Gets the Laplace-smoothed probability — pooled {@code (count + α) / (total + α·V)}, never zero.
+   *
+   * @return The smoothed probability.
+   */
+  @JsonView({ModelView.Persistent.class, ModelView.Public.class})
+  public BigDecimal getSmoothedProbability() {
+    return this.smoothedProbability;
+  }
+
+  /**
+   * Sets the smoothed probability.
+   *
+   * @param smoothedProbability New smoothed probability.
+   */
+  public void setSmoothedProbability(final BigDecimal smoothedProbability) {
+    this.smoothedProbability = smoothedProbability;
   }
 
   /**
