@@ -2,10 +2,8 @@ package org.coldis.library.service.statistics;
 
 import java.time.LocalDateTime;
 import java.util.List;
-import java.util.Optional;
 
-import org.springframework.data.jpa.repository.JpaRepository;
-import org.springframework.data.jpa.repository.Lock;
+import org.coldis.library.persistence.repository.PostgresJpaRepository;
 import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
@@ -13,38 +11,20 @@ import org.springframework.stereotype.Repository;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 
-import jakarta.persistence.LockModeType;
-
-/** Statistics event summary repository. */
+/**
+ * Statistics event summary repository. Row-locking and find-or-create helpers (e.g. {@code
+ * findByIdForUpdateWait}, {@code findByIdForUpdateOrCreate}) come from {@link PostgresJpaRepository};
+ * {@link #insertIfAbsent} is the idempotent insert they pair with.
+ */
 @Repository
 public interface StatisticsEventSummaryRepository
-    extends JpaRepository<StatisticsEventSummary, StatisticsEventSummaryKey> {
-
-  /**
-   * Finds the statistics event summary for update (with pessimistic write lock).
-   *
-   * @param context Context.
-   * @param dimensionName Dimension name.
-   * @param dateTime Date time.
-   * @return The statistics event summary, if found.
-   */
-  @Lock(LockModeType.PESSIMISTIC_WRITE)
-  @Transactional(propagation = Propagation.REQUIRED, timeout = 11)
-  @Query(
-      "SELECT summary FROM StatisticsEventSummary summary "
-          + "WHERE context = :context "
-          + "AND dimensionName = :dimensionName "
-          + "AND dateTime = :dateTime")
-  Optional<StatisticsEventSummary> findByIdForUpdate(
-      @Param("context") String context,
-      @Param("dimensionName") String dimensionName,
-      @Param("dateTime") LocalDateTime dateTime);
+    extends PostgresJpaRepository<StatisticsEventSummary, StatisticsEventSummaryKey> {
 
   /**
    * Atomically inserts a summary row if absent, no-op if a row with the same composite key already
-   * exists. Replaces the {@code find → REQUIRES_NEW create → catch DataIntegrityViolation}
-   * pattern: a single round-trip handled by Postgres' {@code ON CONFLICT DO NOTHING}, with no
-   * need for nested transactions or exception bouncing.
+   * exists. Pairs with {@code findByIdForUpdateOrCreate} as its idempotent insert: a single
+   * round-trip handled by Postgres' {@code ON CONFLICT DO NOTHING}, with no nested transactions or
+   * exception bouncing.
    *
    * <p>Native SQL bypasses {@code EntityTimestampListener}, so {@code created_at} / {@code
    * updated_at} are set inline via Postgres {@code now()}.

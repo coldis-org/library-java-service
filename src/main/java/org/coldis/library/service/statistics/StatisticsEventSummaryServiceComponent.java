@@ -17,7 +17,6 @@ import java.util.Set;
 import java.util.stream.Stream;
 
 import org.coldis.library.exception.BusinessException;
-import org.coldis.library.exception.IntegrationException;
 import org.coldis.library.helper.BufferedReducer;
 import org.coldis.library.model.SimpleMessage;
 import org.slf4j.Logger;
@@ -276,7 +275,9 @@ public class StatisticsEventSummaryServiceComponent {
 			final Boolean forUpdate) throws BusinessException {
 		final LocalDateTime truncatedDateTime = this.statisticsContextConfigurationServiceComponent.truncateDateTime(id.getContext(), id.getDateTime());
 		final StatisticsEventSummary summary = Boolean.TRUE.equals(forUpdate)
-				? this.statisticsEventSummaryRepository.findByIdForUpdate(id.getContext(), id.getDimensionName(), truncatedDateTime).orElse(null)
+				? this.statisticsEventSummaryRepository
+						.findByIdForUpdateWait(new StatisticsEventSummaryKey(id.getContext(), id.getDimensionName(), truncatedDateTime), Duration.ofSeconds(11))
+						.orElse(null)
 				: this.statisticsEventSummaryRepository.findById(new StatisticsEventSummaryKey(id.getContext(), id.getDimensionName(), truncatedDateTime))
 						.orElse(null);
 		if (summary == null) {
@@ -303,15 +304,9 @@ public class StatisticsEventSummaryServiceComponent {
 			final String context,
 			final String dimensionName,
 			final LocalDateTime dateTime) {
-		StatisticsEventSummary actual = this.statisticsEventSummaryRepository.findByIdForUpdate(context, dimensionName, dateTime).orElse(null);
-		if (actual == null) {
-			this.statisticsEventSummaryRepository.insertIfAbsent(context, dimensionName, dateTime);
-			actual = this.statisticsEventSummaryRepository.findByIdForUpdate(context, dimensionName, dateTime).orElse(null);
-		}
-		if (actual == null) {
-			throw new IntegrationException(new SimpleMessage("statistics.event.summary.creation.error"));
-		}
-		return actual;
+		return this.statisticsEventSummaryRepository.findByIdForUpdateOrCreate(
+				new StatisticsEventSummaryKey(context, dimensionName, dateTime),
+				() -> this.statisticsEventSummaryRepository.insertIfAbsent(context, dimensionName, dateTime));
 	}
 
 	/**

@@ -3,6 +3,7 @@ package org.coldis.library.service.statistics;
 import jakarta.annotation.PreDestroy;
 import java.io.Serializable;
 import java.math.BigDecimal;
+import java.time.Duration;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -115,9 +116,7 @@ public class StatisticsEventServiceComponent {
       throws BusinessException {
     final StatisticsEvent statisticsEvent =
         Boolean.TRUE.equals(forUpdate)
-            ? this.statisticsEventRepository
-                .findByIdForUpdate(id.getContext(), id.getOwnerKey(), id.getDimensionName())
-                .orElse(null)
+            ? this.statisticsEventRepository.findByIdForUpdateWait(id, Duration.ofSeconds(11)).orElse(null)
             : this.statisticsEventRepository.findById(id).orElse(null);
     if (statisticsEvent == null) {
       throw new BusinessException(
