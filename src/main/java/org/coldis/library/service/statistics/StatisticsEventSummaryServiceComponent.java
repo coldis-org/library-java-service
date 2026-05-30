@@ -1,20 +1,12 @@
 package org.coldis.library.service.statistics;
 
 import java.math.BigDecimal;
-import java.math.MathContext;
-import java.math.RoundingMode;
 import java.time.Duration;
 import java.time.LocalDateTime;
 import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
-import java.util.Comparator;
-import java.util.HashMap;
-import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
-import java.util.Objects;
-import java.util.Set;
-import java.util.stream.Stream;
 
 import org.coldis.library.exception.BusinessException;
 import org.coldis.library.helper.BufferedReducer;
@@ -48,15 +40,6 @@ public class StatisticsEventSummaryServiceComponent {
 
 	/** Logger. */
 	private static final Logger LOGGER = LoggerFactory.getLogger(StatisticsEventSummaryServiceComponent.class);
-
-	/** Math context for BigDecimal operations. */
-	private static final MathContext MATH_CONTEXT = MathContext.DECIMAL64;
-
-	/** Maximum total window span (6 months). */
-	private static final Duration MAX_TOTAL_WINDOW = Duration.ofDays(183);
-
-	/** Default additive (Laplace) smoothing factor for probability estimates. */
-	private static final double DEFAULT_SMOOTHING_FACTOR = 1.0;
 
 	/** Statistics context configuration service component. */
 	@Autowired
@@ -136,127 +119,6 @@ public class StatisticsEventSummaryServiceComponent {
 				this.applyDelta(delta);
 			}
 		}
-	}
-
-	// ---- Validation helpers ----
-
-	/**
-	 * Converts a (size, unit) pair to an approximate number of days.
-	 *
-	 * @param  size Number of units.
-	 * @param  unit Chrono unit.
-	 * @return      Approximate number of days.
-	 */
-	private static long toDays(
-			final long size,
-			final ChronoUnit unit) {
-		return switch (unit) {
-			case HOURS -> Math.max(size / 24, 1);
-			case DAYS -> size;
-			case WEEKS -> size * 7;
-			case MONTHS -> size * 31;
-			default -> size;
-		};
-	}
-
-	/**
-	 * Validates that the total window (windowSize × windowUnit + steps × stepUnit)
-	 * does not exceed the maximum allowed span.
-	 *
-	 * @param  windowUnit        Unit defining the window size.
-	 * @param  windowSize        Number of window units per window.
-	 * @param  stepUnit          Unit defining how far back each sample is.
-	 * @param  steps             Number of periods to sample.
-	 * @throws BusinessException If the total window exceeds the maximum.
-	 */
-	private static void validateTotalWindow(
-			final ChronoUnit windowUnit,
-			final Integer windowSize,
-			final ChronoUnit stepUnit,
-			final Integer steps) throws BusinessException {
-		final long totalDays = StatisticsEventSummaryServiceComponent.toDays(windowSize, windowUnit)
-				+ StatisticsEventSummaryServiceComponent.toDays(steps, stepUnit);
-		if (totalDays > StatisticsEventSummaryServiceComponent.MAX_TOTAL_WINDOW.toDays()) {
-			throw new BusinessException(new SimpleMessage("statistics.event.summary.window.too.large"), HttpStatus.BAD_REQUEST.value());
-		}
-	}
-
-	// ---- Math helpers ----
-
-	/**
-	 * Computes the average of an array of BigDecimal values.
-	 *
-	 * @param  values Values.
-	 * @return        The average.
-	 */
-	private static BigDecimal computeAverage(
-			final BigDecimal[] values) {
-		if (values.length == 0) {
-			return BigDecimal.ZERO;
-		}
-		BigDecimal sum = BigDecimal.ZERO;
-		for (final BigDecimal value : values) {
-			sum = sum.add(value, StatisticsEventSummaryServiceComponent.MATH_CONTEXT);
-		}
-		return sum.divide(BigDecimal.valueOf(values.length), StatisticsEventSummaryServiceComponent.MATH_CONTEXT);
-	}
-
-	/**
-	 * Computes the population standard deviation given pre-computed mean.
-	 *
-	 * @param  values Values.
-	 * @param  mean   Pre-computed mean.
-	 * @return        The standard deviation.
-	 */
-	private static BigDecimal computeStdDev(
-			final BigDecimal[] values,
-			final BigDecimal mean) {
-		if (values.length == 0) {
-			return BigDecimal.ZERO;
-		}
-		BigDecimal sumSquaredDiff = BigDecimal.ZERO;
-		for (final BigDecimal value : values) {
-			final BigDecimal diff = value.subtract(mean, StatisticsEventSummaryServiceComponent.MATH_CONTEXT);
-			sumSquaredDiff = sumSquaredDiff.add(diff.multiply(diff, StatisticsEventSummaryServiceComponent.MATH_CONTEXT),
-					StatisticsEventSummaryServiceComponent.MATH_CONTEXT);
-		}
-		final BigDecimal variance = sumSquaredDiff.divide(BigDecimal.valueOf(values.length), StatisticsEventSummaryServiceComponent.MATH_CONTEXT);
-		return BigDecimal.valueOf(Math.sqrt(variance.doubleValue())).round(StatisticsEventSummaryServiceComponent.MATH_CONTEXT);
-	}
-
-	/**
-	 * Computes the z-score (number of standard deviations from the mean). Returns
-	 * null if stdDev is zero.
-	 *
-	 * @param  observed Observed value.
-	 * @param  mean     Mean.
-	 * @param  stdDev   Standard deviation.
-	 * @return          The z-score, or null if stdDev is zero.
-	 */
-	private static BigDecimal computeZScore(
-			final BigDecimal observed,
-			final BigDecimal mean,
-			final BigDecimal stdDev) {
-		return stdDev.compareTo(BigDecimal.ZERO) > 0 ? observed.subtract(mean, StatisticsEventSummaryServiceComponent.MATH_CONTEXT).divide(stdDev,
-				StatisticsEventSummaryServiceComponent.MATH_CONTEXT) : BigDecimal.ZERO;
-	}
-
-	/**
-	 * Laplace (additive) smoothed probability {@code (pooledValueCount + α) / (pooledTotal + α·V)},
-	 * where {@code V = distinctValueCount} and {@code α = smoothingFactor}. Never zero, so the joint
-	 * probability and its log stay finite even for a value unseen in the sampled periods.
-	 */
-	private static BigDecimal laplaceSmoothedProbability(
-			final BigDecimal pooledValueCount,
-			final BigDecimal pooledTotal,
-			final int distinctValueCount,
-			final double smoothingFactor) {
-		final BigDecimal alpha = BigDecimal.valueOf(smoothingFactor);
-		final BigDecimal numerator = pooledValueCount.add(alpha, StatisticsEventSummaryServiceComponent.MATH_CONTEXT);
-		final BigDecimal denominator = pooledTotal.add(
-				alpha.multiply(BigDecimal.valueOf(distinctValueCount), StatisticsEventSummaryServiceComponent.MATH_CONTEXT),
-				StatisticsEventSummaryServiceComponent.MATH_CONTEXT);
-		return numerator.divide(denominator, StatisticsEventSummaryServiceComponent.MATH_CONTEXT);
 	}
 
 	// ---- Find / create / update ----
@@ -364,7 +226,7 @@ public class StatisticsEventSummaryServiceComponent {
 	 * @return               The list of summaries in the period.
 	 */
 	@Cacheable(
-			cacheManager = "minutesExpirationLocalCacheManager",
+			cacheManager = "secondsExpirationLocalCacheManager",
 			value = "StatisticsEventSummaryServiceComponent.findSummariesByPeriod"
 	)
 	@Transactional(
@@ -424,200 +286,6 @@ public class StatisticsEventSummaryServiceComponent {
 		return merged;
 	}
 
-	// ---- Historical aggregation ----
-
-	/** Aggregated statistics for one metric across historical periods. */
-	private static class MetricAggregation {
-		final List<BigDecimal> totals = new ArrayList<>();
-		final List<Map<String, BigDecimal>> allValues = new ArrayList<>();
-		BigDecimal avgTotal;
-		BigDecimal stdDevTotal;
-		final Map<String, BigDecimal> avgValues = new HashMap<>();
-		final Map<String, BigDecimal> stdDevValues = new HashMap<>();
-		final Map<String, BigDecimal> avgRatios = new HashMap<>();
-		final Map<String, BigDecimal> stdDevRatios = new HashMap<>();
-	}
-
-	/**
-	 * Internal holder for aggregated period data used by comparison and probability
-	 * methods.
-	 */
-	private static class PeriodAggregation {
-		final MetricAggregation counts = new MetricAggregation();
-		final MetricAggregation weights = new MetricAggregation();
-		final Set<String> allKeys = new HashSet<>();
-	}
-
-	/** Converts a Map&lt;String, Long&gt; to Map&lt;String, BigDecimal&gt;. */
-	private static Map<String, BigDecimal> toBigDecimalMap(
-			final Map<String, Long> longMap) {
-		final Map<String, BigDecimal> result = new HashMap<>(longMap.size());
-		longMap.forEach((
-				key,
-				value) -> result.put(key, BigDecimal.valueOf(value)));
-		return result;
-	}
-
-	/**
-	 * Computes avg/stdDev for total, per-value, and per-ratio on a single
-	 * MetricAggregation.
-	 */
-	private static void computeMetricStats(
-			final MetricAggregation metric,
-			final Set<String> allKeys) {
-		final int size = metric.totals.size();
-		final BigDecimal[] totalValues = metric.totals.toArray(new BigDecimal[0]);
-		metric.avgTotal = StatisticsEventSummaryServiceComponent.computeAverage(totalValues);
-		metric.stdDevTotal = StatisticsEventSummaryServiceComponent.computeStdDev(totalValues, metric.avgTotal);
-		for (final String key : allKeys) {
-			final BigDecimal[] values = new BigDecimal[size];
-			final BigDecimal[] ratios = new BigDecimal[size];
-			for (int sampleIndex = 0; sampleIndex < size; sampleIndex++) {
-				values[sampleIndex] = metric.allValues.get(sampleIndex).getOrDefault(key, BigDecimal.ZERO);
-				final BigDecimal total = metric.totals.get(sampleIndex);
-				ratios[sampleIndex] = total.compareTo(BigDecimal.ZERO) > 0
-						? values[sampleIndex].divide(total, StatisticsEventSummaryServiceComponent.MATH_CONTEXT)
-						: BigDecimal.ZERO;
-			}
-			final BigDecimal avgVal = StatisticsEventSummaryServiceComponent.computeAverage(values);
-			metric.avgValues.put(key, avgVal);
-			metric.stdDevValues.put(key, StatisticsEventSummaryServiceComponent.computeStdDev(values, avgVal));
-			final BigDecimal avgRatio = StatisticsEventSummaryServiceComponent.computeAverage(ratios);
-			metric.avgRatios.put(key, avgRatio);
-			metric.stdDevRatios.put(key, StatisticsEventSummaryServiceComponent.computeStdDev(ratios, avgRatio));
-		}
-	}
-
-	/**
-	 * Populates reference ratios on a MetricComparisonStats from its
-	 * referenceTotal/Values.
-	 */
-	private static void populateReferenceRatios(
-			final MetricComparisonStats stats) {
-		if ((stats.getReferenceTotal() != null) && (stats.getReferenceTotal().compareTo(BigDecimal.ZERO) > 0) && (stats.getReferenceValues() != null)) {
-			final Map<String, BigDecimal> ratios = new HashMap<>();
-			stats.getReferenceValues().forEach((
-					key,
-					value) -> ratios.put(key, value.divide(stats.getReferenceTotal(), StatisticsEventSummaryServiceComponent.MATH_CONTEXT)));
-			stats.setReferenceRatios(ratios);
-		}
-	}
-
-	/**
-	 * Computes z-scores for a MetricComparisonStats against its MetricAggregation.
-	 */
-	private static void populateZScores(
-			final MetricComparisonStats stats,
-			final MetricAggregation agg,
-			final Set<String> allKeys) {
-		if (stats.getReferenceTotal() == null) {
-			return;
-		}
-		stats.setZScoreTotal(StatisticsEventSummaryServiceComponent.computeZScore(stats.getReferenceTotal(), agg.avgTotal, agg.stdDevTotal));
-		if ((stats.getReferenceValues() != null) && !stats.getReferenceValues().isEmpty()) {
-			final Map<String, BigDecimal> zScoreValues = new HashMap<>();
-			for (final String key : allKeys) {
-				zScoreValues.put(key, StatisticsEventSummaryServiceComponent.computeZScore(stats.getReferenceValues().getOrDefault(key, BigDecimal.ZERO),
-						agg.avgValues.getOrDefault(key, BigDecimal.ZERO), agg.stdDevValues.getOrDefault(key, BigDecimal.ZERO)));
-			}
-			stats.setZScoreValues(zScoreValues);
-		}
-		if ((stats.getReferenceRatios() != null) && !stats.getReferenceRatios().isEmpty()) {
-			final Map<String, BigDecimal> zScoreRatios = new HashMap<>();
-			for (final String key : allKeys) {
-				zScoreRatios.put(key, StatisticsEventSummaryServiceComponent.computeZScore(stats.getReferenceRatios().getOrDefault(key, BigDecimal.ZERO),
-						agg.avgRatios.getOrDefault(key, BigDecimal.ZERO), agg.stdDevRatios.getOrDefault(key, BigDecimal.ZERO)));
-			}
-			stats.setZScoreRatios(zScoreRatios);
-		}
-	}
-
-	/**
-	 * Populates a MetricComparisonStats from its aggregation: copies avg/stdDev,
-	 * computes reference ratios, and computes z-scores.
-	 */
-	private static void populateMetricComparisonStats(
-			final MetricComparisonStats stats,
-			final MetricAggregation agg,
-			final Set<String> allKeys) {
-		stats.setAverageTotal(agg.avgTotal);
-		stats.setStdDevTotal(agg.stdDevTotal);
-		stats.setAverageValues(agg.avgValues);
-		stats.setStdDevValues(agg.stdDevValues);
-		stats.setAverageRatios(agg.avgRatios);
-		stats.setStdDevRatios(agg.stdDevRatios);
-		StatisticsEventSummaryServiceComponent.populateReferenceRatios(stats);
-		StatisticsEventSummaryServiceComponent.populateZScores(stats, agg, allKeys);
-	}
-
-	/**
-	 * Aggregates summaries for a series of historical windows and computes
-	 * avg/stdDev for total counts, value counts, and value ratios.
-	 *
-	 * @param  context       Context.
-	 * @param  dimensionName Dimension name.
-	 * @param  windowStarts  List of window start times.
-	 * @param  windowEnds    List of window end times (matching windowStarts by
-	 *                           index).
-	 * @return               The aggregation, or null if no periods had data.
-	 */
-	private PeriodAggregation aggregatePeriods(
-			final String context,
-			final String dimensionName,
-			final List<LocalDateTime> windowStarts,
-			final List<LocalDateTime> windowEnds) {
-		final PeriodAggregation agg = new PeriodAggregation();
-		for (int windowIndex = 0; windowIndex < windowStarts.size(); windowIndex++) {
-			final List<StatisticsEventSummary> summaries = this.findSummariesByPeriod(context, dimensionName, windowStarts.get(windowIndex),
-					windowEnds.get(windowIndex));
-			if ((summaries != null) && !summaries.isEmpty()) {
-				long total = 0L;
-				BigDecimal totalWeight = BigDecimal.ZERO;
-				final Map<String, Long> mergedCounts = new HashMap<>();
-				final Map<String, BigDecimal> mergedWeights = new HashMap<>();
-				for (final StatisticsEventSummary summary : summaries) {
-					total += summary.getTotalCount();
-					totalWeight = totalWeight.add(summary.getTotalWeight());
-					summary.getValueCounts().forEach((
-							key,
-							value) -> mergedCounts.merge(key, value, Long::sum));
-					summary.getValueWeights().forEach((
-							key,
-							value) -> mergedWeights.merge(key, value, BigDecimal::add));
-				}
-				agg.counts.totals.add(BigDecimal.valueOf(total));
-				agg.counts.allValues.add(StatisticsEventSummaryServiceComponent.toBigDecimalMap(mergedCounts));
-				agg.weights.totals.add(totalWeight);
-				agg.weights.allValues.add(mergedWeights);
-				agg.allKeys.addAll(mergedCounts.keySet());
-			}
-		}
-		if (agg.counts.totals.isEmpty()) {
-			return null;
-		}
-		StatisticsEventSummaryServiceComponent.computeMetricStats(agg.counts, agg.allKeys);
-		StatisticsEventSummaryServiceComponent.computeMetricStats(agg.weights, agg.allKeys);
-		return agg;
-	}
-
-	/**
-	 * Computes window start/end pairs for historical periods stepping back from a
-	 * reference point. The reference window is NOT included.
-	 */
-	private void computeHistoricalWindows(
-			final LocalDateTime refStart,
-			final LocalDateTime refEnd,
-			final ChronoUnit stepUnit,
-			final int steps,
-			final long truncationMinutes,
-			final List<LocalDateTime> starts,
-			final List<LocalDateTime> ends) {
-		for (int stepIndex = 1; stepIndex <= steps; stepIndex++) {
-			starts.add(StatisticsEvent.truncateDateTime(refStart.minus(stepIndex, stepUnit), truncationMinutes));
-			ends.add(StatisticsEvent.truncateDateTime(refEnd.minus(stepIndex, stepUnit), truncationMinutes));
-		}
-	}
-
 	/**
 	 * Compares a reference window against historical periods, providing averages,
 	 * standard deviations, value ratios, and z-scores.
@@ -636,7 +304,7 @@ public class StatisticsEventSummaryServiceComponent {
 	 */
 
 	@Cacheable(
-			cacheManager = "secondsExpirationLocalCacheManager",
+			cacheManager = "minutesExpirationLocalCacheManager",
 			value = "StatisticsEventSummaryServiceComponent.compareByPeriod"
 	)
 	private StatisticsEventSummaryComparison compareByPeriodCached(
@@ -648,61 +316,18 @@ public class StatisticsEventSummaryServiceComponent {
 			final ChronoUnit stepUnit,
 			final Integer steps) throws BusinessException {
 		final long truncationMinutes = this.statisticsContextConfigurationServiceComponent.getTruncationMinutes(context);
-		final LocalDateTime refStart = referenceDateTime; // already truncated by caller
-		final LocalDateTime refEnd = StatisticsEvent.truncateDateTime(referenceDateTime.plus(windowSize, windowUnit), truncationMinutes);
-
-		// Aggregates historical periods (excluding reference).
+		final LocalDateTime referenceStart = referenceDateTime; // already truncated by caller
+		final LocalDateTime referenceEnd = StatisticsEvent.truncateDateTime(referenceDateTime.plus(windowSize, windowUnit), truncationMinutes);
 		final List<LocalDateTime> starts = new ArrayList<>();
 		final List<LocalDateTime> ends = new ArrayList<>();
-		this.computeHistoricalWindows(refStart, refEnd, stepUnit, steps, truncationMinutes, starts, ends);
-		final PeriodAggregation agg = this.aggregatePeriods(context, dimensionName, starts, ends);
-		if (agg == null) {
-			throw new BusinessException(new SimpleMessage("statistics.event.summary.comparison.nodata"), HttpStatus.NOT_FOUND.value());
+		StatisticsEventSummaryHelper.historicalWindows(referenceStart, referenceEnd, stepUnit, steps, truncationMinutes, starts, ends);
+		final List<List<StatisticsEventSummary>> perWindowSummaries = new ArrayList<>();
+		for (int windowIndex = 0; windowIndex < starts.size(); windowIndex++) {
+			perWindowSummaries.add(this.findSummariesByPeriod(context, dimensionName, starts.get(windowIndex), ends.get(windowIndex)));
 		}
-
-		// Queries reference window.
-		final List<StatisticsEventSummary> refSummaries = this.findSummariesByPeriod(context, dimensionName, refStart, refEnd);
-
-		// Builds the result.
-		final StatisticsEventSummaryComparison comparison = new StatisticsEventSummaryComparison();
-		comparison.setContext(context);
-		comparison.setDimensionName(dimensionName);
-		comparison.setReferenceDateTime(refStart);
-		comparison.setWindowUnit(windowUnit);
-		comparison.setWindowSize(windowSize);
-		comparison.setStepUnit(stepUnit);
-		comparison.setSteps(steps);
-		comparison.setSampleSize(agg.counts.totals.size());
-
-		// Populates reference values from the reference-window summaries.
-		final MetricComparisonStats countStats = comparison.getCountStats();
-		final MetricComparisonStats weightStats = comparison.getWeightStats();
-		if ((refSummaries != null) && !refSummaries.isEmpty()) {
-			BigDecimal refTotalCount = BigDecimal.ZERO;
-			BigDecimal refTotalWeight = BigDecimal.ZERO;
-			final Map<String, BigDecimal> refValueCounts = new HashMap<>();
-			final Map<String, BigDecimal> refValueWeights = new HashMap<>();
-			for (final StatisticsEventSummary summary : refSummaries) {
-				refTotalCount = refTotalCount.add(BigDecimal.valueOf(summary.getTotalCount()));
-				refTotalWeight = refTotalWeight.add(summary.getTotalWeight());
-				summary.getValueCounts().forEach((
-						key,
-						value) -> refValueCounts.merge(key, BigDecimal.valueOf(value), BigDecimal::add));
-				summary.getValueWeights().forEach((
-						key,
-						value) -> refValueWeights.merge(key, value, BigDecimal::add));
-			}
-			countStats.setReferenceTotal(refTotalCount);
-			countStats.setReferenceValues(refValueCounts);
-			weightStats.setReferenceTotal(refTotalWeight);
-			weightStats.setReferenceValues(refValueWeights);
-		}
-
-		// Populates avg/stdDev, reference ratios, and z-scores for both metrics.
-		StatisticsEventSummaryServiceComponent.populateMetricComparisonStats(countStats, agg.counts, agg.allKeys);
-		StatisticsEventSummaryServiceComponent.populateMetricComparisonStats(weightStats, agg.weights, agg.allKeys);
-
-		return comparison;
+		final List<StatisticsEventSummary> referenceSummaries = this.findSummariesByPeriod(context, dimensionName, referenceStart, referenceEnd);
+		return StatisticsEventSummaryHelper.computeComparison(referenceSummaries, perWindowSummaries, context, dimensionName, referenceStart, windowUnit,
+				windowSize, stepUnit, steps);
 	}
 
 	/**
@@ -720,16 +345,86 @@ public class StatisticsEventSummaryServiceComponent {
 			final Integer windowSize,
 			final ChronoUnit stepUnit,
 			final Integer steps) throws BusinessException {
-		StatisticsEventSummaryServiceComponent.validateTotalWindow(windowUnit, windowSize, stepUnit, steps);
+		StatisticsEventSummaryHelper.validateTotalWindow(windowUnit, windowSize, stepUnit, steps);
 		final long truncationMinutes = this.statisticsContextConfigurationServiceComponent.getTruncationMinutes(context);
 		final LocalDateTime truncatedReferenceDateTime = StatisticsEvent.truncateDateTime(referenceDateTime, truncationMinutes);
 		return this.compareByPeriodCached(context, dimensionName, truncatedReferenceDateTime, windowUnit, windowSize, stepUnit, steps);
 	}
 
 	/**
-	 * Computes the probability of a single dimension value based on historical
-	 * distribution. The reference period is included in the computation (unlike
-	 * comparison, which excludes it).
+	 * Builds the value-independent per-dimension distribution over the sampled period (reference
+	 * included). Cached on the value-independent key {@code (context, dimension, reference, window)}
+	 * so every applicant value evaluated against the same population shares one aggregation — the
+	 * heavy fetch-and-aggregate is paid once per period, not per value.
+	 *
+	 * @param  context           Context.
+	 * @param  dimensionName     Dimension name.
+	 * @param  referenceDateTime Reference date time (already truncated by caller; included in sample).
+	 * @param  windowUnit        Unit defining the window size.
+	 * @param  windowSize        Number of window units per window.
+	 * @param  stepUnit          Unit defining how far back each sample is.
+	 * @param  steps             Number of periods to sample (including reference).
+	 * @return                   The dimension distribution.
+	 * @throws BusinessException If no data is found in any of the sampled periods.
+	 */
+	@Cacheable(
+			cacheManager = "minutesExpirationLocalCacheManager",
+			value = "StatisticsEventSummaryServiceComponent.singleDimensionDistributionByPeriod"
+	)
+	private StatisticsEventDimensionDistribution singleDimensionDistributionByPeriodCached(
+			final String context,
+			final String dimensionName,
+			final LocalDateTime referenceDateTime,
+			final ChronoUnit windowUnit,
+			final Integer windowSize,
+			final ChronoUnit stepUnit,
+			final Integer steps) throws BusinessException {
+		final long truncationMinutes = this.statisticsContextConfigurationServiceComponent.getTruncationMinutes(context);
+		final LocalDateTime referenceStart = referenceDateTime; // already truncated by caller
+		final LocalDateTime referenceEnd = StatisticsEvent.truncateDateTime(referenceDateTime.plus(windowSize, windowUnit), truncationMinutes);
+		final List<LocalDateTime> starts = new ArrayList<>();
+		final List<LocalDateTime> ends = new ArrayList<>();
+		StatisticsEventSummaryHelper.referenceInclusiveWindows(referenceStart, referenceEnd, stepUnit, steps, truncationMinutes, starts, ends);
+		final List<List<StatisticsEventSummary>> perWindowSummaries = new ArrayList<>();
+		for (int windowIndex = 0; windowIndex < starts.size(); windowIndex++) {
+			perWindowSummaries.add(this.findSummariesByPeriod(context, dimensionName, starts.get(windowIndex), ends.get(windowIndex)));
+		}
+		return StatisticsEventSummaryHelper.computeDistribution(perWindowSummaries, context, dimensionName, referenceStart, windowUnit, windowSize, stepUnit,
+				steps);
+	}
+
+	/**
+	 * Truncates {@code referenceDateTime} before delegating to the cached implementation so the cache
+	 * key is always the effective (post-truncation) datetime.
+	 *
+	 * @param  context           Context.
+	 * @param  dimensionName     Dimension name.
+	 * @param  referenceDateTime Reference date time (included in the sample).
+	 * @param  windowUnit        Unit defining the window size.
+	 * @param  windowSize        Number of window units per window.
+	 * @param  stepUnit          Unit defining how far back each sample is.
+	 * @param  steps             Number of periods to sample (including reference).
+	 * @return                   The dimension distribution.
+	 * @throws BusinessException If no data is found in any of the sampled periods.
+	 */
+	public StatisticsEventDimensionDistribution singleDimensionDistributionByPeriod(
+			final String context,
+			final String dimensionName,
+			final LocalDateTime referenceDateTime,
+			final ChronoUnit windowUnit,
+			final Integer windowSize,
+			final ChronoUnit stepUnit,
+			final Integer steps) throws BusinessException {
+		StatisticsEventSummaryHelper.validateTotalWindow(windowUnit, windowSize, stepUnit, steps);
+		final long truncationMinutes = this.statisticsContextConfigurationServiceComponent.getTruncationMinutes(context);
+		final LocalDateTime truncatedReferenceDateTime = StatisticsEvent.truncateDateTime(referenceDateTime, truncationMinutes);
+		return this.singleDimensionDistributionByPeriodCached(context, dimensionName, truncatedReferenceDateTime, windowUnit, windowSize, stepUnit, steps);
+	}
+
+	/**
+	 * Computes the probability of a single dimension value based on historical distribution (the
+	 * reference period is included, unlike comparison). A cheap lookup-plus-Laplace derivation on top
+	 * of the cached {@link #singleDimensionDistributionByPeriod}.
 	 *
 	 * @param  context           Context.
 	 * @param  dimension         Dimension (name and value to evaluate).
@@ -738,76 +433,8 @@ public class StatisticsEventSummaryServiceComponent {
 	 * @param  windowSize        Number of window units per window.
 	 * @param  stepUnit          Unit defining how far back each sample is.
 	 * @param  steps             Number of periods to sample (including reference).
-	 * @return                   The single-dimension probability analysis for the
-	 *                           dimension value.
+	 * @return                   The single-dimension probability for the dimension value.
 	 * @throws BusinessException If no data is found in any of the sampled periods.
-	 */
-
-	@Cacheable(
-			cacheManager = "secondsExpirationLocalCacheManager",
-			value = "StatisticsEventSummaryServiceComponent.singleDimensionProbabilityByPeriod"
-	)
-	private StatisticsEventSingleDimensionProbability singleDimensionProbabilityByPeriodCached(
-			final String context,
-			final StatisticsValuedEventDimension dimension,
-			final LocalDateTime referenceDateTime,
-			final ChronoUnit windowUnit,
-			final Integer windowSize,
-			final ChronoUnit stepUnit,
-			final Integer steps,
-			final double smoothingFactor) throws BusinessException {
-		final long truncationMinutes = this.statisticsContextConfigurationServiceComponent.getTruncationMinutes(context);
-		final String dimensionName = dimension.getDimensionName();
-		final String dimensionValue = dimension.getDimensionValue();
-		final LocalDateTime refStart = referenceDateTime; // already truncated by caller
-		final LocalDateTime refEnd = StatisticsEvent.truncateDateTime(referenceDateTime.plus(windowSize, windowUnit), truncationMinutes);
-
-		// Builds windows including the reference and stepping back.
-		final List<LocalDateTime> starts = new ArrayList<>();
-		final List<LocalDateTime> ends = new ArrayList<>();
-		for (int stepIndex = 0; stepIndex < steps; stepIndex++) {
-			starts.add(StatisticsEvent.truncateDateTime(refStart.minus(stepIndex, stepUnit), truncationMinutes));
-			ends.add(StatisticsEvent.truncateDateTime(refEnd.minus(stepIndex, stepUnit), truncationMinutes));
-		}
-
-		final PeriodAggregation agg = this.aggregatePeriods(context, dimensionName, starts, ends);
-		if (agg == null) {
-			throw new BusinessException(new SimpleMessage("statistics.event.probability.nodata"), HttpStatus.NOT_FOUND.value());
-		}
-
-		final StatisticsEventSingleDimensionProbability probability = new StatisticsEventSingleDimensionProbability();
-		probability.setContext(context);
-		probability.setDimensionName(dimensionName);
-		probability.setDimensionValue(dimensionValue);
-		probability.setReferenceDateTime(refStart);
-		probability.setWindowUnit(windowUnit);
-		probability.setWindowSize(windowSize);
-		probability.setStepUnit(stepUnit);
-		probability.setSteps(steps);
-		probability.setSampleSize(agg.counts.totals.size());
-		probability.setProbability(agg.counts.avgRatios.getOrDefault(dimensionValue, BigDecimal.ZERO));
-		probability.setStdDevProbability(agg.counts.stdDevRatios.getOrDefault(dimensionValue, BigDecimal.ZERO));
-		probability.setAverageCount(agg.counts.avgValues.getOrDefault(dimensionValue, BigDecimal.ZERO));
-		probability.setStdDevCount(agg.counts.stdDevValues.getOrDefault(dimensionValue, BigDecimal.ZERO));
-		BigDecimal pooledTotal = BigDecimal.ZERO;
-		for (final BigDecimal windowTotal : agg.counts.totals) {
-			pooledTotal = pooledTotal.add(windowTotal, StatisticsEventSummaryServiceComponent.MATH_CONTEXT);
-		}
-		BigDecimal pooledValueCount = BigDecimal.ZERO;
-		for (final Map<String, BigDecimal> windowValues : agg.counts.allValues) {
-			pooledValueCount = pooledValueCount.add(windowValues.getOrDefault(dimensionValue, BigDecimal.ZERO), StatisticsEventSummaryServiceComponent.MATH_CONTEXT);
-		}
-		final int distinctValueCount = agg.allKeys.size();
-		probability.setDistinctValueCount(distinctValueCount);
-		probability.setSmoothedProbability(
-				StatisticsEventSummaryServiceComponent.laplaceSmoothedProbability(pooledValueCount, pooledTotal, distinctValueCount, smoothingFactor));
-		return probability;
-	}
-
-	/**
-	 * Truncates {@code referenceDateTime} before delegating to the cached
-	 * implementation so the cache key is always the effective (post-truncation)
-	 * datetime.
 	 */
 	public StatisticsEventSingleDimensionProbability singleDimensionProbabilityByPeriod(
 			final String context,
@@ -817,11 +444,10 @@ public class StatisticsEventSummaryServiceComponent {
 			final Integer windowSize,
 			final ChronoUnit stepUnit,
 			final Integer steps) throws BusinessException {
-		StatisticsEventSummaryServiceComponent.validateTotalWindow(windowUnit, windowSize, stepUnit, steps);
-		final long truncationMinutes = this.statisticsContextConfigurationServiceComponent.getTruncationMinutes(context);
-		final LocalDateTime truncatedReferenceDateTime = StatisticsEvent.truncateDateTime(referenceDateTime, truncationMinutes);
-		return this.singleDimensionProbabilityByPeriodCached(context, dimension, truncatedReferenceDateTime, windowUnit, windowSize, stepUnit, steps,
-				StatisticsEventSummaryServiceComponent.DEFAULT_SMOOTHING_FACTOR);
+		final StatisticsEventDimensionDistribution distribution = this.singleDimensionDistributionByPeriod(context, dimension.getDimensionName(),
+				referenceDateTime, windowUnit, windowSize, stepUnit, steps);
+		return StatisticsEventSummaryHelper.singleDimensionProbability(distribution, dimension.getDimensionValue(),
+				StatisticsEventSummaryHelper.DEFAULT_SMOOTHING_FACTOR);
 	}
 
 	/**
@@ -841,11 +467,6 @@ public class StatisticsEventSummaryServiceComponent {
 	 *                           and individual probabilities.
 	 * @throws BusinessException If no data is found for any dimension.
 	 */
-
-	@Cacheable(
-			cacheManager = "secondsExpirationLocalCacheManager",
-			value = "StatisticsEventSummaryServiceComponent.naiveMultiDimensionProbabilityByPeriod"
-	)
 	public StatisticsEventNaiveMultiDimensionProbability naiveMultiDimensionProbabilityByPeriod(
 			final String context,
 			final List<StatisticsValuedEventDimension> dimensions,
@@ -854,184 +475,65 @@ public class StatisticsEventSummaryServiceComponent {
 			final Integer windowSize,
 			final ChronoUnit stepUnit,
 			final Integer steps) throws BusinessException {
-		StatisticsEventSummaryServiceComponent.validateTotalWindow(windowUnit, windowSize, stepUnit, steps);
-
-		// Computes individual probabilities.
+		StatisticsEventSummaryHelper.validateTotalWindow(windowUnit, windowSize, stepUnit, steps);
 		final List<StatisticsEventSingleDimensionProbability> individualProbabilities = new ArrayList<>();
-		BigDecimal jointProbability = BigDecimal.ONE;
-		BigDecimal jointSmoothedProbability = BigDecimal.ONE;
-		double jointSmoothedLogProbability = 0.0;
 		for (final StatisticsValuedEventDimension dimension : dimensions) {
-			final StatisticsEventSingleDimensionProbability individual = this.singleDimensionProbabilityByPeriod(context, dimension, referenceDateTime,
-					windowUnit, windowSize, stepUnit, steps);
-			individualProbabilities.add(individual);
-			jointProbability = jointProbability.multiply(individual.getProbability(), StatisticsEventSummaryServiceComponent.MATH_CONTEXT);
-			jointSmoothedProbability = jointSmoothedProbability.multiply(individual.getSmoothedProbability(), StatisticsEventSummaryServiceComponent.MATH_CONTEXT);
-			jointSmoothedLogProbability += Math.log(individual.getSmoothedProbability().doubleValue());
+			individualProbabilities.add(this.singleDimensionProbabilityByPeriod(context, dimension, referenceDateTime, windowUnit, windowSize, stepUnit, steps));
 		}
-
-		// Builds result.
-		final StatisticsEventNaiveMultiDimensionProbability result = new StatisticsEventNaiveMultiDimensionProbability();
-		result.setContext(context);
-		result.setReferenceDateTime(this.statisticsContextConfigurationServiceComponent.truncateDateTime(context, referenceDateTime));
-		result.setWindowUnit(windowUnit);
-		result.setWindowSize(windowSize);
-		result.setStepUnit(stepUnit);
-		result.setSteps(steps);
-		result.setJointProbability(jointProbability);
-		result.setJointSmoothedProbability(jointSmoothedProbability);
-		result.setJointSmoothedLogProbability(BigDecimal.valueOf(jointSmoothedLogProbability).setScale(6, RoundingMode.HALF_UP));
-		result.setIndividualProbabilities(individualProbabilities);
-		return result;
+		return StatisticsEventSummaryHelper.naiveMultiDimensionProbability(individualProbabilities, context,
+				this.statisticsContextConfigurationServiceComponent.truncateDateTime(context, referenceDateTime), windowUnit, windowSize, stepUnit, steps);
 	}
 
-	// Cross-dimension z-score aggregators over a list of comparison results. These are pure
-	// reductions over already-computed comparisons (no DB access); they live on this component
-	// because they operate solely on its own StatisticsEventSummaryComparison output.
-
-	/** Flat stream of non-null ratio z-scores across every comparison's value map. */
-	private static Stream<BigDecimal> flatRatioZScores(
-			final List<StatisticsEventSummaryComparison> comparisons) {
-		return comparisons == null ? Stream.empty()
-				: comparisons.stream().filter(Objects::nonNull).map(StatisticsEventSummaryComparison::getCountStats).filter(Objects::nonNull)
-						.map(MetricComparisonStats::getZScoreRatios).filter(Objects::nonNull).flatMap(map -> map.values().stream()).filter(Objects::nonNull);
-	}
-
-	/** Sum of squared z-scores ({@code Σ z²}), the chi-square statistic. Summed exactly in {@code BigDecimal}. */
-	private static BigDecimal sumOfSquares(
-			final List<BigDecimal> zScores) {
-		BigDecimal total = BigDecimal.ZERO;
-		for (final BigDecimal zScore : zScores) {
-			total = total.add(zScore.multiply(zScore, StatisticsEventSummaryServiceComponent.MATH_CONTEXT), StatisticsEventSummaryServiceComponent.MATH_CONTEXT);
-		}
-		return total;
-	}
-
-	/**
-	 * Standard-normal CDF via Abramowitz &amp; Stegun 7.1.26 (~7.5e-8 max error). Computed in
-	 * {@code double}: the CDF is transcendental with no exact {@code BigDecimal} form, and its
-	 * approximation error dwarfs any float rounding.
-	 */
-	private static double standardNormalCdf(
-			final double value) {
-		final double a1 = 0.254829592;
-		final double a2 = -0.284496736;
-		final double a3 = 1.421413741;
-		final double a4 = -1.453152027;
-		final double a5 = 1.061405429;
-		final double pCoefficient = 0.3275911;
-		final double sign = value < 0 ? -1.0 : 1.0;
-		final double absScaled = Math.abs(value) / Math.sqrt(2.0);
-		final double tValue = 1.0 / (1.0 + pCoefficient * absScaled);
-		final double polynomial = 1.0 - (((((a5 * tValue + a4) * tValue) + a3) * tValue + a2) * tValue + a1) * tValue * Math.exp(-absScaled * absScaled);
-		return 0.5 * (1.0 + sign * polynomial);
-	}
-
-	/**
-	 * Two-sided-p-value surprise {@code −log(2·(1−Φ(|z|)))} for a single z-score, floored so the
-	 * {@code log} stays finite. Computed in {@code double} (transcendental {@code log} and CDF).
-	 */
-	private static double surprise(
-			final BigDecimal zScore) {
-		final double cdf = StatisticsEventSummaryServiceComponent.standardNormalCdf(zScore.abs().doubleValue());
-		final double tailProbability = Math.max(2.0 * (1.0 - cdf), 1e-300);
-		return -Math.log(tailProbability);
-	}
-
-	/** Sum of per-z-score Fisher surprises ({@code Σ −log(2·(1−Φ(|z|)))}). */
-	private static double fisherCombinedSum(
-			final List<BigDecimal> zScores) {
-		double sum = 0.0;
-		for (final BigDecimal zScore : zScores) {
-			sum += StatisticsEventSummaryServiceComponent.surprise(zScore);
-		}
-		return sum;
-	}
+	// Cross-dimension z-score aggregators over a list of comparison results — pure reductions
+	// delegated to StatisticsEventSummaryHelper. Kept on the component so existing callers (which
+	// inject this bean) need no change.
 
 	/** Maximum {@code |z|} across every dimension's value-level ratio z-scores. */
 	public BigDecimal maxAbsRatioZScore(
 			final List<StatisticsEventSummaryComparison> comparisons) {
-		return StatisticsEventSummaryServiceComponent.flatRatioZScores(comparisons).map(BigDecimal::abs).max(Comparator.naturalOrder()).orElse(null);
+		return StatisticsEventSummaryHelper.maxAbsRatioZScore(comparisons);
 	}
 
 	/** Minimum {@code |z|} across every dimension's value-level ratio z-scores. */
 	public BigDecimal minAbsRatioZScore(
 			final List<StatisticsEventSummaryComparison> comparisons) {
-		return StatisticsEventSummaryServiceComponent.flatRatioZScores(comparisons).map(BigDecimal::abs).min(Comparator.naturalOrder()).orElse(null);
+		return StatisticsEventSummaryHelper.minAbsRatioZScore(comparisons);
 	}
 
 	/** Mean {@code |z|} across every dimension's value-level ratio z-scores. */
 	public BigDecimal meanAbsRatioZScore(
 			final List<StatisticsEventSummaryComparison> comparisons) {
-		final List<BigDecimal> absoluteZScores = StatisticsEventSummaryServiceComponent.flatRatioZScores(comparisons).map(BigDecimal::abs).toList();
-		return absoluteZScores.isEmpty() ? null
-				: absoluteZScores.stream().reduce(BigDecimal.ZERO, BigDecimal::add).divide(BigDecimal.valueOf(absoluteZScores.size()), 6, RoundingMode.HALF_UP);
+		return StatisticsEventSummaryHelper.meanAbsRatioZScore(comparisons);
 	}
 
-	/**
-	 * Count of dimension-value z-scores whose {@code |z|} strictly exceeds {@code threshold}.
-	 * Returned as {@code BigDecimal} (never {@code double}) for uniformity with the sibling
-	 * aggregators, all of which feed a {@code BigDecimal}-typed feature.
-	 */
+	/** Count of dimension-value z-scores whose {@code |z|} strictly exceeds {@code threshold}. */
 	public BigDecimal countAbsRatioZScoreAbove(
 			final List<StatisticsEventSummaryComparison> comparisons,
 			final double threshold) {
-		final BigDecimal thresholdValue = BigDecimal.valueOf(threshold);
-		final List<BigDecimal> zScores = StatisticsEventSummaryServiceComponent.flatRatioZScores(comparisons).toList();
-		return zScores.isEmpty() ? null
-				: BigDecimal.valueOf(zScores.stream().filter(zScore -> zScore.abs().compareTo(thresholdValue) > 0).count());
+		return StatisticsEventSummaryHelper.countAbsRatioZScoreAbove(comparisons, threshold);
 	}
 
-	/**
-	 * Raw {@code sqrt(Σ z²)} — the z-score vector's Euclidean length ("total drift energy"). The
-	 * {@code Σ z²} is summed exactly in {@code BigDecimal}; only the final {@code sqrt}
-	 * (transcendental) is taken in {@code double}. Grows with the number of z-scores, so prefer
-	 * {@link #standardizedChiSquareRatioZScore} to compare across populations.
-	 */
+	/** Raw {@code sqrt(Σ z²)} — the z-score vector's Euclidean length ("total drift energy"). */
 	public BigDecimal rootSumSquareRatioZScore(
 			final List<StatisticsEventSummaryComparison> comparisons) {
-		final List<BigDecimal> zScores = StatisticsEventSummaryServiceComponent.flatRatioZScores(comparisons).toList();
-		return zScores.isEmpty() ? null
-				: BigDecimal.valueOf(Math.sqrt(StatisticsEventSummaryServiceComponent.sumOfSquares(zScores).doubleValue())).setScale(6, RoundingMode.HALF_UP);
+		return StatisticsEventSummaryHelper.rootSumSquareRatioZScore(comparisons);
 	}
 
-	/**
-	 * Standardized chi-square {@code (Σ z² − k) / sqrt(2k)}. Under independent standard-normal
-	 * z-scores {@code Σ z² ~ χ²(k)}, so this is mean 0 / variance 1 — comparable across populations
-	 * and window configurations regardless of how many z-scores {@code k} are present. {@code Σ z²} is
-	 * summed exactly in {@code BigDecimal}; only the {@code sqrt} normalization is {@code double}.
-	 */
+	/** Standardized chi-square {@code (Σ z² − k) / sqrt(2k)} — mean 0 / variance 1 across populations. */
 	public BigDecimal standardizedChiSquareRatioZScore(
 			final List<StatisticsEventSummaryComparison> comparisons) {
-		final List<BigDecimal> zScores = StatisticsEventSummaryServiceComponent.flatRatioZScores(comparisons).toList();
-		final int count = zScores.size();
-		return count == 0 ? null
-				: BigDecimal.valueOf((StatisticsEventSummaryServiceComponent.sumOfSquares(zScores).doubleValue() - count) / Math.sqrt(2.0 * count)).setScale(6, RoundingMode.HALF_UP);
+		return StatisticsEventSummaryHelper.standardizedChiSquareRatioZScore(comparisons);
 	}
 
-	/**
-	 * Raw Fisher combined surprise {@code Σ −log(2·(1−Φ(|z|)))}: each z-score's two-sided p-value
-	 * turned into a surprise and summed (Fisher's combined-probability method). Grows with the number
-	 * of z-scores, so prefer {@link #standardizedFisherRatioZScore} to compare across populations.
-	 */
+	/** Raw Fisher combined surprise {@code Σ −log(2·(1−Φ(|z|)))} (Fisher's combined-probability method). */
 	public BigDecimal fisherCombinedRatioZScore(
 			final List<StatisticsEventSummaryComparison> comparisons) {
-		final List<BigDecimal> zScores = StatisticsEventSummaryServiceComponent.flatRatioZScores(comparisons).toList();
-		return zScores.isEmpty() ? null
-				: BigDecimal.valueOf(StatisticsEventSummaryServiceComponent.fisherCombinedSum(zScores)).setScale(6, RoundingMode.HALF_UP);
+		return StatisticsEventSummaryHelper.fisherCombinedRatioZScore(comparisons);
 	}
 
-	/**
-	 * Standardized Fisher {@code (S − k) / sqrt(k)} where {@code S = Σ −log(2·(1−Φ(|z|)))}. Under
-	 * independent standard-normal z-scores each surprise is {@code Exponential(1)}, so {@code S} has
-	 * mean {@code k} and variance {@code k}; this is mean 0 / variance 1 — comparable across
-	 * populations and window configurations.
-	 */
+	/** Standardized Fisher {@code (S − k) / sqrt(k)} — mean 0 / variance 1 across populations. */
 	public BigDecimal standardizedFisherRatioZScore(
 			final List<StatisticsEventSummaryComparison> comparisons) {
-		final List<BigDecimal> zScores = StatisticsEventSummaryServiceComponent.flatRatioZScores(comparisons).toList();
-		final int count = zScores.size();
-		return count == 0 ? null
-				: BigDecimal.valueOf((StatisticsEventSummaryServiceComponent.fisherCombinedSum(zScores) - count) / Math.sqrt(count)).setScale(6, RoundingMode.HALF_UP);
+		return StatisticsEventSummaryHelper.standardizedFisherRatioZScore(comparisons);
 	}
 }
