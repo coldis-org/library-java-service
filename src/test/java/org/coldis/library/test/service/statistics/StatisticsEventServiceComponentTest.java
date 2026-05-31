@@ -81,22 +81,18 @@ public class StatisticsEventServiceComponentTest extends ContainerTestHelper {
   }
 
   /**
-   * Computes a single-dimension probability via the two-step path: fetch the distribution, then
-   * derive the value's probability from it.
+   * Computes a single-dimension probability via the two-step path: fetch the merged period summary,
+   * then derive the value's probability from it.
    */
   private StatisticsEventSingleDimensionProbability probability(
       final String context,
       final String dimensionName,
       final String dimensionValue,
-      final LocalDateTime referenceDateTime,
-      final ChronoUnit windowUnit,
-      final int windowSize,
-      final ChronoUnit stepUnit,
-      final int steps)
+      final LocalDateTime startDateTime,
+      final LocalDateTime endDateTime)
       throws BusinessException {
     return this.statisticsEventSummaryServiceComponent.singleDimensionProbability(
-        this.statisticsEventSummaryServiceComponent.singleDimensionDistributionByPeriod(
-            context, dimensionName, referenceDateTime, windowUnit, windowSize, stepUnit, steps),
+        this.statisticsEventSummaryServiceComponent.findByPeriod(context, dimensionName, startDateTime, endDateTime),
         dimensionValue);
   }
 
@@ -900,51 +896,29 @@ public class StatisticsEventServiceComponentTest extends ContainerTestHelper {
     this.waitForSummary("test-probability", "city", day2, 4L);
     this.waitForSummary("test-probability", "city", day3, 3L);
 
-    // Probability for "sao-paulo": reference=day3, window=1 HOUR, step=1 DAY, steps=3
-    // All 3 days are included (i=0,1,2 -> day3, day2, day1).
-    // sao-paulo ratios: day3=1/3~0.333, day2=3/4=0.75, day1=2/2=1.0
-    // avg = (0.333 + 0.75 + 1.0) / 3 ~ 0.694
-    // sao-paulo counts: day3=1, day2=3, day1=2 -> avg=2.0
+    // Pooled over the whole [day1, day3] period: sao-paulo = 2+3+1 = 6, rio = 1+2 = 3, total = 9.
     this.cacheHelper.clearCaches();
     final StatisticsEventSingleDimensionProbability spProbability =
-        this.probability("test-probability", "city", "sao-paulo", day3, ChronoUnit.HOURS, 1, ChronoUnit.DAYS, 3);
+        this.probability("test-probability", "city", "sao-paulo", day1, day3);
 
     Assertions.assertNotNull(spProbability);
     Assertions.assertEquals("test-probability", spProbability.getContext());
     Assertions.assertEquals("city", spProbability.getDimensionName());
     Assertions.assertEquals("sao-paulo", spProbability.getDimensionValue());
-    Assertions.assertEquals(3, spProbability.getSampleSize());
+    Assertions.assertEquals(2, spProbability.getDistinctValueCount());
 
-    // Average probability: (1/3 + 3/4 + 1.0) / 3
-    final BigDecimal expectedSpProb =
-        BigDecimal.ONE
-            .divide(BigDecimal.valueOf(3), MC)
-            .add(new BigDecimal("0.75"))
-            .add(BigDecimal.ONE)
-            .divide(BigDecimal.valueOf(3), MC);
-    assertBigDecimalEquals(expectedSpProb, spProbability.getProbability(), TOLERANCE);
-    Assertions.assertNotNull(spProbability.getStdDevProbability());
+    // P(sao-paulo) = 6/9; smoothed = (6+1)/(9+2) = 7/11.
+    assertBigDecimalEquals(
+        BigDecimal.valueOf(6).divide(BigDecimal.valueOf(9), MC), spProbability.getProbability(), TOLERANCE);
+    Assertions.assertEquals(7.0 / 11.0, spProbability.getSmoothedProbability().doubleValue(), 1e-9);
 
-    // Average count: (1 + 3 + 2) / 3 = 2.0
-    assertBigDecimalEquals(new BigDecimal("2.0"), spProbability.getAverageCount(), TOLERANCE);
-    Assertions.assertNotNull(spProbability.getStdDevCount());
-
-    // Probability for "rio": ratios day3=2/3~0.667, day2=1/4=0.25, day1=0/2=0.0
-    // avg = (0.667 + 0.25 + 0.0) / 3 ~ 0.306
+    // P(rio) = 3/9; smoothed = (3+1)/(9+2) = 4/11.
     this.cacheHelper.clearCaches();
     final StatisticsEventSingleDimensionProbability rioProbability =
-        this.probability("test-probability", "city", "rio", day3, ChronoUnit.HOURS, 1, ChronoUnit.DAYS, 3);
-
-    final BigDecimal expectedRioProb =
-        BigDecimal.valueOf(2)
-            .divide(BigDecimal.valueOf(3), MC)
-            .add(new BigDecimal("0.25"))
-            .add(BigDecimal.ZERO)
-            .divide(BigDecimal.valueOf(3), MC);
-    assertBigDecimalEquals(expectedRioProb, rioProbability.getProbability(), TOLERANCE);
-
-    // Average count: (2 + 1 + 0) / 3 = 1.0
-    assertBigDecimalEquals(new BigDecimal("1.0"), rioProbability.getAverageCount(), TOLERANCE);
+        this.probability("test-probability", "city", "rio", day1, day3);
+    assertBigDecimalEquals(
+        BigDecimal.valueOf(3).divide(BigDecimal.valueOf(9), MC), rioProbability.getProbability(), TOLERANCE);
+    Assertions.assertEquals(4.0 / 11.0, rioProbability.getSmoothedProbability().doubleValue(), 1e-9);
   }
 
   /** Tests singleDimensionProbabilityByPeriod returns an error when no data exists. */
@@ -954,7 +928,7 @@ public class StatisticsEventServiceComponentTest extends ContainerTestHelper {
         Exception.class,
         () ->
             this.probability("non-existent", "no-dimension", "no-value", LocalDateTime.of(2026, 6, 1, 10, 0, 0),
-                ChronoUnit.HOURS, 1, ChronoUnit.DAYS, 7));
+                LocalDateTime.of(2026, 6, 8, 10, 0, 0)));
   }
 
   /**
@@ -1017,69 +991,55 @@ public class StatisticsEventServiceComponentTest extends ContainerTestHelper {
     this.waitForSummary("test-joint", "device", day2, 4L);
     this.waitForSummary("test-joint", "device", day3, 3L);
 
-    // Computes individual probabilities for verification.
-    // city=sao-paulo: day1=2/2=1.0, day2=3/4=0.75, day3=1/3~0.333 -> avg~0.694
-    // device=mobile: day1=1/2=0.5, day2=2/4=0.5, day3=3/3=1.0 -> avg~0.667
+    // Pooled over [day1, day3]: city sao-paulo = 2+3+1 = 6 / total 9; device mobile = 1+2+3 = 6 / total 9.
     this.cacheHelper.clearCaches();
-    final StatisticsEventSingleDimensionProbability spProbability =
-        this.probability("test-joint", "city", "sao-paulo", day3, ChronoUnit.HOURS, 1, ChronoUnit.DAYS, 3);
-    this.cacheHelper.clearCaches();
-    final StatisticsEventSingleDimensionProbability mobileProbability =
-        this.probability("test-joint", "device", "mobile", day3, ChronoUnit.HOURS, 1, ChronoUnit.DAYS, 3);
+    final StatisticsEventSummary cityMerged =
+        this.statisticsEventSummaryServiceComponent.findByPeriod("test-joint", "city", day1, day3);
+    final StatisticsEventSummary deviceMerged =
+        this.statisticsEventSummaryServiceComponent.findByPeriod("test-joint", "device", day1, day3);
 
-    // Combines the per-dimension probabilities into the naive joint (pure reduction, no fetch).
+    // Joint from one merged summary per dimension plus the value to evaluate for each.
     final StatisticsEventNaiveMultiDimensionProbability jointResult =
         this.statisticsEventSummaryServiceComponent.naiveMultiDimensionProbability(
-            List.of(spProbability, mobileProbability));
+            List.of(cityMerged, deviceMerged), List.of("sao-paulo", "mobile"));
 
     Assertions.assertNotNull(jointResult);
     Assertions.assertEquals("test-joint", jointResult.getContext());
     Assertions.assertEquals(2, jointResult.getIndividualProbabilities().size());
 
-    // Verifies individual probabilities match.
-    assertBigDecimalEquals(
-        spProbability.getProbability(),
-        jointResult.getIndividualProbabilities().get(0).getProbability(),
-        TOLERANCE);
-    assertBigDecimalEquals(
-        mobileProbability.getProbability(),
-        jointResult.getIndividualProbabilities().get(1).getProbability(),
-        TOLERANCE);
+    final StatisticsEventSingleDimensionProbability spProbability =
+        jointResult.getIndividualProbabilities().get(0);
+    final StatisticsEventSingleDimensionProbability mobileProbability =
+        jointResult.getIndividualProbabilities().get(1);
 
-    // Verifies joint probability = P(city=sao-paulo) x P(device=mobile).
-    final BigDecimal expectedJoint =
-        spProbability.getProbability().multiply(mobileProbability.getProbability(), MC);
-    assertBigDecimalEquals(expectedJoint, jointResult.getJointProbability(), TOLERANCE);
+    // P(city=sao-paulo) = 6/9, P(device=mobile) = 6/9.
+    final BigDecimal sixNinths = BigDecimal.valueOf(6).divide(BigDecimal.valueOf(9), MC);
+    assertBigDecimalEquals(sixNinths, spProbability.getProbability(), TOLERANCE);
+    assertBigDecimalEquals(sixNinths, mobileProbability.getProbability(), TOLERANCE);
 
-    // Verifies the distinct-value (vocabulary) counts used for smoothing: city {sao-paulo, rio},
-    // device {mobile, desktop} -> V = 2 each.
+    // Joint probability = P(city=sao-paulo) x P(device=mobile).
+    assertBigDecimalEquals(sixNinths.multiply(sixNinths, MC), jointResult.getJointProbability(), TOLERANCE);
+
+    // Vocabulary sizes used for smoothing: city {sao-paulo, rio}, device {mobile, desktop} -> V = 2 each.
     Assertions.assertEquals(2, spProbability.getDistinctValueCount());
     Assertions.assertEquals(2, mobileProbability.getDistinctValueCount());
 
-    // Verifies pooled Laplace smoothing: city=sao-paulo pooled 6/9, device=mobile pooled 6/9, each
-    // over V=2 with alpha=1 -> (6+1)/(9+2) = 7/11.
+    // Pooled Laplace smoothing: each pooled 6/9 over V=2 with alpha=1 -> (6+1)/(9+2) = 7/11.
     Assertions.assertEquals(7.0 / 11.0, spProbability.getSmoothedProbability().doubleValue(), 1e-9);
-    Assertions.assertEquals(
-        7.0 / 11.0, mobileProbability.getSmoothedProbability().doubleValue(), 1e-9);
+    Assertions.assertEquals(7.0 / 11.0, mobileProbability.getSmoothedProbability().doubleValue(), 1e-9);
 
-    // Verifies the joint smoothed probability (product of smoothed; never zero) and its log.
+    // Joint smoothed probability (product of smoothed; never zero) and its log.
     Assertions.assertEquals(
-        (7.0 / 11.0) * (7.0 / 11.0),
-        jointResult.getJointSmoothedProbability().doubleValue(),
-        1e-9);
+        (7.0 / 11.0) * (7.0 / 11.0), jointResult.getJointSmoothedProbability().doubleValue(), 1e-9);
     Assertions.assertEquals(
-        2.0 * Math.log(7.0 / 11.0),
-        jointResult.getJointSmoothedLogProbability().doubleValue(),
-        1e-6);
+        2.0 * Math.log(7.0 / 11.0), jointResult.getJointSmoothedLogProbability().doubleValue(), 1e-6);
 
-    // Verifies smoothing keeps an UNSEEN value's probability positive (the zero-collapse fix):
+    // Smoothing keeps an UNSEEN value's probability positive (the zero-collapse fix):
     // raw probability is 0, but smoothed is (0+1)/(9+2) = 1/11.
-    this.cacheHelper.clearCaches();
     final StatisticsEventSingleDimensionProbability unseenProbability =
-        this.probability("test-joint", "city", "brasilia", day3, ChronoUnit.HOURS, 1, ChronoUnit.DAYS, 3);
+        this.probability("test-joint", "city", "brasilia", day1, day3);
     Assertions.assertEquals(0.0, unseenProbability.getProbability().doubleValue(), 1e-12);
-    Assertions.assertEquals(
-        1.0 / 11.0, unseenProbability.getSmoothedProbability().doubleValue(), 1e-9);
+    Assertions.assertEquals(1.0 / 11.0, unseenProbability.getSmoothedProbability().doubleValue(), 1e-9);
   }
 
   /**

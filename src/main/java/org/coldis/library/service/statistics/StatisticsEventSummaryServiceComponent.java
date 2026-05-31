@@ -11,6 +11,7 @@ import org.coldis.library.exception.BusinessException;
 import org.coldis.library.model.SimpleMessage;
 import org.coldis.library.service.statistics.StatisticsEventSummaryHelper.WindowSchedule;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Component;
@@ -49,11 +50,18 @@ import org.springframework.transaction.annotation.Transactional;
  * {@code ...Cacheable} builder ahead of the public entry point that wraps it.
  */
 @Component
+@Qualifier(StatisticsEventSummaryServiceComponent.QUALIFIER)
 @ConditionalOnProperty(
 		name = "org.coldis.configuration.service.statistics-enabled",
 		matchIfMissing = false
 )
 public class StatisticsEventSummaryServiceComponent {
+
+	/**
+	 * Bean qualifier. Pin this library bean with {@code @Qualifier(StatisticsEventSummaryServiceComponent.QUALIFIER)}
+	 * when an extended (e.g. caching) subclass makes injection by type ambiguous.
+	 */
+	public static final String QUALIFIER = "statisticsEventSummaryServiceComponent";
 
 	/** Statistics context configuration service component. */
 	@Autowired
@@ -274,99 +282,39 @@ public class StatisticsEventSummaryServiceComponent {
 
 	// ---- Distribution / probability ----
 
-	/**
-	 * Builds the per-dimension distribution from a single per-dimension fetch spanning the whole
-	 * reference-inclusive schedule, then buckets the rows in memory. Does no truncation — the schedule
-	 * is already resolved and truncated by the caller. <strong>Good cache candidate:</strong> keyed
-	 * only on the value-independent {@code (context, dimension, schedule, window, step, steps)} so every
-	 * applicant value evaluated against the same population shares one aggregation — the heavy
-	 * fetch-and-aggregate is paid once per period instead of per value.
-	 *
-	 * @param  context           Context.
-	 * @param  dimensionName     Dimension name.
-	 * @param  schedule          Resolved (truncated) reference-inclusive sampling schedule.
-	 * @param  windowUnit        Unit defining the window size.
-	 * @param  windowSize        Number of window units per window.
-	 * @param  stepUnit          Unit defining how far back each sample is.
-	 * @param  steps             Number of periods sampled (including reference).
-	 * @return                   The dimension distribution.
-	 * @throws BusinessException If no data is found in any of the sampled periods.
-	 */
-	protected StatisticsEventDimensionDistribution singleDimensionDistributionByPeriodCacheable(
-			final String context,
-			final String dimensionName,
-			final WindowSchedule schedule,
-			final ChronoUnit windowUnit,
-			final Integer windowSize,
-			final ChronoUnit stepUnit,
-			final Integer steps) throws BusinessException {
-		final List<StatisticsEventSummary> dimensionSummaries = this.findSummariesByPeriodCacheable(context, dimensionName, schedule.overallStart(),
-				schedule.overallEnd());
-		final List<List<StatisticsEventSummary>> perWindowSummaries = StatisticsEventSummaryHelper.bucketByWindows(dimensionSummaries, schedule.samples());
-		return StatisticsEventSummaryHelper.computeDistribution(perWindowSummaries, context, dimensionName, schedule.reference().start(), windowUnit, windowSize,
-				stepUnit, steps);
-	}
-
-	/**
-	 * Builds the value-independent per-dimension distribution over the sampled period (reference
-	 * included). Validates the total window, truncates the reference and builds the reference-inclusive
-	 * schedule, then delegates to {@link #singleDimensionDistributionByPeriodCacheable}.
-	 *
-	 * @param  context           Context.
-	 * @param  dimensionName     Dimension name.
-	 * @param  referenceDateTime Reference date time (included in the sample).
-	 * @param  windowUnit        Unit defining the window size.
-	 * @param  windowSize        Number of window units per window.
-	 * @param  stepUnit          Unit defining how far back each sample is.
-	 * @param  steps             Number of periods to sample (including reference).
-	 * @return                   The dimension distribution.
-	 * @throws BusinessException If no data is found in any of the sampled periods.
-	 */
-	public StatisticsEventDimensionDistribution singleDimensionDistributionByPeriod(
-			final String context,
-			final String dimensionName,
-			final LocalDateTime referenceDateTime,
-			final ChronoUnit windowUnit,
-			final Integer windowSize,
-			final ChronoUnit stepUnit,
-			final Integer steps) throws BusinessException {
-		StatisticsEventSummaryHelper.validateTotalWindow(windowUnit, windowSize, stepUnit, steps);
-		final long truncationMinutes = this.statisticsContextConfigurationServiceComponent.getTruncationMinutes(context);
-		final LocalDateTime referenceStart = StatisticsEvent.truncateDateTime(referenceDateTime, truncationMinutes);
-		final WindowSchedule schedule = StatisticsEventSummaryHelper.referenceInclusiveSchedule(referenceStart, windowUnit, windowSize, stepUnit, steps,
-				truncationMinutes);
-		return this.singleDimensionDistributionByPeriodCacheable(context, dimensionName, schedule, windowUnit, windowSize, stepUnit, steps);
-	}
-
 	// Pure reductions over already-computed results — like the z-score aggregators below, these take
-	// the output of the fetch/aggregate methods (a distribution, or a list of single-dimension
+	// the output of the fetch/aggregate methods (a merged summary, or a list of single-dimension
 	// probabilities) and need none of the context/window arguments. Delegated to
 	// StatisticsEventSummaryHelper; let a caller that already holds the inputs compute without a fetch.
 
 	/**
-	 * Single-dimension probability derived from an already-built distribution (the return of
-	 * {@link #singleDimensionDistributionByPeriod}) — a pure lookup-plus-Laplace step, no fetch.
+	 * Single-dimension probability for a value within a period, derived from that period's aggregated
+	 * summary (the return of {@link #findByPeriod}) — a pure {@code count/total} plus Laplace step, no
+	 * fetch.
 	 *
-	 * @param  distribution   The dimension distribution.
+	 * @param  summary        The period's aggregated summary.
 	 * @param  dimensionValue The value to evaluate.
 	 * @return                The single-dimension probability for the value.
 	 */
 	public StatisticsEventSingleDimensionProbability singleDimensionProbability(
-			final StatisticsEventDimensionDistribution distribution,
+			final StatisticsEventSummary summary,
 			final String dimensionValue) {
-		return StatisticsEventSummaryHelper.singleDimensionProbability(distribution, dimensionValue, StatisticsEventSummaryHelper.DEFAULT_SMOOTHING_FACTOR);
+		return StatisticsEventSummaryHelper.singleDimensionProbability(summary, dimensionValue, StatisticsEventSummaryHelper.DEFAULT_SMOOTHING_FACTOR);
 	}
 
 	/**
-	 * Naive joint probability combined from already-computed single-dimension probabilities — a pure
-	 * reduction, no fetch. Context and window metadata are taken from the probabilities themselves.
+	 * Naive joint probability from one merged period summary per dimension plus the value to evaluate
+	 * for each (positionally paired) — derives each dimension's probability and combines them. A pure
+	 * reduction, no fetch; the per-dimension {@link #findByPeriod} returns feed straight in.
 	 *
-	 * @param  individualProbabilities Per-dimension probabilities (non-empty; all from the same call).
-	 * @return                         The naive multi-dimension probability.
+	 * @param  summaries       Per-dimension merged summaries (non-empty; aligned with {@code dimensionValues}).
+	 * @param  dimensionValues The value to evaluate for each dimension (aligned with {@code summaries}).
+	 * @return                 The naive multi-dimension probability.
 	 */
 	public StatisticsEventNaiveMultiDimensionProbability naiveMultiDimensionProbability(
-			final List<StatisticsEventSingleDimensionProbability> individualProbabilities) {
-		return StatisticsEventSummaryHelper.naiveMultiDimensionProbability(individualProbabilities);
+			final List<StatisticsEventSummary> summaries,
+			final List<String> dimensionValues) {
+		return StatisticsEventSummaryHelper.naiveMultiDimensionProbability(summaries, dimensionValues);
 	}
 
 	// Cross-dimension z-score aggregators over a list of comparison results — pure reductions

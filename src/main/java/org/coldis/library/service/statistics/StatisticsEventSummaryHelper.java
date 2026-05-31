@@ -398,32 +398,10 @@ public final class StatisticsEventSummaryHelper {
 	}
 
 	/**
-	 * Builds the schedule whose samples INCLUDE the reference window (steps {@code 0..steps-1} back).
-	 * Used by probability/distribution, which pools the reference period into the estimate.
-	 * {@code referenceStart} must already be truncated; the reference end and every sample bound are
-	 * truncated here.
-	 */
-	public static WindowSchedule referenceInclusiveSchedule(
-			final LocalDateTime referenceStart,
-			final ChronoUnit windowUnit,
-			final Integer windowSize,
-			final ChronoUnit stepUnit,
-			final Integer steps,
-			final long truncationMinutes) {
-		final LocalDateTime referenceEnd = StatisticsEvent.truncateDateTime(referenceStart.plus(windowSize, windowUnit), truncationMinutes);
-		final List<Window> samples = new ArrayList<>();
-		for (int stepIndex = 0; stepIndex < steps; stepIndex++) {
-			samples.add(new Window(StatisticsEvent.truncateDateTime(referenceStart.minus(stepIndex, stepUnit), truncationMinutes),
-					StatisticsEvent.truncateDateTime(referenceEnd.minus(stepIndex, stepUnit), truncationMinutes)));
-		}
-		return new WindowSchedule(new Window(referenceStart, referenceEnd), samples);
-	}
-
-	/**
 	 * Buckets a flat list of already-fetched summaries (for a single dimension) into per-window lists,
 	 * matching each window's inclusive {@code [start, end]} bounds. Pairs with the bulk single-query
 	 * fetch: one range query returns every row across the union of windows, this slices them back into
-	 * the per-window shape that {@link #computeComparison} and {@link #computeDistribution} consume. A
+	 * the per-window shape that {@link #computeComparison} consumes. A
 	 * summary that falls in overlapping windows is included in each, mirroring per-window queries.
 	 *
 	 * @param  summaries Flat summary list (already filtered to one dimension).
@@ -544,158 +522,72 @@ public final class StatisticsEventSummaryHelper {
 	}
 
 	/**
-	 * Builds the value-independent per-dimension distribution from already-fetched per-window
-	 * summaries (the reference-inclusive sample set).
+	 * Derives one value's single-dimension probability from a period's aggregated summary: the raw
+	 * ratio {@code count/total} and the Laplace-smoothed {@code (count + α) / (total + α·V)} (an unseen
+	 * value never collapses the smoothed probability to zero). A pure reduction over the merged summary
+	 * — the {@code findByPeriod} return feeds straight in.
 	 *
-	 * @param  perWindowSummaries Per-window summary lists (reference window included).
-	 * @param  context            Context.
-	 * @param  dimensionName      Dimension name.
-	 * @param  referenceDateTime  Start of the (already truncated) reference window.
-	 * @param  windowUnit         Window unit.
-	 * @param  windowSize         Window size.
-	 * @param  stepUnit           Step unit.
-	 * @param  steps              Number of sampled periods.
-	 * @return                    The distribution.
-	 * @throws BusinessException  If no sampled period had data.
-	 */
-	public static StatisticsEventDimensionDistribution computeDistribution(
-			final List<List<StatisticsEventSummary>> perWindowSummaries,
-			final String context,
-			final String dimensionName,
-			final LocalDateTime referenceDateTime,
-			final ChronoUnit windowUnit,
-			final Integer windowSize,
-			final ChronoUnit stepUnit,
-			final Integer steps) throws BusinessException {
-		final PeriodAggregation aggregation = StatisticsEventSummaryHelper.aggregatePeriods(perWindowSummaries);
-		if (aggregation == null) {
-			throw new BusinessException(new SimpleMessage("statistics.event.probability.nodata"), HttpStatus.NOT_FOUND.value());
-		}
-		BigDecimal pooledTotal = BigDecimal.ZERO;
-		for (final BigDecimal windowTotal : aggregation.counts.totals) {
-			pooledTotal = pooledTotal.add(windowTotal, StatisticsEventSummaryHelper.MATH_CONTEXT);
-		}
-		final Map<String, BigDecimal> pooledValueCounts = new HashMap<>();
-		for (final String key : aggregation.allKeys) {
-			BigDecimal pooledValueCount = BigDecimal.ZERO;
-			for (final Map<String, BigDecimal> windowValues : aggregation.counts.allValues) {
-				pooledValueCount = pooledValueCount.add(windowValues.getOrDefault(key, BigDecimal.ZERO), StatisticsEventSummaryHelper.MATH_CONTEXT);
-			}
-			pooledValueCounts.put(key, pooledValueCount);
-		}
-
-		final StatisticsEventDimensionDistribution distribution = new StatisticsEventDimensionDistribution();
-		distribution.setContext(context);
-		distribution.setDimensionName(dimensionName);
-		distribution.setReferenceDateTime(referenceDateTime);
-		distribution.setWindowUnit(windowUnit);
-		distribution.setWindowSize(windowSize);
-		distribution.setStepUnit(stepUnit);
-		distribution.setSteps(steps);
-		distribution.setSampleSize(aggregation.counts.totals.size());
-		distribution.setDistinctValueCount(aggregation.allKeys.size());
-		distribution.setPooledTotal(pooledTotal);
-		distribution.setPooledValueCounts(pooledValueCounts);
-		distribution.setAverageRatios(new HashMap<>(aggregation.counts.averageRatios));
-		distribution.setStdDevRatios(new HashMap<>(aggregation.counts.stdDevRatios));
-		distribution.setAverageValues(new HashMap<>(aggregation.counts.averageValues));
-		distribution.setStdDevValues(new HashMap<>(aggregation.counts.stdDevValues));
-		return distribution;
-	}
-
-	/**
-	 * Derives one value's single-dimension probability from a pre-computed distribution (a pure
-	 * lookup plus Laplace smoothing; an unseen value never collapses the smoothed probability to
-	 * zero).
-	 *
-	 * @param  distribution    The dimension distribution.
+	 * @param  summary         The period's aggregated summary.
 	 * @param  dimensionValue  The value to evaluate.
 	 * @param  smoothingFactor Additive (Laplace) smoothing factor.
 	 * @return                 The single-dimension probability.
 	 */
 	public static StatisticsEventSingleDimensionProbability singleDimensionProbability(
-			final StatisticsEventDimensionDistribution distribution,
+			final StatisticsEventSummary summary,
 			final String dimensionValue,
 			final double smoothingFactor) {
+		final Map<String, Long> valueCounts = summary.getValueCounts();
+		final long total = summary.getTotalCount();
+		final long valueCount = valueCounts.getOrDefault(dimensionValue, 0L);
+		final int distinctValueCount = valueCounts.size();
 		final StatisticsEventSingleDimensionProbability probability = new StatisticsEventSingleDimensionProbability();
-		probability.setContext(distribution.getContext());
-		probability.setDimensionName(distribution.getDimensionName());
+		probability.setContext(summary.getContext());
+		probability.setDimensionName(summary.getDimensionName());
 		probability.setDimensionValue(dimensionValue);
-		probability.setReferenceDateTime(distribution.getReferenceDateTime());
-		probability.setWindowUnit(distribution.getWindowUnit());
-		probability.setWindowSize(distribution.getWindowSize());
-		probability.setStepUnit(distribution.getStepUnit());
-		probability.setSteps(distribution.getSteps());
-		probability.setSampleSize(distribution.getSampleSize());
-		probability.setProbability(distribution.getAverageRatios().getOrDefault(dimensionValue, BigDecimal.ZERO));
-		probability.setStdDevProbability(distribution.getStdDevRatios().getOrDefault(dimensionValue, BigDecimal.ZERO));
-		probability.setAverageCount(distribution.getAverageValues().getOrDefault(dimensionValue, BigDecimal.ZERO));
-		probability.setStdDevCount(distribution.getStdDevValues().getOrDefault(dimensionValue, BigDecimal.ZERO));
-		final int distinctValueCount = distribution.getDistinctValueCount();
 		probability.setDistinctValueCount(distinctValueCount);
-		probability.setSmoothedProbability(StatisticsEventSummaryHelper.laplaceSmoothedProbability(
-				distribution.getPooledValueCounts().getOrDefault(dimensionValue, BigDecimal.ZERO), distribution.getPooledTotal(), distinctValueCount,
-				smoothingFactor));
+		probability.setProbability(total > 0L
+				? BigDecimal.valueOf(valueCount).divide(BigDecimal.valueOf(total), StatisticsEventSummaryHelper.MATH_CONTEXT)
+				: BigDecimal.ZERO);
+		probability.setSmoothedProbability(distinctValueCount > 0
+				? StatisticsEventSummaryHelper.laplaceSmoothedProbability(BigDecimal.valueOf(valueCount), BigDecimal.valueOf(total), distinctValueCount,
+						smoothingFactor)
+				: BigDecimal.ZERO);
 		return probability;
 	}
 
 	/**
-	 * Combines per-dimension probabilities into the naive (independence) multi-dimension joint:
-	 * {@code P(A ∩ B) = P(A) × P(B)}.
+	 * Builds the naive (independence) multi-dimension joint {@code P(A ∩ B) = P(A) × P(B)} from one
+	 * period summary per dimension plus the value to evaluate for each (positionally paired): derives
+	 * each dimension's probability via {@link #singleDimensionProbability}, then multiplies them. A pure
+	 * reduction over the merged summaries — the per-dimension {@code findByPeriod} returns feed straight
+	 * in; context is taken from the summaries.
 	 *
-	 * @param  individualProbabilities Per-dimension probabilities (already evaluated for the target
-	 *                                     values).
-	 * @param  context                 Context.
-	 * @param  referenceDateTime       Reference date time (already truncated).
-	 * @param  windowUnit              Window unit.
-	 * @param  windowSize              Window size.
-	 * @param  stepUnit                Step unit.
-	 * @param  steps                   Number of sampled periods.
-	 * @return                         The naive multi-dimension probability.
+	 * @param  summaries       Per-dimension merged summaries (non-empty; aligned with {@code dimensionValues}).
+	 * @param  dimensionValues The value to evaluate for each dimension (aligned with {@code summaries}).
+	 * @return                 The naive multi-dimension probability.
 	 */
 	public static StatisticsEventNaiveMultiDimensionProbability naiveMultiDimensionProbability(
-			final List<StatisticsEventSingleDimensionProbability> individualProbabilities,
-			final String context,
-			final LocalDateTime referenceDateTime,
-			final ChronoUnit windowUnit,
-			final Integer windowSize,
-			final ChronoUnit stepUnit,
-			final Integer steps) {
+			final List<StatisticsEventSummary> summaries,
+			final List<String> dimensionValues) {
+		final List<StatisticsEventSingleDimensionProbability> individualProbabilities = new ArrayList<>();
 		BigDecimal jointProbability = BigDecimal.ONE;
 		BigDecimal jointSmoothedProbability = BigDecimal.ONE;
 		double jointSmoothedLogProbability = 0.0;
-		for (final StatisticsEventSingleDimensionProbability individual : individualProbabilities) {
+		for (int index = 0; index < summaries.size(); index++) {
+			final StatisticsEventSingleDimensionProbability individual = StatisticsEventSummaryHelper.singleDimensionProbability(summaries.get(index),
+					dimensionValues.get(index), StatisticsEventSummaryHelper.DEFAULT_SMOOTHING_FACTOR);
+			individualProbabilities.add(individual);
 			jointProbability = jointProbability.multiply(individual.getProbability(), StatisticsEventSummaryHelper.MATH_CONTEXT);
 			jointSmoothedProbability = jointSmoothedProbability.multiply(individual.getSmoothedProbability(), StatisticsEventSummaryHelper.MATH_CONTEXT);
 			jointSmoothedLogProbability += Math.log(individual.getSmoothedProbability().doubleValue());
 		}
 		final StatisticsEventNaiveMultiDimensionProbability result = new StatisticsEventNaiveMultiDimensionProbability();
-		result.setContext(context);
-		result.setReferenceDateTime(referenceDateTime);
-		result.setWindowUnit(windowUnit);
-		result.setWindowSize(windowSize);
-		result.setStepUnit(stepUnit);
-		result.setSteps(steps);
+		result.setContext(individualProbabilities.get(0).getContext());
 		result.setJointProbability(jointProbability);
 		result.setJointSmoothedProbability(jointSmoothedProbability);
 		result.setJointSmoothedLogProbability(BigDecimal.valueOf(jointSmoothedLogProbability).setScale(6, RoundingMode.HALF_UP));
 		result.setIndividualProbabilities(individualProbabilities);
 		return result;
-	}
-
-	/**
-	 * Combines already-computed single-dimension probabilities into the naive joint, taking the context
-	 * and window metadata from the probabilities themselves (they all share one schedule). A pure
-	 * reduction over pre-computed inputs — no fetch, no window arguments.
-	 *
-	 * @param  individualProbabilities Per-dimension probabilities (non-empty; all from the same call).
-	 * @return                         The naive multi-dimension probability.
-	 */
-	public static StatisticsEventNaiveMultiDimensionProbability naiveMultiDimensionProbability(
-			final List<StatisticsEventSingleDimensionProbability> individualProbabilities) {
-		final StatisticsEventSingleDimensionProbability first = individualProbabilities.get(0);
-		return StatisticsEventSummaryHelper.naiveMultiDimensionProbability(individualProbabilities, first.getContext(), first.getReferenceDateTime(),
-				first.getWindowUnit(), first.getWindowSize(), first.getStepUnit(), first.getSteps());
 	}
 
 	// ---- Public cross-dimension z-score aggregators ----

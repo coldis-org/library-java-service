@@ -13,6 +13,7 @@ import org.coldis.library.model.SimpleMessage;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.http.HttpStatus;
@@ -34,11 +35,18 @@ import jakarta.annotation.PreDestroy;
  * {@link StatisticsEventSummaryServiceComponent}.
  */
 @Component
+@Qualifier(StatisticsEventSummaryBufferServiceComponent.QUALIFIER)
 @ConditionalOnProperty(
 		name = "org.coldis.configuration.service.statistics-enabled",
 		matchIfMissing = false
 )
 public class StatisticsEventSummaryBufferServiceComponent {
+
+	/**
+	 * Bean qualifier. Pin this library bean with {@code @Qualifier(StatisticsEventSummaryBufferServiceComponent.QUALIFIER)}
+	 * when an extended subclass makes injection by type ambiguous.
+	 */
+	public static final String QUALIFIER = "statisticsEventSummaryBufferServiceComponent";
 
 	/** Logger. */
 	private static final Logger LOGGER = LoggerFactory.getLogger(StatisticsEventSummaryBufferServiceComponent.class);
