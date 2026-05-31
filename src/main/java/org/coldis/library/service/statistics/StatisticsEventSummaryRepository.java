@@ -48,13 +48,16 @@ public interface StatisticsEventSummaryRepository
       @Param("dateTime") LocalDateTime dateTime);
 
   /**
-   * Finds all statistics event summaries for a context and dimension within a date range.
+   * Finds all statistics event summaries for a context and dimension within a date range. A single
+   * index-friendly range scan over {@code (context, dimension_name, date_time)} that collapses what
+   * used to be one query per sample window into one round-trip per dimension; callers bucket the
+   * returned rows into their windows in memory.
    *
    * @param context Context.
    * @param dimensionName Dimension name.
    * @param startDateTime Start date time (inclusive).
    * @param endDateTime End date time (inclusive).
-   * @return The list of summaries in the period.
+   * @return The list of summaries in the period for the dimension.
    */
   @Query(
       "SELECT summary FROM StatisticsEventSummary summary "

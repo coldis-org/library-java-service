@@ -17,9 +17,9 @@ import org.coldis.library.service.statistics.StatisticsEventServiceComponent;
 import org.coldis.library.service.statistics.StatisticsEventSingleDimensionProbability;
 import org.coldis.library.service.statistics.StatisticsEventSummary;
 import org.coldis.library.service.statistics.StatisticsEventSummaryComparison;
+import org.coldis.library.service.statistics.StatisticsEventSummaryBufferServiceComponent;
 import org.coldis.library.service.statistics.StatisticsEventSummaryKey;
 import org.coldis.library.service.statistics.StatisticsEventSummaryServiceComponent;
-import org.coldis.library.service.statistics.StatisticsValuedEventDimension;
 import org.coldis.library.test.StartTestWithContainerExtension;
 import org.coldis.library.test.TestHelper;
 import org.coldis.library.test.TestWithContainer;
@@ -54,6 +54,10 @@ public class StatisticsEventServiceComponentTest extends ContainerTestHelper {
   @Autowired
   protected StatisticsEventSummaryServiceComponent statisticsEventSummaryServiceComponent;
 
+  /** Statistics event summary buffer service component. */
+  @Autowired
+  protected StatisticsEventSummaryBufferServiceComponent statisticsEventSummaryBufferServiceComponent;
+
   /** Statistics event repository custom impl (for reflective strategy override in subclasses). */
   @Autowired
   protected StatisticsEventRepositoryImpl statisticsEventRepositoryImpl;
@@ -74,6 +78,26 @@ public class StatisticsEventServiceComponentTest extends ContainerTestHelper {
     Assertions.assertTrue(
         expected.subtract(actual).abs().compareTo(tolerance) <= 0,
         String.format("Expected %s but got %s (tolerance %s)", expected, actual, tolerance));
+  }
+
+  /**
+   * Computes a single-dimension probability via the two-step path: fetch the distribution, then
+   * derive the value's probability from it.
+   */
+  private StatisticsEventSingleDimensionProbability probability(
+      final String context,
+      final String dimensionName,
+      final String dimensionValue,
+      final LocalDateTime referenceDateTime,
+      final ChronoUnit windowUnit,
+      final int windowSize,
+      final ChronoUnit stepUnit,
+      final int steps)
+      throws BusinessException {
+    return this.statisticsEventSummaryServiceComponent.singleDimensionProbability(
+        this.statisticsEventSummaryServiceComponent.singleDimensionDistributionByPeriod(
+            context, dimensionName, referenceDateTime, windowUnit, windowSize, stepUnit, steps),
+        dimensionValue);
   }
 
   /** Tolerance for BigDecimal comparisons. */
@@ -174,9 +198,9 @@ public class StatisticsEventServiceComponentTest extends ContainerTestHelper {
             () -> {
               try {
                 this.statisticsEventServiceComponent.flushEventBuffer();
-                this.statisticsEventSummaryServiceComponent.flushSummaryDeltaBuffer();
+                this.statisticsEventSummaryBufferServiceComponent.flushSummaryDeltaBuffer();
                 this.cacheHelper.clearCaches();
-                return this.statisticsEventSummaryServiceComponent.findById(
+                return this.statisticsEventSummaryBufferServiceComponent.findById(
                     new StatisticsEventSummaryKey(context, dimensionName, dateTime), false);
               } catch (final BusinessException exception) {
                 return null;
@@ -187,7 +211,7 @@ public class StatisticsEventServiceComponentTest extends ContainerTestHelper {
             TestHelper.SHORT_WAIT));
     this.cacheHelper.clearCaches();
     final StatisticsEventSummary summary =
-        this.statisticsEventSummaryServiceComponent.findById(
+        this.statisticsEventSummaryBufferServiceComponent.findById(
             new StatisticsEventSummaryKey(context, dimensionName, dateTime), false);
     // Consistency check: totalCount must equal sum of valueCounts.
     final long sumOfCounts =
@@ -219,9 +243,9 @@ public class StatisticsEventServiceComponentTest extends ContainerTestHelper {
             () -> {
               try {
                 this.statisticsEventServiceComponent.flushEventBuffer();
-                this.statisticsEventSummaryServiceComponent.flushSummaryDeltaBuffer();
+                this.statisticsEventSummaryBufferServiceComponent.flushSummaryDeltaBuffer();
                 this.cacheHelper.clearCaches();
-                return this.statisticsEventSummaryServiceComponent.findById(
+                return this.statisticsEventSummaryBufferServiceComponent.findById(
                     new StatisticsEventSummaryKey(context, dimensionName, dateTime), false);
               } catch (final BusinessException exception) {
                 return null;
@@ -234,7 +258,7 @@ public class StatisticsEventServiceComponentTest extends ContainerTestHelper {
             TestHelper.LONG_WAIT,
             TestHelper.SHORT_WAIT));
     this.cacheHelper.clearCaches();
-    return this.statisticsEventSummaryServiceComponent.findById(
+    return this.statisticsEventSummaryBufferServiceComponent.findById(
         new StatisticsEventSummaryKey(context, dimensionName, dateTime), false);
   }
 
@@ -316,9 +340,9 @@ public class StatisticsEventServiceComponentTest extends ContainerTestHelper {
             () -> {
               try {
                 this.statisticsEventServiceComponent.flushEventBuffer();
-                this.statisticsEventSummaryServiceComponent.flushSummaryDeltaBuffer();
+                this.statisticsEventSummaryBufferServiceComponent.flushSummaryDeltaBuffer();
                 this.cacheHelper.clearCaches();
-                return this.statisticsEventSummaryServiceComponent.findById(
+                return this.statisticsEventSummaryBufferServiceComponent.findById(
                     new StatisticsEventSummaryKey("test-change", "state", TEST_DATE_TIME), false);
               } catch (final BusinessException exception) {
                 return null;
@@ -329,7 +353,7 @@ public class StatisticsEventServiceComponentTest extends ContainerTestHelper {
             TestHelper.SHORT_WAIT));
     this.cacheHelper.clearCaches();
     final StatisticsEventSummary summaryAfterChange =
-        this.statisticsEventSummaryServiceComponent.findById(
+        this.statisticsEventSummaryBufferServiceComponent.findById(
             new StatisticsEventSummaryKey("test-change", "state", TEST_DATE_TIME), false);
     Assertions.assertEquals(1L, summaryAfterChange.getTotalCount());
     Assertions.assertNull(summaryAfterChange.getValueCounts().get("SP"));
@@ -883,14 +907,7 @@ public class StatisticsEventServiceComponentTest extends ContainerTestHelper {
     // sao-paulo counts: day3=1, day2=3, day1=2 -> avg=2.0
     this.cacheHelper.clearCaches();
     final StatisticsEventSingleDimensionProbability spProbability =
-        this.statisticsEventSummaryServiceComponent.singleDimensionProbabilityByPeriod(
-            "test-probability",
-            new StatisticsValuedEventDimension("city", "sao-paulo"),
-            day3,
-            ChronoUnit.HOURS,
-            1,
-            ChronoUnit.DAYS,
-            3);
+        this.probability("test-probability", "city", "sao-paulo", day3, ChronoUnit.HOURS, 1, ChronoUnit.DAYS, 3);
 
     Assertions.assertNotNull(spProbability);
     Assertions.assertEquals("test-probability", spProbability.getContext());
@@ -916,14 +933,7 @@ public class StatisticsEventServiceComponentTest extends ContainerTestHelper {
     // avg = (0.667 + 0.25 + 0.0) / 3 ~ 0.306
     this.cacheHelper.clearCaches();
     final StatisticsEventSingleDimensionProbability rioProbability =
-        this.statisticsEventSummaryServiceComponent.singleDimensionProbabilityByPeriod(
-            "test-probability",
-            new StatisticsValuedEventDimension("city", "rio"),
-            day3,
-            ChronoUnit.HOURS,
-            1,
-            ChronoUnit.DAYS,
-            3);
+        this.probability("test-probability", "city", "rio", day3, ChronoUnit.HOURS, 1, ChronoUnit.DAYS, 3);
 
     final BigDecimal expectedRioProb =
         BigDecimal.valueOf(2)
@@ -943,14 +953,8 @@ public class StatisticsEventServiceComponentTest extends ContainerTestHelper {
     Assertions.assertThrows(
         Exception.class,
         () ->
-            this.statisticsEventSummaryServiceComponent.singleDimensionProbabilityByPeriod(
-                "non-existent",
-                new StatisticsValuedEventDimension("no-dimension", "no-value"),
-                LocalDateTime.of(2026, 6, 1, 10, 0, 0),
-                ChronoUnit.HOURS,
-                1,
-                ChronoUnit.DAYS,
-                7));
+            this.probability("non-existent", "no-dimension", "no-value", LocalDateTime.of(2026, 6, 1, 10, 0, 0),
+                ChronoUnit.HOURS, 1, ChronoUnit.DAYS, 7));
   }
 
   /**
@@ -1018,38 +1022,15 @@ public class StatisticsEventServiceComponentTest extends ContainerTestHelper {
     // device=mobile: day1=1/2=0.5, day2=2/4=0.5, day3=3/3=1.0 -> avg~0.667
     this.cacheHelper.clearCaches();
     final StatisticsEventSingleDimensionProbability spProbability =
-        this.statisticsEventSummaryServiceComponent.singleDimensionProbabilityByPeriod(
-            "test-joint",
-            new StatisticsValuedEventDimension("city", "sao-paulo"),
-            day3,
-            ChronoUnit.HOURS,
-            1,
-            ChronoUnit.DAYS,
-            3);
+        this.probability("test-joint", "city", "sao-paulo", day3, ChronoUnit.HOURS, 1, ChronoUnit.DAYS, 3);
     this.cacheHelper.clearCaches();
     final StatisticsEventSingleDimensionProbability mobileProbability =
-        this.statisticsEventSummaryServiceComponent.singleDimensionProbabilityByPeriod(
-            "test-joint",
-            new StatisticsValuedEventDimension("device", "mobile"),
-            day3,
-            ChronoUnit.HOURS,
-            1,
-            ChronoUnit.DAYS,
-            3);
+        this.probability("test-joint", "device", "mobile", day3, ChronoUnit.HOURS, 1, ChronoUnit.DAYS, 3);
 
-    // Calls multi-dimension probability.
-    this.cacheHelper.clearCaches();
+    // Combines the per-dimension probabilities into the naive joint (pure reduction, no fetch).
     final StatisticsEventNaiveMultiDimensionProbability jointResult =
-        this.statisticsEventSummaryServiceComponent.naiveMultiDimensionProbabilityByPeriod(
-            "test-joint",
-            List.of(
-                new StatisticsValuedEventDimension("city", "sao-paulo"),
-                new StatisticsValuedEventDimension("device", "mobile")),
-            day3,
-            ChronoUnit.HOURS,
-            1,
-            ChronoUnit.DAYS,
-            3);
+        this.statisticsEventSummaryServiceComponent.naiveMultiDimensionProbability(
+            List.of(spProbability, mobileProbability));
 
     Assertions.assertNotNull(jointResult);
     Assertions.assertEquals("test-joint", jointResult.getContext());
@@ -1095,14 +1076,7 @@ public class StatisticsEventServiceComponentTest extends ContainerTestHelper {
     // raw probability is 0, but smoothed is (0+1)/(9+2) = 1/11.
     this.cacheHelper.clearCaches();
     final StatisticsEventSingleDimensionProbability unseenProbability =
-        this.statisticsEventSummaryServiceComponent.singleDimensionProbabilityByPeriod(
-            "test-joint",
-            new StatisticsValuedEventDimension("city", "brasilia"),
-            day3,
-            ChronoUnit.HOURS,
-            1,
-            ChronoUnit.DAYS,
-            3);
+        this.probability("test-joint", "city", "brasilia", day3, ChronoUnit.HOURS, 1, ChronoUnit.DAYS, 3);
     Assertions.assertEquals(0.0, unseenProbability.getProbability().doubleValue(), 1e-12);
     Assertions.assertEquals(
         1.0 / 11.0, unseenProbability.getSmoothedProbability().doubleValue(), 1e-9);

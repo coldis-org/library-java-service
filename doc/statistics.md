@@ -37,7 +37,8 @@ org.coldis.library.service.statistics
 | `StatisticsEventSummaryDelta` | Buffered delta POJO. Implements `Reduceable` for in-memory aggregation before flush. |
 | `StatisticsContextConfiguration` | JPA entity. Key: `context`. Stores `truncationMinutes`. |
 | `StatisticsEventServiceComponent` | Business logic: upsert, delete, batch upsert, expired event purge. |
-| `StatisticsEventSummaryServiceComponent` | Summary logic: delta buffering/flushing/applying, period queries, comparison, probability. |
+| `StatisticsEventSummaryBufferServiceComponent` | Summary write path: delta buffering/flushing/applying, single-key lookup (`findById`) and find-or-create. |
+| `StatisticsEventSummaryServiceComponent` | Summary read path: period queries, comparison, distribution, probability, z-score aggregators. |
 | `StatisticsContextConfigurationServiceComponent` | Cached context configuration lookup, context-aware time truncation. |
 | `StatisticsAutoConfiguration` | Spring `@Configuration` that enables scheduling. Conditional on `statistics-enabled`. |
 
@@ -182,9 +183,25 @@ Each context can define its own time bucket size via `StatisticsContextConfigura
 
 ### Probability Analysis
 
-`singleDimensionProbabilityByPeriod(...)` — computes the probability of a specific dimension value based on historical distribution.
+Probability is computed in two steps — fetch the value-independent distribution, then reduce (the reductions are pure: no fetch, no window arguments):
 
-`naiveMultiDimensionProbabilityByPeriod(...)` — computes joint probability of multiple dimensions assuming independence (P(A and B) = P(A) x P(B)).
+- `singleDimensionDistributionByPeriod(context, dimensionName, referenceDateTime, windowUnit, windowSize, stepUnit, steps)` — builds the per-dimension distribution over the sampled period.
+- `singleDimensionProbability(distribution, dimensionValue)` — derives a specific value's probability (with Laplace smoothing) from that distribution.
+- `naiveMultiDimensionProbability(individualProbabilities)` — combines per-dimension probabilities into the joint, assuming independence (P(A and B) = P(A) x P(B)); context/window metadata are taken from the probabilities themselves.
+
+The same pattern as the cross-dimension z-score aggregators, which reduce a `List<StatisticsEventSummaryComparison>` (the return of `compareByPeriod`) with no extra arguments.
+
+### Windowed Sampling, Per-Dimension Fetch, and Empty Windows
+
+`compareByPeriod`, `singleDimensionDistributionByPeriod`, and the probability methods don't look at one period — they sample the **same window shape stepped back over several periods** (e.g. the 10:00–11:00 slot on each of the last 7 days) and compute the mean / standard deviation / z-scores **across those samples**. The sampling schedule depends only on `(referenceDateTime, windowUnit, windowSize, stepUnit, steps)` — never on the dimension — so it is identical for every dimension in a call.
+
+`compareByPeriod` and `naiveMultiDimensionProbabilityByPeriod` accept **multiple dimensions** and return a result per dimension (`compareByPeriod(context, Collection<String> dimensionNames, …)` returns one comparison per dimension, in request order; a single-dimension `compareByPeriod(context, String dimensionName, …)` convenience returns just that one). The multi-dimension list returned by `compareByPeriod` feeds the cross-dimension z-score aggregators directly.
+
+**One query per dimension.** Each dimension's whole schedule is fetched in a **single bounding-range query** (`WHERE context = ? AND dimension_name = ? AND date_time BETWEEN ? AND ?`), then sliced into per-window samples in memory — so a comparison over N dimensions issues N such queries rather than one wide `IN (...)` scan over every dimension's buckets at once. Each per-dimension fetch is the cache seam, so repeated dimensions/windows reuse one cache entry. Summary rows exist only for buckets that had events, so the bounding-range fetch returns no empty buckets — only the occasional row in the gap between sparse windows, which is discarded during bucketing.
+
+**Empty windows count as zero (behavioral note).** A sample window with no data contributes a **zero-valued sample** to the aggregation rather than being skipped. This means a sparse dimension's mean and standard deviation are computed over the full `steps` sample set (with zeros), not only over the windows that happened to have data — so its averages are pulled toward zero and its variance reflects the gaps. A call still fails with the `nodata`/`notfound` business error only when **no** window in the whole sample had any data.
+
+> ⚠️ This zero-fill replaced an earlier skip-empty behavior, where windows with no data were dropped and the average/standard deviation were taken only over populated windows. Anomaly thresholds (z-scores) calibrated against the old skip-empty numbers will shift for dimensions whose sample windows are sparsely populated.
 
 ## Configuration Properties
 
@@ -247,25 +264,32 @@ statisticsEventServiceComponent.upsertAllStatisticsEvents(List.of(event1, event2
 @Autowired
 private StatisticsEventSummaryServiceComponent summaryComponent;
 
-// Single bucket
-StatisticsEventSummary summary = summaryComponent.findById(
+@Autowired
+private StatisticsEventSummaryBufferServiceComponent summaryBufferComponent;
+
+// Single bucket (single-key lookup lives on the buffer/write component)
+StatisticsEventSummary summary = summaryBufferComponent.findById(
     new StatisticsEventSummaryKey("my-context", "city", dateTime), false);
 
 // Period aggregation
 StatisticsEventSummary period = summaryComponent.findByPeriod(
     "my-context", "city", startDateTime, endDateTime);
 
-// Anomaly comparison
+// Anomaly comparison (single dimension; or pass a Collection<String> for one comparison per dimension)
 StatisticsEventSummaryComparison comparison = summaryComponent.compareByPeriod(
     "my-context", "city", referenceDateTime,
     ChronoUnit.HOURS, 1, ChronoUnit.DAYS, 7);
 
-// Probability
+// Probability — two steps: fetch the distribution, then reduce
+StatisticsEventDimensionDistribution distribution =
+    summaryComponent.singleDimensionDistributionByPeriod(
+        "my-context", "city", referenceDateTime, ChronoUnit.HOURS, 1, ChronoUnit.DAYS, 7);
 StatisticsEventSingleDimensionProbability probability =
-    summaryComponent.singleDimensionProbabilityByPeriod(
-        "my-context",
-        new StatisticsValuedEventDimension("city", "sao-paulo"),
-        referenceDateTime, ChronoUnit.HOURS, 1, ChronoUnit.DAYS, 7);
+    summaryComponent.singleDimensionProbability(distribution, "sao-paulo");
+
+// Joint probability of several dimensions (pure reduction over the per-dimension probabilities)
+StatisticsEventNaiveMultiDimensionProbability joint =
+    summaryComponent.naiveMultiDimensionProbability(List.of(probability, /* … */));
 ```
 
 ### Configure Truncation

@@ -25,10 +25,10 @@ import org.springframework.http.HttpStatus;
  * window boundaries, period aggregation, drift comparison, per-dimension distribution/probability,
  * the naive multi-dimension joint, and the cross-dimension z-score aggregators.
  *
- * <p>{@link StatisticsEventSummaryServiceComponent} owns fetching and caching and delegates every
- * computation here; its public methods keep their signatures and caches. Callers that already hold
- * (and cache, e.g. with longer or two-layer caches) the underlying summaries can compute against
- * them directly without going through the component's own caches.
+ * <p>{@link StatisticsEventSummaryServiceComponent} owns fetching and delegates every computation
+ * here; the base component does not cache the summary path, but exposes {@code protected} extension
+ * points an extended bean can override to add caching. Callers that already hold (and cache, e.g.
+ * with longer or two-layer caches) the underlying summaries can compute against them directly.
  *
  * <p>Methods are ordered callees-before-callers: low-level primitives first, then the mid-level
  * builders, then the public entry points that compose them.
@@ -250,11 +250,14 @@ public final class StatisticsEventSummaryHelper {
 			final List<List<StatisticsEventSummary>> perWindowSummaries) {
 		final PeriodAggregation aggregation = new PeriodAggregation();
 		for (final List<StatisticsEventSummary> summaries : perWindowSummaries) {
-			if ((summaries != null) && !summaries.isEmpty()) {
-				long total = 0L;
-				BigDecimal totalWeight = BigDecimal.ZERO;
-				final Map<String, Long> mergedCounts = new HashMap<>();
-				final Map<String, BigDecimal> mergedWeights = new HashMap<>();
+			long total = 0L;
+			BigDecimal totalWeight = BigDecimal.ZERO;
+			final Map<String, Long> mergedCounts = new HashMap<>();
+			final Map<String, BigDecimal> mergedWeights = new HashMap<>();
+			// A window with no data still contributes a zero-valued sample (it is not skipped), so every
+			// sample window weighs in equally on the average and standard deviation — a sparse dimension
+			// is not silently averaged over only the windows that happened to have data.
+			if (summaries != null) {
 				for (final StatisticsEventSummary summary : summaries) {
 					total += summary.getTotalCount();
 					totalWeight = totalWeight.add(summary.getTotalWeight());
@@ -265,14 +268,17 @@ public final class StatisticsEventSummaryHelper {
 							key,
 							value) -> mergedWeights.merge(key, value, BigDecimal::add));
 				}
-				aggregation.counts.totals.add(BigDecimal.valueOf(total));
-				aggregation.counts.allValues.add(StatisticsEventSummaryHelper.toBigDecimalMap(mergedCounts));
-				aggregation.weights.totals.add(totalWeight);
-				aggregation.weights.allValues.add(mergedWeights);
-				aggregation.allKeys.addAll(mergedCounts.keySet());
 			}
+			aggregation.counts.totals.add(BigDecimal.valueOf(total));
+			aggregation.counts.allValues.add(StatisticsEventSummaryHelper.toBigDecimalMap(mergedCounts));
+			aggregation.weights.totals.add(totalWeight);
+			aggregation.weights.allValues.add(mergedWeights);
+			aggregation.allKeys.addAll(mergedCounts.keySet());
 		}
-		if (aggregation.counts.totals.isEmpty()) {
+		// Null only when no sample window had any data at all: this preserves the "nodata" contract and
+		// avoids a zero denominator in Laplace smoothing. A mix of populated and empty windows is kept,
+		// with the empty ones counted as zeros.
+		if (aggregation.allKeys.isEmpty()) {
 			return null;
 		}
 		StatisticsEventSummaryHelper.computeMetricStats(aggregation.counts, aggregation.allKeys);
@@ -337,42 +343,108 @@ public final class StatisticsEventSummaryHelper {
 		StatisticsEventSummaryHelper.populateZScores(stats, aggregation, allKeys);
 	}
 
-	// ---- Window builders ----
+	// ---- Window schedule ----
+
+	/** One sample window: an inclusive {@code [start, end]} time range. Both bounds are truncated. */
+	public record Window(
+			LocalDateTime start,
+			LocalDateTime end) {
+	}
 
 	/**
-	 * Builds the historical sample windows, EXCLUDING the reference window (steps {@code 1..steps}
-	 * back). Used by drift comparison, which contrasts the reference against its own past.
+	 * The fully-resolved (already-truncated) sampling schedule for a query: the reference window plus
+	 * the sample windows to aggregate over. For drift comparison the samples are the historical windows
+	 * (reference excluded); for distribution/probability they are the reference-inclusive windows. The
+	 * service builds this in its public methods so the {@code ...Cacheable} seams receive it ready-made
+	 * and never truncate.
 	 */
-	public static void historicalWindows(
-			final LocalDateTime referenceStart,
-			final LocalDateTime referenceEnd,
-			final ChronoUnit stepUnit,
-			final int steps,
-			final long truncationMinutes,
-			final List<LocalDateTime> starts,
-			final List<LocalDateTime> ends) {
-		for (int stepIndex = 1; stepIndex <= steps; stepIndex++) {
-			starts.add(StatisticsEvent.truncateDateTime(referenceStart.minus(stepIndex, stepUnit), truncationMinutes));
-			ends.add(StatisticsEvent.truncateDateTime(referenceEnd.minus(stepIndex, stepUnit), truncationMinutes));
+	public record WindowSchedule(
+			Window reference,
+			List<Window> samples) {
+
+		/** Earliest start across the reference and every sample window — the bulk fetch's lower bound. */
+		public LocalDateTime overallStart() {
+			return Stream.concat(Stream.of(this.reference), this.samples.stream()).map(Window::start).min(Comparator.naturalOrder())
+					.orElse(this.reference.start());
+		}
+
+		/** Latest end across the reference and every sample window — the bulk fetch's upper bound. */
+		public LocalDateTime overallEnd() {
+			return Stream.concat(Stream.of(this.reference), this.samples.stream()).map(Window::end).max(Comparator.naturalOrder())
+					.orElse(this.reference.end());
 		}
 	}
 
 	/**
-	 * Builds the sample windows INCLUDING the reference window (steps {@code 0..steps-1} back). Used
-	 * by probability/distribution, which pools the reference period into the estimate.
+	 * Builds the schedule whose samples are the historical windows, EXCLUDING the reference window
+	 * (steps {@code 1..steps} back). Used by drift comparison, which contrasts the reference against its
+	 * own past. {@code referenceStart} must already be truncated; the reference end and every sample
+	 * bound are truncated here.
 	 */
-	public static void referenceInclusiveWindows(
+	public static WindowSchedule historicalSchedule(
 			final LocalDateTime referenceStart,
-			final LocalDateTime referenceEnd,
+			final ChronoUnit windowUnit,
+			final Integer windowSize,
 			final ChronoUnit stepUnit,
-			final int steps,
-			final long truncationMinutes,
-			final List<LocalDateTime> starts,
-			final List<LocalDateTime> ends) {
-		for (int stepIndex = 0; stepIndex < steps; stepIndex++) {
-			starts.add(StatisticsEvent.truncateDateTime(referenceStart.minus(stepIndex, stepUnit), truncationMinutes));
-			ends.add(StatisticsEvent.truncateDateTime(referenceEnd.minus(stepIndex, stepUnit), truncationMinutes));
+			final Integer steps,
+			final long truncationMinutes) {
+		final LocalDateTime referenceEnd = StatisticsEvent.truncateDateTime(referenceStart.plus(windowSize, windowUnit), truncationMinutes);
+		final List<Window> samples = new ArrayList<>();
+		for (int stepIndex = 1; stepIndex <= steps; stepIndex++) {
+			samples.add(new Window(StatisticsEvent.truncateDateTime(referenceStart.minus(stepIndex, stepUnit), truncationMinutes),
+					StatisticsEvent.truncateDateTime(referenceEnd.minus(stepIndex, stepUnit), truncationMinutes)));
 		}
+		return new WindowSchedule(new Window(referenceStart, referenceEnd), samples);
+	}
+
+	/**
+	 * Builds the schedule whose samples INCLUDE the reference window (steps {@code 0..steps-1} back).
+	 * Used by probability/distribution, which pools the reference period into the estimate.
+	 * {@code referenceStart} must already be truncated; the reference end and every sample bound are
+	 * truncated here.
+	 */
+	public static WindowSchedule referenceInclusiveSchedule(
+			final LocalDateTime referenceStart,
+			final ChronoUnit windowUnit,
+			final Integer windowSize,
+			final ChronoUnit stepUnit,
+			final Integer steps,
+			final long truncationMinutes) {
+		final LocalDateTime referenceEnd = StatisticsEvent.truncateDateTime(referenceStart.plus(windowSize, windowUnit), truncationMinutes);
+		final List<Window> samples = new ArrayList<>();
+		for (int stepIndex = 0; stepIndex < steps; stepIndex++) {
+			samples.add(new Window(StatisticsEvent.truncateDateTime(referenceStart.minus(stepIndex, stepUnit), truncationMinutes),
+					StatisticsEvent.truncateDateTime(referenceEnd.minus(stepIndex, stepUnit), truncationMinutes)));
+		}
+		return new WindowSchedule(new Window(referenceStart, referenceEnd), samples);
+	}
+
+	/**
+	 * Buckets a flat list of already-fetched summaries (for a single dimension) into per-window lists,
+	 * matching each window's inclusive {@code [start, end]} bounds. Pairs with the bulk single-query
+	 * fetch: one range query returns every row across the union of windows, this slices them back into
+	 * the per-window shape that {@link #computeComparison} and {@link #computeDistribution} consume. A
+	 * summary that falls in overlapping windows is included in each, mirroring per-window queries.
+	 *
+	 * @param  summaries Flat summary list (already filtered to one dimension).
+	 * @param  windows   Sample windows, in order.
+	 * @return           Per-window summary lists, aligned with {@code windows}.
+	 */
+	public static List<List<StatisticsEventSummary>> bucketByWindows(
+			final List<StatisticsEventSummary> summaries,
+			final List<Window> windows) {
+		final List<List<StatisticsEventSummary>> perWindowSummaries = new ArrayList<>(windows.size());
+		for (final Window window : windows) {
+			final List<StatisticsEventSummary> bucket = new ArrayList<>();
+			for (final StatisticsEventSummary summary : summaries) {
+				final LocalDateTime dateTime = summary.getDateTime();
+				if ((dateTime != null) && !dateTime.isBefore(window.start()) && !dateTime.isAfter(window.end())) {
+					bucket.add(summary);
+				}
+			}
+			perWindowSummaries.add(bucket);
+		}
+		return perWindowSummaries;
 	}
 
 	// ---- Public validation ----
@@ -609,6 +681,21 @@ public final class StatisticsEventSummaryHelper {
 		result.setJointSmoothedLogProbability(BigDecimal.valueOf(jointSmoothedLogProbability).setScale(6, RoundingMode.HALF_UP));
 		result.setIndividualProbabilities(individualProbabilities);
 		return result;
+	}
+
+	/**
+	 * Combines already-computed single-dimension probabilities into the naive joint, taking the context
+	 * and window metadata from the probabilities themselves (they all share one schedule). A pure
+	 * reduction over pre-computed inputs — no fetch, no window arguments.
+	 *
+	 * @param  individualProbabilities Per-dimension probabilities (non-empty; all from the same call).
+	 * @return                         The naive multi-dimension probability.
+	 */
+	public static StatisticsEventNaiveMultiDimensionProbability naiveMultiDimensionProbability(
+			final List<StatisticsEventSingleDimensionProbability> individualProbabilities) {
+		final StatisticsEventSingleDimensionProbability first = individualProbabilities.get(0);
+		return StatisticsEventSummaryHelper.naiveMultiDimensionProbability(individualProbabilities, first.getContext(), first.getReferenceDateTime(),
+				first.getWindowUnit(), first.getWindowSize(), first.getStepUnit(), first.getSteps());
 	}
 
 	// ---- Public cross-dimension z-score aggregators ----

@@ -101,8 +101,8 @@ public class StatisticsEventServiceComponent {
   private StatisticsContextConfigurationServiceComponent
       statisticsContextConfigurationServiceComponent;
 
-  /** Statistics event summary service component. */
-  @Autowired private StatisticsEventSummaryServiceComponent statisticsEventSummaryServiceComponent;
+  /** Statistics event summary buffer service component. */
+  @Autowired private StatisticsEventSummaryBufferServiceComponent statisticsEventSummaryBufferServiceComponent;
 
   /**
    * Finds a statistics event by its composite key.
@@ -140,7 +140,7 @@ public class StatisticsEventServiceComponent {
             statisticsEvent.getDateTime());
     delta.addDelta(
         statisticsEvent.getDimensionValue(), -1, statisticsEvent.getWeight().negate());
-    this.statisticsEventSummaryServiceComponent.bufferDelta(delta.getKey(), delta);
+    this.statisticsEventSummaryBufferServiceComponent.bufferDelta(delta.getKey(), delta);
   }
 
   /**
@@ -165,13 +165,13 @@ public class StatisticsEventServiceComponent {
           new StatisticsEventSummaryDelta(
               incoming.getContext(), incoming.getDimensionName(), oldDateTime);
       oldDelta.addDelta(oldDimensionValue, -1, oldWeight.negate());
-      this.statisticsEventSummaryServiceComponent.bufferDelta(oldDelta.getKey(), oldDelta);
+      this.statisticsEventSummaryBufferServiceComponent.bufferDelta(oldDelta.getKey(), oldDelta);
       // Increment in new bucket.
       final StatisticsEventSummaryDelta newDelta =
           new StatisticsEventSummaryDelta(
               incoming.getContext(), incoming.getDimensionName(), newDateTime);
       newDelta.addDelta(newDimensionValue, 1, incoming.getWeight());
-      this.statisticsEventSummaryServiceComponent.bufferDelta(newDelta.getKey(), newDelta);
+      this.statisticsEventSummaryBufferServiceComponent.bufferDelta(newDelta.getKey(), newDelta);
     } else if (dimensionValueChanged) {
       final StatisticsEventSummaryDelta delta =
           new StatisticsEventSummaryDelta(
@@ -180,14 +180,14 @@ public class StatisticsEventServiceComponent {
         delta.addDelta(oldDimensionValue, -1, oldWeight.negate());
       }
       delta.addDelta(newDimensionValue, 1, incoming.getWeight());
-      this.statisticsEventSummaryServiceComponent.bufferDelta(delta.getKey(), delta);
+      this.statisticsEventSummaryBufferServiceComponent.bufferDelta(delta.getKey(), delta);
     } else if (weightChanged) {
       final StatisticsEventSummaryDelta delta =
           new StatisticsEventSummaryDelta(
               incoming.getContext(), incoming.getDimensionName(), newDateTime);
       delta.addDelta(
           newDimensionValue, 0, incoming.getWeight().subtract(oldWeight));
-      this.statisticsEventSummaryServiceComponent.bufferDelta(delta.getKey(), delta);
+      this.statisticsEventSummaryBufferServiceComponent.bufferDelta(delta.getKey(), delta);
     }
   }
 
