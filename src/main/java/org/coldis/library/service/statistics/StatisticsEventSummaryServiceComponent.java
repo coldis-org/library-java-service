@@ -104,14 +104,32 @@ public class StatisticsEventSummaryServiceComponent {
 
 	/**
 	 * Fetches one window's summaries either as a single range query (one {@link #findByPeriodCacheable}
-	 * over {@code [start, end]}, cached at the range grain) or, when {@code useTruncationBuckets} is set,
-	 * as one {@link #findByPeriodCacheable} per truncation bucket — each called with {@code start == end ==
-	 * bucket}, so its cache entry is keyed on a single bucket and reused by every window or period that
-	 * contains that bucket, across calls and across the summarize / compare paths. When {@code parallel}
-	 * is set the per-bucket reads run concurrently. Not a cache seam itself — the caching lives on
-	 * {@link #findByPeriodCacheable}.
+	 * over {@code [start, end]}) or, when {@code useTruncationBuckets} is set, as one
+	 * {@link #findByPeriodCacheable} per truncation bucket — each called with {@code start == end == bucket},
+	 * so the bucket cache entry is reused by every window or period that contains it. When {@code parallel}
+	 * is set the per-bucket reads run concurrently.
+	 *
+	 * <p><strong>Cache candidate at the window grain.</strong> The result depends only on the
+	 * value-independent {@code (context, dimensionName, startDateTime, endDateTime)} — {@code
+	 * useTruncationBuckets} and {@code parallel} only change <em>how</em> the rows are fetched, never
+	 * <em>which</em> rows come back — so an extended bean that {@code @Cacheable}s this must key on those
+	 * four and <em>exclude</em> the two strategy flags from the key. Caching here (window grain) is an
+	 * alternative to caching {@link #findByPeriodCacheable} (range/bucket grain), not a complement: for a
+	 * range fetch the two cache the same rows. Bounds are already truncated by the caller.
+	 *
+	 * @param  context              Context.
+	 * @param  dimensionName        Dimension name.
+	 * @param  startDateTime        Start date time (truncated before the call).
+	 * @param  endDateTime          End date time (truncated before the call).
+	 * @param  useTruncationBuckets Fetch one truncation bucket at a time instead of a single range query.
+	 * @param  parallel             Fetch the per-bucket reads concurrently.
+	 * @return                      The window's summaries.
 	 */
-	private List<StatisticsEventSummary> fetchPeriod(
+	@Transactional(
+			propagation = Propagation.NOT_SUPPORTED,
+			readOnly = true
+	)
+	protected List<StatisticsEventSummary> fetchPeriodCacheable(
 			final String context,
 			final String dimensionName,
 			final LocalDateTime startDateTime,
@@ -135,7 +153,7 @@ public class StatisticsEventSummaryServiceComponent {
 
 	/**
 	 * Fetches the raw summaries for a context and dimension within a date range, truncating the bounds to
-	 * the context interval before delegating to {@link #fetchPeriod}. With explicit control over the fetch
+	 * the context interval before delegating to {@link #fetchPeriodCacheable}. With explicit control over the fetch
 	 * strategy: per-truncation-bucket fetching (for cache reuse) and parallel reads.
 	 *
 	 * @param  context              Context.
@@ -153,7 +171,7 @@ public class StatisticsEventSummaryServiceComponent {
 			final LocalDateTime endDateTime,
 			final boolean useTruncationBuckets,
 			final boolean parallel) {
-		return this.fetchPeriod(context, dimensionName,
+		return this.fetchPeriodCacheable(context, dimensionName,
 				this.statisticsContextConfigurationServiceComponent.truncateDateTime(context, startDateTime),
 				this.statisticsContextConfigurationServiceComponent.truncateDateTime(context, endDateTime), useTruncationBuckets, parallel);
 	}
@@ -202,7 +220,7 @@ public class StatisticsEventSummaryServiceComponent {
 			final LocalDateTime endDateTime,
 			final boolean useTruncationBuckets,
 			final boolean parallel) throws BusinessException {
-		final List<StatisticsEventSummary> summaries = this.fetchPeriod(context, dimensionName, startDateTime, endDateTime, useTruncationBuckets, parallel);
+		final List<StatisticsEventSummary> summaries = this.fetchPeriodCacheable(context, dimensionName, startDateTime, endDateTime, useTruncationBuckets, parallel);
 		if ((summaries == null) || summaries.isEmpty()) {
 			throw new BusinessException(new SimpleMessage("statistics.event.summary.notfound"), HttpStatus.NOT_FOUND.value());
 		}
@@ -306,13 +324,13 @@ public class StatisticsEventSummaryServiceComponent {
 		final List<StatisticsEventSummaryComparison> comparisons = new ArrayList<>();
 		for (final String dimensionName : dimensionNames.stream().distinct().toList()) {
 			final List<StatisticsEventSummary> referenceSummaries =
-					this.fetchPeriod(context, dimensionName, schedule.reference().start(), schedule.reference().end(), useTruncationBuckets, parallel);
+					this.fetchPeriodCacheable(context, dimensionName, schedule.reference().start(), schedule.reference().end(), useTruncationBuckets, parallel);
 			// Sample windows are fetched concurrently when parallel; each window's own buckets stay
 			// sequential to avoid nested parallelism. Window order does not affect the aggregation.
 			final List<StatisticsEventSummaryHelper.Window> samples = schedule.samples();
 			final List<List<StatisticsEventSummary>> perWindowSummaries =
 					(parallel ? samples.parallelStream() : samples.stream())
-							.map(window -> this.fetchPeriod(context, dimensionName, window.start(), window.end(), useTruncationBuckets, false)).toList();
+							.map(window -> this.fetchPeriodCacheable(context, dimensionName, window.start(), window.end(), useTruncationBuckets, false)).toList();
 			comparisons.add(StatisticsEventSummaryHelper.computeComparison(referenceSummaries, perWindowSummaries, context, dimensionName,
 					schedule.reference().start(), windowUnit, windowSize, stepUnit, steps));
 		}
