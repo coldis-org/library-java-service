@@ -1287,6 +1287,54 @@ public class StatisticsEventServiceComponentTest extends ContainerTestHelper {
         new BigDecimal("250.00"), summary.getValueWeights().get("purchase"), TOLERANCE);
   }
 
+  /**
+   * The fetch-strategy toggle must not change results: per-truncation-bucket fetching (sequential or
+   * parallel) returns the same merged summaries — and therefore the same comparison — as a single
+   * range query. Seeds two sub-hour buckets per window so bucket enumeration genuinely spans more than
+   * one bucket.
+   */
+  @Test
+  public void testCompareByPeriodBucketModeMatchesRangeMode() throws Exception {
+    final String context = "test-comparison-bucket-mode";
+    final LocalDateTime reference = LocalDateTime.of(2026, 2, 2, 10, 0, 0);
+    final List<SummarySpec> specs = new ArrayList<>();
+    for (int day = 0; day <= 3; day++) {
+      final LocalDateTime base = reference.minusDays(day);
+      specs.add(
+          new SummarySpec(
+              "city", base, Map.of("sao-paulo", (long) (2 + day), "rio", (long) (1 + day)),
+              Map.of("sao-paulo", new BigDecimal(20 + day), "rio", new BigDecimal(10 + day))));
+      specs.add(
+          new SummarySpec(
+              "city", base.plusMinutes(30), Map.of("sao-paulo", 1L, "belo-horizonte", (long) (day + 1)),
+              Map.of("sao-paulo", new BigDecimal(9), "belo-horizonte", new BigDecimal(5 * (day + 1)))));
+    }
+    this.seedParitySummaries(context, specs);
+    this.cacheHelper.clearCaches();
+
+    // Range mode (single query per window) vs bucket mode + parallel must match field-by-field.
+    final StatisticsEventSummaryComparison range =
+        this.statisticsEventSummaryServiceComponent.compareByPeriod(
+            context, "city", reference, ChronoUnit.HOURS, 1, ChronoUnit.DAYS, 3, false, false);
+    this.cacheHelper.clearCaches();
+    final StatisticsEventSummaryComparison bucketParallel =
+        this.statisticsEventSummaryServiceComponent.compareByPeriod(
+            context, "city", reference, ChronoUnit.HOURS, 1, ChronoUnit.DAYS, 3, true, true);
+    this.assertComparisonsClose("city bucket-vs-range", range, bucketParallel);
+
+    // summarizePeriod: range and bucket fetch merge to the same totals/values.
+    this.cacheHelper.clearCaches();
+    final StatisticsEventSummary rangeSummary =
+        this.statisticsEventSummaryServiceComponent.summarizePeriod(
+            context, "city", reference, reference.plusHours(1), false, false);
+    this.cacheHelper.clearCaches();
+    final StatisticsEventSummary bucketSummary =
+        this.statisticsEventSummaryServiceComponent.summarizePeriod(
+            context, "city", reference, reference.plusHours(1), true, false);
+    Assertions.assertEquals(rangeSummary.getTotalCount(), bucketSummary.getTotalCount());
+    Assertions.assertEquals(rangeSummary.getValueCounts(), bucketSummary.getValueCounts());
+  }
+
   /** One seeded per-window summary, loaded from the parity resource. */
   private record SummarySpec(
       String dimensionName,
@@ -1345,8 +1393,9 @@ public class StatisticsEventServiceComponentTest extends ContainerTestHelper {
   }
 
   /**
-   * Builds the comparison the slow way — one raw {@code findByPeriod} per window fed to the pure
-   * {@code computeComparison} — to serve as the oracle for the SQL path.
+   * Builds the comparison independently — one raw {@code findByPeriod} per window fed to the pure
+   * {@code computeComparison} — to serve as an oracle that cross-checks {@code compareByPeriod}'s own
+   * schedule building and per-window fetching.
    */
   private StatisticsEventSummaryComparison inMemoryComparisonOracle(
       final String context, final String dimension, final LocalDateTime reference, final int steps)
@@ -1383,11 +1432,11 @@ public class StatisticsEventServiceComponentTest extends ContainerTestHelper {
 
   /**
    * Parity test: across a rich seeded dataset (many windows, several values, zero-fill, and a
-   * large-magnitude/small-variance dimension), the SQL sufficient-statistics comparison
-   * ({@code compareByPeriod}) must match the in-memory oracle ({@code findByPeriod} per window +
-   * {@code computeComparison}) field-by-field, for both count and weight stats. This is what actually
-   * validates the means / std-devs / ratios / z-scores of the pushed-down path at scale and exposes
-   * any precision drift in the {@code Σx²−mean²} variance form.
+   * large-magnitude/small-variance dimension), {@code compareByPeriod} must match an independent
+   * in-memory oracle ({@code findByPeriod} per window + {@code computeComparison}) field-by-field,
+   * for both count and weight stats. With aggregation done in the service, this validates that the
+   * production path builds the right schedule and fetches the right per-window rows, and that the
+   * means / std-devs / ratios / z-scores are correct at scale.
    */
   @Test
   public void testCompareByPeriodParityAgainstInMemoryOracle() throws Exception {

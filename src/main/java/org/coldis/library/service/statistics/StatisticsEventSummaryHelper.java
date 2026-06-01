@@ -425,6 +425,35 @@ public final class StatisticsEventSummaryHelper {
 		return new WindowSchedule(new Window(referenceStart, referenceEnd), samples);
 	}
 
+	/**
+	 * The truncation-bucket timestamps spanning {@code [start, end]} inclusive, stepping by
+	 * {@code truncationMinutes} (the context's configured truncation). With {@code start} already on the
+	 * truncation grid every returned timestamp aligns with a stored summary bucket, so a caller can fetch
+	 * and cache one bucket at a time. Returns just {@code start} when the step is non-positive.
+	 *
+	 * @param  start             First bucket (already truncated).
+	 * @param  end               Inclusive upper bound (already truncated).
+	 * @param  truncationMinutes Bucket size in minutes (the context's truncation interval).
+	 * @return                   The bucket timestamps, in ascending order.
+	 */
+	public static List<LocalDateTime> bucketsBetween(
+			final LocalDateTime start,
+			final LocalDateTime end,
+			final long truncationMinutes) {
+		final List<LocalDateTime> buckets = new ArrayList<>();
+		if (truncationMinutes <= 0L) {
+			buckets.add(start);
+		}
+		else {
+			LocalDateTime bucket = start;
+			while (!bucket.isAfter(end)) {
+				buckets.add(bucket);
+				bucket = bucket.plusMinutes(truncationMinutes);
+			}
+		}
+		return buckets;
+	}
+
 	// ---- Public validation ----
 
 	/**
@@ -519,155 +548,6 @@ public final class StatisticsEventSummaryHelper {
 		StatisticsEventSummaryHelper.populateMetricComparisonStats(weightStats, aggregation.weights, aggregation.allKeys);
 
 		return comparison;
-	}
-
-	/**
-	 * Builds the drift comparison from the Postgres-computed sufficient statistics (the
-	 * {@link StatisticsEventSummaryRepositoryCustom#compareStatistics} rows). Derives averages, standard
-	 * deviations, ratios and z-scores in {@code BigDecimal} from the per-value sums — the same math as
-	 * {@link #computeComparison}, just fed by the database's reduction instead of per-window summaries.
-	 * Variance is {@code Σx²/n − mean²} (vs. the iterative form in {@link #computeComparison}); the two
-	 * agree to within rounding. A value present only in the samples is z-scored against a zero
-	 * reference; a value present only in the reference appears only in the reference maps.
-	 *
-	 * @param  statistics        The sufficient-statistic rows (per metric × value, plus per-metric totals).
-	 * @param  sampleWindowCount The number of sample windows (the divisor for the averages).
-	 * @param  context           Context.
-	 * @param  dimensionName     Dimension name.
-	 * @param  referenceDateTime Start of the (already truncated) reference window.
-	 * @param  windowUnit        Window unit.
-	 * @param  windowSize        Window size.
-	 * @param  stepUnit          Step unit.
-	 * @param  steps             Number of historical samples.
-	 * @return                   The comparison.
-	 * @throws BusinessException If no sample window had any data.
-	 */
-	public static StatisticsEventSummaryComparison assembleComparison(
-			final List<StatisticsEventSummaryRepositoryCustom.ComparisonStatistic> statistics,
-			final int sampleWindowCount,
-			final String context,
-			final String dimensionName,
-			final LocalDateTime referenceDateTime,
-			final ChronoUnit windowUnit,
-			final Integer windowSize,
-			final ChronoUnit stepUnit,
-			final Integer steps) throws BusinessException {
-		final StatisticsEventSummaryComparison comparison = new StatisticsEventSummaryComparison();
-		comparison.setContext(context);
-		comparison.setDimensionName(dimensionName);
-		comparison.setReferenceDateTime(referenceDateTime);
-		comparison.setWindowUnit(windowUnit);
-		comparison.setWindowSize(windowSize);
-		comparison.setStepUnit(stepUnit);
-		comparison.setSteps(steps);
-		comparison.setSampleSize(sampleWindowCount);
-		final boolean hasCountSample = StatisticsEventSummaryHelper.populateMetricFromStatistics(comparison.getCountStats(), "count", statistics,
-				sampleWindowCount);
-		StatisticsEventSummaryHelper.populateMetricFromStatistics(comparison.getWeightStats(), "weight", statistics, sampleWindowCount);
-		if (!hasCountSample) {
-			throw new BusinessException(new SimpleMessage("statistics.event.summary.comparison.nodata"), HttpStatus.NOT_FOUND.value());
-		}
-		return comparison;
-	}
-
-	/**
-	 * Populates one metric's comparison stats from the sufficient-statistic rows. Returns whether the
-	 * metric had any sample-window data (used to enforce the {@code nodata} contract on counts).
-	 */
-	private static boolean populateMetricFromStatistics(
-			final MetricComparisonStats stats,
-			final String metric,
-			final List<StatisticsEventSummaryRepositoryCustom.ComparisonStatistic> statistics,
-			final int sampleWindowCount) {
-		final BigDecimal windowCount = BigDecimal.valueOf(sampleWindowCount);
-		BigDecimal referenceTotal = null;
-		for (final StatisticsEventSummaryRepositoryCustom.ComparisonStatistic statistic : statistics) {
-			if (metric.equals(statistic.metric()) && (statistic.dimensionValue() == null)) {
-				final BigDecimal averageTotal = (statistic.sampleSum() == null) ? BigDecimal.ZERO
-						: statistic.sampleSum().divide(windowCount, StatisticsEventSummaryHelper.MATH_CONTEXT);
-				stats.setAverageTotal(averageTotal);
-				stats.setStdDevTotal(StatisticsEventSummaryHelper.stdDevFromSums(statistic.sampleSum(), statistic.sampleSumSquare(), sampleWindowCount));
-				if ((statistic.referenceValue() != null) && (statistic.referenceValue().signum() > 0)) {
-					referenceTotal = statistic.referenceValue();
-					stats.setReferenceTotal(referenceTotal);
-					stats.setZScoreTotal(StatisticsEventSummaryHelper.computeZScore(referenceTotal, averageTotal, stats.getStdDevTotal()));
-				}
-			}
-		}
-		final boolean hasReference = referenceTotal != null;
-		final Map<String, BigDecimal> averageValues = new HashMap<>();
-		final Map<String, BigDecimal> stdDevValues = new HashMap<>();
-		final Map<String, BigDecimal> averageRatios = new HashMap<>();
-		final Map<String, BigDecimal> stdDevRatios = new HashMap<>();
-		final Map<String, BigDecimal> referenceValues = new HashMap<>();
-		final Map<String, BigDecimal> referenceRatios = new HashMap<>();
-		final Map<String, BigDecimal> zScoreValues = new HashMap<>();
-		final Map<String, BigDecimal> zScoreRatios = new HashMap<>();
-		boolean hasSample = false;
-		for (final StatisticsEventSummaryRepositoryCustom.ComparisonStatistic statistic : statistics) {
-			if (!metric.equals(statistic.metric()) || (statistic.dimensionValue() == null)) {
-				continue;
-			}
-			final String value = statistic.dimensionValue();
-			if (statistic.sampleSum() != null) {
-				hasSample = true;
-				final BigDecimal average = statistic.sampleSum().divide(windowCount, StatisticsEventSummaryHelper.MATH_CONTEXT);
-				final BigDecimal stdDev = StatisticsEventSummaryHelper.stdDevFromSums(statistic.sampleSum(), statistic.sampleSumSquare(), sampleWindowCount);
-				final BigDecimal averageRatio = statistic.sampleRatioSum().divide(windowCount, StatisticsEventSummaryHelper.MATH_CONTEXT);
-				final BigDecimal stdDevRatio = StatisticsEventSummaryHelper.stdDevFromSums(statistic.sampleRatioSum(), statistic.sampleRatioSumSquare(),
-						sampleWindowCount);
-				averageValues.put(value, average);
-				stdDevValues.put(value, stdDev);
-				averageRatios.put(value, averageRatio);
-				stdDevRatios.put(value, stdDevRatio);
-				if (hasReference) {
-					final BigDecimal referenceValue = (statistic.referenceValue() == null) ? BigDecimal.ZERO : statistic.referenceValue();
-					final BigDecimal referenceRatio = (statistic.referenceValue() == null) ? BigDecimal.ZERO
-							: statistic.referenceValue().divide(referenceTotal, StatisticsEventSummaryHelper.MATH_CONTEXT);
-					zScoreValues.put(value, StatisticsEventSummaryHelper.computeZScore(referenceValue, average, stdDev));
-					zScoreRatios.put(value, StatisticsEventSummaryHelper.computeZScore(referenceRatio, averageRatio, stdDevRatio));
-				}
-			}
-			if (hasReference && (statistic.referenceValue() != null)) {
-				referenceValues.put(value, statistic.referenceValue());
-				referenceRatios.put(value, statistic.referenceValue().divide(referenceTotal, StatisticsEventSummaryHelper.MATH_CONTEXT));
-			}
-		}
-		stats.setAverageValues(averageValues);
-		stats.setStdDevValues(stdDevValues);
-		stats.setAverageRatios(averageRatios);
-		stats.setStdDevRatios(stdDevRatios);
-		if (hasReference) {
-			stats.setReferenceValues(referenceValues);
-			stats.setReferenceRatios(referenceRatios);
-			stats.setZScoreValues(zScoreValues);
-			stats.setZScoreRatios(zScoreRatios);
-		}
-		return hasSample;
-	}
-
-	/**
-	 * Population standard deviation from the sum and sum-of-squares over {@code count} samples:
-	 * {@code sqrt(Σx²/n − (Σx/n)²)}, clamped at zero. Mirrors {@link #computeStdDev}'s final {@code sqrt}
-	 * step (taken in {@code double}; the variance is exact {@code BigDecimal}).
-	 */
-	private static BigDecimal stdDevFromSums(
-			final BigDecimal sum,
-			final BigDecimal sumSquare,
-			final int count) {
-		if ((sum == null) || (sumSquare == null) || (count == 0)) {
-			return BigDecimal.ZERO;
-		}
-		// Centre the sum of squares in EXACT arithmetic (no MathContext): n·Σx² − (Σx)² cancels to
-		// exactly zero when every sample is equal (e.g. a single window) and is ≥ 0 by Cauchy-Schwarz.
-		// Doing the subtraction in DECIMAL64 instead leaves a rounding residual that an irrational
-		// ratio turns into a tiny non-zero std-dev — and a divide-by-near-zero z-score blow-up.
-		final BigDecimal centeredSumSquare = sumSquare.multiply(BigDecimal.valueOf(count)).subtract(sum.multiply(sum));
-		if (centeredSumSquare.signum() <= 0) {
-			return BigDecimal.ZERO;
-		}
-		final double variance = centeredSumSquare.doubleValue() / ((double) count * (double) count);
-		return BigDecimal.valueOf(Math.sqrt(Math.max(variance, 0.0))).round(StatisticsEventSummaryHelper.MATH_CONTEXT);
 	}
 
 	/**

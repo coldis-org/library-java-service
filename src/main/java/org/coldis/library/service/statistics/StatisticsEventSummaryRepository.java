@@ -18,8 +18,7 @@ import org.springframework.transaction.annotation.Transactional;
  */
 @Repository
 public interface StatisticsEventSummaryRepository
-    extends PostgresJpaRepository<StatisticsEventSummary, StatisticsEventSummaryKey>,
-        StatisticsEventSummaryRepositoryCustom {
+    extends PostgresJpaRepository<StatisticsEventSummary, StatisticsEventSummaryKey> {
 
   /**
    * Atomically inserts a summary row if absent, no-op if a row with the same composite key already
@@ -49,10 +48,10 @@ public interface StatisticsEventSummaryRepository
       @Param("dateTime") LocalDateTime dateTime);
 
   /**
-   * Finds all statistics event summaries for a context and dimension within a date range. A single
-   * index-friendly range scan over {@code (context, dimension_name, date_time)} that collapses what
-   * used to be one query per sample window into one round-trip per dimension; callers bucket the
-   * returned rows into their windows in memory.
+   * Finds all statistics event summaries for a context and dimension within a date range — an
+   * index-friendly range scan over {@code (context, dimension_name, date_time)}. Callers scope each
+   * call to a single window's exact bounds (the reference or one sample window), so only in-window
+   * rows are returned and drift comparison aggregates them in the service.
    *
    * @param context Context.
    * @param dimensionName Dimension name.
