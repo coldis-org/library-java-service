@@ -1,14 +1,20 @@
 package org.coldis.library.test.service.statistics;
 
+import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import java.math.BigDecimal;
 import java.math.MathContext;
 import java.time.LocalDateTime;
 import java.time.temporal.ChronoUnit;
+import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 
 import org.coldis.library.exception.BusinessException;
 import org.coldis.library.persistence.lock.LockType;
 import org.coldis.library.service.cache.CacheHelper;
+import org.coldis.library.service.statistics.MetricComparisonStats;
 import org.coldis.library.service.statistics.StatisticsEvent;
 import org.coldis.library.service.statistics.StatisticsEventKey;
 import org.coldis.library.service.statistics.StatisticsEventNaiveMultiDimensionProbability;
@@ -18,7 +24,9 @@ import org.coldis.library.service.statistics.StatisticsEventSingleDimensionProba
 import org.coldis.library.service.statistics.StatisticsEventSummary;
 import org.coldis.library.service.statistics.StatisticsEventSummaryComparison;
 import org.coldis.library.service.statistics.StatisticsEventSummaryBufferServiceComponent;
+import org.coldis.library.service.statistics.StatisticsEventSummaryHelper;
 import org.coldis.library.service.statistics.StatisticsEventSummaryKey;
+import org.coldis.library.service.statistics.StatisticsEventSummaryRepository;
 import org.coldis.library.service.statistics.StatisticsEventSummaryServiceComponent;
 import org.coldis.library.test.StartTestWithContainerExtension;
 import org.coldis.library.test.TestHelper;
@@ -29,6 +37,8 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.context.SpringBootTest.WebEnvironment;
 import org.springframework.test.util.ReflectionTestUtils;
@@ -62,6 +72,21 @@ public class StatisticsEventServiceComponentTest extends ContainerTestHelper {
   @Autowired
   protected StatisticsEventRepositoryImpl statisticsEventRepositoryImpl;
 
+  /** Statistics event summary repository (used by the parity test to seed summaries directly). */
+  @Autowired
+  protected StatisticsEventSummaryRepository statisticsEventSummaryRepository;
+
+  /** JSON mapper (used by the parity test to load the seeded summaries). */
+  @Autowired
+  protected ObjectMapper objectMapper;
+
+  /** Transaction manager (the parity test seeds summaries inside a transaction). */
+  @Autowired
+  protected PlatformTransactionManager transactionManager;
+
+  /** Tolerance for the SQL-vs-in-memory comparison parity assertions. */
+  private static final BigDecimal PARITY_TOLERANCE = new BigDecimal("0.0001");
+
   /** Fixed date time for tests (truncated to 15-minute boundary). */
   private static final LocalDateTime TEST_DATE_TIME = LocalDateTime.of(2026, 1, 15, 10, 0, 0);
 
@@ -92,7 +117,7 @@ public class StatisticsEventServiceComponentTest extends ContainerTestHelper {
       final LocalDateTime endDateTime)
       throws BusinessException {
     return this.statisticsEventSummaryServiceComponent.singleDimensionProbability(
-        this.statisticsEventSummaryServiceComponent.findByPeriod(context, dimensionName, startDateTime, endDateTime),
+        this.statisticsEventSummaryServiceComponent.summarizePeriod(context, dimensionName, startDateTime, endDateTime),
         dimensionValue);
   }
 
@@ -446,7 +471,7 @@ public class StatisticsEventServiceComponentTest extends ContainerTestHelper {
     // Queries the full period spanning all three buckets.
     this.cacheHelper.clearCaches();
     final StatisticsEventSummary periodSummary =
-        this.statisticsEventSummaryServiceComponent.findByPeriod("test-period", "city", time1, time3);
+        this.statisticsEventSummaryServiceComponent.summarizePeriod("test-period", "city", time1, time3);
     Assertions.assertNotNull(periodSummary);
     Assertions.assertEquals(4L, periodSummary.getTotalCount());
     Assertions.assertEquals(2L, periodSummary.getValueCounts().get("sao-paulo"));
@@ -463,7 +488,7 @@ public class StatisticsEventServiceComponentTest extends ContainerTestHelper {
     // Queries a partial period (only first two buckets).
     this.cacheHelper.clearCaches();
     final StatisticsEventSummary partialSummary =
-        this.statisticsEventSummaryServiceComponent.findByPeriod("test-period", "city", time1, time2);
+        this.statisticsEventSummaryServiceComponent.summarizePeriod("test-period", "city", time1, time2);
     Assertions.assertNotNull(partialSummary);
     Assertions.assertEquals(3L, partialSummary.getTotalCount());
     Assertions.assertEquals(2L, partialSummary.getValueCounts().get("sao-paulo"));
@@ -482,7 +507,7 @@ public class StatisticsEventServiceComponentTest extends ContainerTestHelper {
     Assertions.assertThrows(
         BusinessException.class,
         () ->
-            this.statisticsEventSummaryServiceComponent.findByPeriod(
+            this.statisticsEventSummaryServiceComponent.summarizePeriod(
                 "non-existent",
                 "no-dimension",
                 LocalDateTime.of(2026, 6, 1, 0, 0, 0),
@@ -716,6 +741,76 @@ public class StatisticsEventServiceComponentTest extends ContainerTestHelper {
         new BigDecimal("1.0"),
         comparison.getWeightStats().getZScoreRatios().get("rio"),
         TOLERANCE);
+  }
+
+  /**
+   * Tests compareByPeriod value-presence asymmetry — the key-set behavior the aggregation must honor:
+   * a value seen only in the historical windows is in the average/std-dev/z-score maps (z-scored
+   * against a zero reference), while a value seen only in the reference window is in the reference
+   * maps but absent from the historical maps.
+   */
+  @Test
+  public void testCompareByPeriodValuePresenceAsymmetry() throws Exception {
+    final String context = "test-comparison-asym";
+    // Day 1 (historical): common x1, histonly x1 -> total 2.
+    final LocalDateTime day1 = LocalDateTime.of(2026, 1, 12, 10, 0, 0);
+    this.statisticsEventServiceComponent.upsertStatisticsEvent(createEvent(context, "asym-1", day1, "city", "common"));
+    this.statisticsEventServiceComponent.upsertStatisticsEvent(createEvent(context, "asym-2", day1, "city", "histonly"));
+    // Day 2 (historical): common x3, histonly x1 -> total 4.
+    final LocalDateTime day2 = LocalDateTime.of(2026, 1, 13, 10, 0, 0);
+    this.statisticsEventServiceComponent.upsertStatisticsEvent(createEvent(context, "asym-3", day2, "city", "common"));
+    this.statisticsEventServiceComponent.upsertStatisticsEvent(createEvent(context, "asym-4", day2, "city", "common"));
+    this.statisticsEventServiceComponent.upsertStatisticsEvent(createEvent(context, "asym-5", day2, "city", "common"));
+    this.statisticsEventServiceComponent.upsertStatisticsEvent(createEvent(context, "asym-6", day2, "city", "histonly"));
+    // Day 3 (reference): common x2, refonly x2 -> total 4.
+    final LocalDateTime day3 = LocalDateTime.of(2026, 1, 14, 10, 0, 0);
+    this.statisticsEventServiceComponent.upsertStatisticsEvent(createEvent(context, "asym-7", day3, "city", "common"));
+    this.statisticsEventServiceComponent.upsertStatisticsEvent(createEvent(context, "asym-8", day3, "city", "common"));
+    this.statisticsEventServiceComponent.upsertStatisticsEvent(createEvent(context, "asym-9", day3, "city", "refonly"));
+    this.statisticsEventServiceComponent.upsertStatisticsEvent(createEvent(context, "asym-10", day3, "city", "refonly"));
+
+    this.waitForSummary(context, "city", day1, 2L);
+    this.waitForSummary(context, "city", day2, 4L);
+    this.waitForSummary(context, "city", day3, 4L);
+
+    this.cacheHelper.clearCaches();
+    final StatisticsEventSummaryComparison comparison =
+        this.statisticsEventSummaryServiceComponent.compareByPeriod(context, "city", day3, ChronoUnit.HOURS, 1, ChronoUnit.DAYS, 2);
+    final var counts = comparison.getCountStats();
+
+    // Historical common: [1, 3] -> avg 2, stdDev 1. histonly: [1, 1] -> avg 1, stdDev 0.
+    assertBigDecimalEquals(new BigDecimal("2"), counts.getAverageValues().get("common"), TOLERANCE);
+    assertBigDecimalEquals(BigDecimal.ONE, counts.getStdDevValues().get("common"), TOLERANCE);
+    assertBigDecimalEquals(BigDecimal.ONE, counts.getAverageValues().get("histonly"), TOLERANCE);
+    assertBigDecimalEquals(BigDecimal.ZERO, counts.getStdDevValues().get("histonly"), TOLERANCE);
+
+    // Historical ratios: common day1 1/2, day2 3/4 -> avg 0.625; histonly day1 1/2, day2 1/4 -> avg 0.375.
+    assertBigDecimalEquals(new BigDecimal("0.625"), counts.getAverageRatios().get("common"), TOLERANCE);
+    assertBigDecimalEquals(new BigDecimal("0.375"), counts.getAverageRatios().get("histonly"), TOLERANCE);
+
+    // refonly is NOT in any historical (sample) map.
+    Assertions.assertFalse(counts.getAverageValues().containsKey("refonly"));
+    Assertions.assertFalse(counts.getStdDevValues().containsKey("refonly"));
+    Assertions.assertFalse(counts.getAverageRatios().containsKey("refonly"));
+    Assertions.assertFalse(counts.getZScoreValues().containsKey("refonly"));
+
+    // Reference values: common=2, refonly=2; histonly absent (not in the reference window).
+    assertBigDecimalEquals(new BigDecimal("2"), counts.getReferenceValues().get("common"), TOLERANCE);
+    assertBigDecimalEquals(new BigDecimal("2"), counts.getReferenceValues().get("refonly"), TOLERANCE);
+    Assertions.assertFalse(counts.getReferenceValues().containsKey("histonly"));
+    // Reference ratios: common=2/4=0.5, refonly=2/4=0.5.
+    assertBigDecimalEquals(new BigDecimal("0.5"), counts.getReferenceRatios().get("common"), TOLERANCE);
+    assertBigDecimalEquals(new BigDecimal("0.5"), counts.getReferenceRatios().get("refonly"), TOLERANCE);
+
+    // Z-scores over the historical universe {common, histonly}: common (2-2)/1=0; histonly stdDev 0 -> 0.
+    assertBigDecimalEquals(BigDecimal.ZERO, counts.getZScoreValues().get("common"), TOLERANCE);
+    assertBigDecimalEquals(BigDecimal.ZERO, counts.getZScoreValues().get("histonly"), TOLERANCE);
+
+    // Totals: historical [2, 4] -> avg 3, stdDev 1; reference 4 -> zTotal (4-3)/1 = 1.
+    assertBigDecimalEquals(new BigDecimal("3"), counts.getAverageTotal(), TOLERANCE);
+    assertBigDecimalEquals(BigDecimal.ONE, counts.getStdDevTotal(), TOLERANCE);
+    assertBigDecimalEquals(new BigDecimal("4"), counts.getReferenceTotal(), TOLERANCE);
+    assertBigDecimalEquals(BigDecimal.ONE, counts.getZScoreTotal(), TOLERANCE);
   }
 
   /** Tests compareByPeriod with WEEKS step unit -- comparing the same weekday across weeks. */
@@ -994,9 +1089,9 @@ public class StatisticsEventServiceComponentTest extends ContainerTestHelper {
     // Pooled over [day1, day3]: city sao-paulo = 2+3+1 = 6 / total 9; device mobile = 1+2+3 = 6 / total 9.
     this.cacheHelper.clearCaches();
     final StatisticsEventSummary cityMerged =
-        this.statisticsEventSummaryServiceComponent.findByPeriod("test-joint", "city", day1, day3);
+        this.statisticsEventSummaryServiceComponent.summarizePeriod("test-joint", "city", day1, day3);
     final StatisticsEventSummary deviceMerged =
-        this.statisticsEventSummaryServiceComponent.findByPeriod("test-joint", "device", day1, day3);
+        this.statisticsEventSummaryServiceComponent.summarizePeriod("test-joint", "device", day1, day3);
 
     // Joint from one merged summary per dimension plus the value to evaluate for each.
     final StatisticsEventNaiveMultiDimensionProbability jointResult =
@@ -1190,5 +1285,130 @@ public class StatisticsEventServiceComponentTest extends ContainerTestHelper {
     Assertions.assertEquals(1L, summary.getTotalCount());
     assertBigDecimalEquals(
         new BigDecimal("250.00"), summary.getValueWeights().get("purchase"), TOLERANCE);
+  }
+
+  /** One seeded per-window summary, loaded from the parity resource. */
+  private record SummarySpec(
+      String dimensionName,
+      LocalDateTime dateTime,
+      Map<String, Long> valueCounts,
+      Map<String, BigDecimal> valueWeights) {}
+
+  /** Asserts two nullable BigDecimals are both null, or both present and within the tolerance. */
+  private void assertScalarClose(final String label, final BigDecimal expected, final BigDecimal actual) {
+    if ((expected == null) && (actual == null)) {
+      return;
+    }
+    Assertions.assertTrue((expected != null) && (actual != null), label + " null mismatch");
+    Assertions.assertTrue(
+        expected.subtract(actual).abs().compareTo(PARITY_TOLERANCE) <= 0,
+        String.format("%s: expected %s but got %s", label, expected, actual));
+  }
+
+  /** Asserts two value maps have the same keys and per-key values within the tolerance. */
+  private void assertMapClose(
+      final String label, final Map<String, BigDecimal> expected, final Map<String, BigDecimal> actual) {
+    final Map<String, BigDecimal> expectedMap = (expected == null) ? Map.of() : expected;
+    final Map<String, BigDecimal> actualMap = (actual == null) ? Map.of() : actual;
+    Assertions.assertEquals(expectedMap.keySet(), actualMap.keySet(), label + " keys");
+    for (final Map.Entry<String, BigDecimal> entry : expectedMap.entrySet()) {
+      this.assertScalarClose(label + "[" + entry.getKey() + "]", entry.getValue(), actualMap.get(entry.getKey()));
+    }
+  }
+
+  /** Asserts two metric-comparison stats agree across every scalar and map within the tolerance. */
+  private void assertMetricStatsClose(
+      final String label, final MetricComparisonStats expected, final MetricComparisonStats actual) {
+    this.assertScalarClose(label + " averageTotal", expected.getAverageTotal(), actual.getAverageTotal());
+    this.assertScalarClose(label + " stdDevTotal", expected.getStdDevTotal(), actual.getStdDevTotal());
+    this.assertScalarClose(label + " referenceTotal", expected.getReferenceTotal(), actual.getReferenceTotal());
+    this.assertScalarClose(label + " zScoreTotal", expected.getZScoreTotal(), actual.getZScoreTotal());
+    this.assertMapClose(label + " averageValues", expected.getAverageValues(), actual.getAverageValues());
+    this.assertMapClose(label + " stdDevValues", expected.getStdDevValues(), actual.getStdDevValues());
+    this.assertMapClose(label + " averageRatios", expected.getAverageRatios(), actual.getAverageRatios());
+    this.assertMapClose(label + " stdDevRatios", expected.getStdDevRatios(), actual.getStdDevRatios());
+    this.assertMapClose(label + " referenceValues", expected.getReferenceValues(), actual.getReferenceValues());
+    this.assertMapClose(label + " referenceRatios", expected.getReferenceRatios(), actual.getReferenceRatios());
+    this.assertMapClose(label + " zScoreValues", expected.getZScoreValues(), actual.getZScoreValues());
+    this.assertMapClose(label + " zScoreRatios", expected.getZScoreRatios(), actual.getZScoreRatios());
+  }
+
+  /** Asserts two comparisons agree (sample size + both metric stats) within {@link #PARITY_TOLERANCE}. */
+  private void assertComparisonsClose(
+      final String dimension,
+      final StatisticsEventSummaryComparison expected,
+      final StatisticsEventSummaryComparison actual) {
+    Assertions.assertEquals(
+        expected.getSampleSize(), actual.getSampleSize(), dimension + " sampleSize");
+    this.assertMetricStatsClose(dimension + " count", expected.getCountStats(), actual.getCountStats());
+    this.assertMetricStatsClose(dimension + " weight", expected.getWeightStats(), actual.getWeightStats());
+  }
+
+  /**
+   * Builds the comparison the slow way — one raw {@code findByPeriod} per window fed to the pure
+   * {@code computeComparison} — to serve as the oracle for the SQL path.
+   */
+  private StatisticsEventSummaryComparison inMemoryComparisonOracle(
+      final String context, final String dimension, final LocalDateTime reference, final int steps)
+      throws BusinessException {
+    final LocalDateTime referenceStart = reference;
+    final LocalDateTime referenceEnd = referenceStart.plusHours(1);
+    final List<StatisticsEventSummary> referenceSummaries =
+        this.statisticsEventSummaryServiceComponent.findByPeriod(context, dimension, referenceStart, referenceEnd);
+    final List<List<StatisticsEventSummary>> perWindowSummaries = new ArrayList<>();
+    for (int step = 1; step <= steps; step++) {
+      perWindowSummaries.add(
+          this.statisticsEventSummaryServiceComponent.findByPeriod(
+              context, dimension, referenceStart.minusDays(step), referenceEnd.minusDays(step)));
+    }
+    return StatisticsEventSummaryHelper.computeComparison(
+        referenceSummaries, perWindowSummaries, context, dimension, referenceStart,
+        ChronoUnit.HOURS, 1, ChronoUnit.DAYS, steps);
+  }
+
+  /** Seeds the parity summaries directly (inside a transaction, since the assigned-key save merges). */
+  private void seedParitySummaries(final String context, final List<SummarySpec> specs) {
+    new TransactionTemplate(this.transactionManager).executeWithoutResult(status -> {
+      for (final SummarySpec spec : specs) {
+        final StatisticsEventSummary summary =
+            new StatisticsEventSummary(context, spec.dimensionName(), spec.dateTime());
+        summary.setValueCounts(new HashMap<>(spec.valueCounts()));
+        summary.setTotalCount(spec.valueCounts().values().stream().mapToLong(Long::longValue).sum());
+        summary.setValueWeights(new HashMap<>(spec.valueWeights()));
+        summary.setTotalWeight(spec.valueWeights().values().stream().reduce(BigDecimal.ZERO, BigDecimal::add));
+        this.statisticsEventSummaryRepository.save(summary);
+      }
+    });
+  }
+
+  /**
+   * Parity test: across a rich seeded dataset (many windows, several values, zero-fill, and a
+   * large-magnitude/small-variance dimension), the SQL sufficient-statistics comparison
+   * ({@code compareByPeriod}) must match the in-memory oracle ({@code findByPeriod} per window +
+   * {@code computeComparison}) field-by-field, for both count and weight stats. This is what actually
+   * validates the means / std-devs / ratios / z-scores of the pushed-down path at scale and exposes
+   * any precision drift in the {@code Σx²−mean²} variance form.
+   */
+  @Test
+  public void testCompareByPeriodParityAgainstInMemoryOracle() throws Exception {
+    final String context = "test-comparison-parity";
+    final List<SummarySpec> specs =
+        this.objectMapper.readValue(
+            this.getClass().getResourceAsStream("/statistics/comparison-parity-summaries.json"),
+            new TypeReference<List<SummarySpec>>() {});
+    this.seedParitySummaries(context, specs);
+
+    // Reference = Jan 16 10:00; samples = Jan 1..Jan 15 (15 windows); 1-hour window stepped by 1 day.
+    final LocalDateTime reference = LocalDateTime.of(2026, 1, 16, 10, 0, 0);
+    final int steps = 15;
+    for (final String dimension : List.of("city", "device", "bigcount")) {
+      this.cacheHelper.clearCaches();
+      final StatisticsEventSummaryComparison sqlComparison =
+          this.statisticsEventSummaryServiceComponent.compareByPeriod(
+              context, dimension, reference, ChronoUnit.HOURS, 1, ChronoUnit.DAYS, steps);
+      final StatisticsEventSummaryComparison oracle =
+          this.inMemoryComparisonOracle(context, dimension, reference, steps);
+      this.assertComparisonsClose(dimension, oracle, sqlComparison);
+    }
   }
 }

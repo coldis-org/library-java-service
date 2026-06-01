@@ -20,34 +20,33 @@ import org.springframework.transaction.annotation.Transactional;
 
 /**
  * Statistics event summary computation service component. Read/query side:
- * period aggregation, drift comparison, per-dimension distribution, probability,
- * and the cross-dimension z-score aggregators. The write path (buffering,
+ * period queries ({@link #findByPeriod}/{@link #summarizePeriod}), drift comparison,
+ * probability, and the cross-dimension z-score aggregators. The write path (buffering,
  * flushing, applying deltas, single-key lookup/creation) lives in
  * {@link StatisticsEventSummaryBufferServiceComponent}.
  *
- * <p>Each public entry point validates its inputs and resolves all date-time math
- * up front — it truncates the reference and builds the fully-truncated
- * {@link WindowSchedule} — then delegates to a {@code protected ...Cacheable}
- * sibling. The {@code ...Cacheable} methods do no truncation at all: they receive
- * the ready-made schedule and only fetch, bucket and compute. That keeps them
- * usable as caching seams — an extended bean can {@code @Override} one and add
- * {@code @Cacheable} on a key built from the (already-truncated) schedule. The base
- * bean does not cache.
+ * <p>Each public entry point validates its inputs and truncates its date-time math up
+ * front, then delegates to a {@code protected ...Cacheable} sibling that does no
+ * truncation. That keeps the seams usable for caching — an extended bean can
+ * {@code @Override} one and add {@code @Cacheable} on the already-truncated key. The
+ * base bean does not cache.
  *
- * <p>The heavy DB work is funneled through {@link #findSummariesByPeriodCacheable},
- * one query <em>per dimension</em> covering the whole schedule's date range
- * (instead of one query per sample window). The multi-dimension entry points
- * (comparison over a set of dimensions, naive multi-dimension probability) issue
- * one such query per dimension rather than a single wide {@code IN (...)} scan —
- * each per-dimension fetch is the cache seam, so repeated dimensions/windows reuse
- * one entry, and no single query has to scan every dimension's buckets at once.
- * The returned rows are sliced back into the per-window samples in memory via
- * {@link StatisticsEventSummaryHelper#bucketByWindows} — the schedule is identical
- * for every dimension, and empty windows are kept as zero samples by
- * {@link StatisticsEventSummaryHelper}.
+ * <p>Two query shapes back the read side:
+ * <ul>
+ * <li><b>Range fetch</b> ({@link #findByPeriodCacheable}) — one {@code WHERE date_time
+ * BETWEEN} query per dimension; {@link #findByPeriod} returns the rows and
+ * {@link #summarizePeriod} merges them into one summary. Probability rides on the
+ * merged summary.</li>
+ * <li><b>Sufficient statistics</b> ({@link #compareStatisticsCacheable}) — for drift
+ * comparison, the window bucketing, JSONB map merge, and per-value summation are pushed
+ * into Postgres, so one query per dimension returns a few sums per value (Σ, Σ², and the
+ * ratio equivalents over the sample windows, plus the reference value) instead of any
+ * per-window maps. {@link StatisticsEventSummaryHelper#assembleComparison} turns those into
+ * averages, std-devs and z-scores in {@code BigDecimal}.</li>
+ * </ul>
  *
- * <p>Methods are ordered callees-before-callers: the raw fetch first, then each
- * {@code ...Cacheable} builder ahead of the public entry point that wraps it.
+ * <p>Methods are ordered callees-before-callers: each {@code ...Cacheable} seam ahead of
+ * the public entry point that wraps it.
  */
 @Component
 @Qualifier(StatisticsEventSummaryServiceComponent.QUALIFIER)
@@ -94,7 +93,7 @@ public class StatisticsEventSummaryServiceComponent {
 			propagation = Propagation.NOT_SUPPORTED,
 			readOnly = true
 	)
-	protected List<StatisticsEventSummary> findSummariesByPeriodCacheable(
+	protected List<StatisticsEventSummary> findByPeriodCacheable(
 			final String context,
 			final String dimensionName,
 			final LocalDateTime startDateTime,
@@ -104,7 +103,7 @@ public class StatisticsEventSummaryServiceComponent {
 
 	/**
 	 * Fetches the raw summaries for a context and dimension within a date range, truncating the bounds
-	 * to the context interval before delegating to {@link #findSummariesByPeriodCacheable}.
+	 * to the context interval before delegating to {@link #findByPeriodCacheable}.
 	 *
 	 * @param  context       Context.
 	 * @param  dimensionName Dimension name.
@@ -112,12 +111,12 @@ public class StatisticsEventSummaryServiceComponent {
 	 * @param  endDateTime   End date time.
 	 * @return               The list of summaries in the period for the dimension.
 	 */
-	public List<StatisticsEventSummary> findSummariesByPeriod(
+	public List<StatisticsEventSummary> findByPeriod(
 			final String context,
 			final String dimensionName,
 			final LocalDateTime startDateTime,
 			final LocalDateTime endDateTime) {
-		return this.findSummariesByPeriodCacheable(context, dimensionName,
+		return this.findByPeriodCacheable(context, dimensionName,
 				this.statisticsContextConfigurationServiceComponent.truncateDateTime(context, startDateTime),
 				this.statisticsContextConfigurationServiceComponent.truncateDateTime(context, endDateTime));
 	}
@@ -136,12 +135,12 @@ public class StatisticsEventSummaryServiceComponent {
 	 * @return                   The aggregated statistics event summary.
 	 * @throws BusinessException If no summaries are found in the period.
 	 */
-	protected StatisticsEventSummary findByPeriodCacheable(
+	protected StatisticsEventSummary summarizePeriodCacheable(
 			final String context,
 			final String dimensionName,
 			final LocalDateTime startDateTime,
 			final LocalDateTime endDateTime) throws BusinessException {
-		final List<StatisticsEventSummary> summaries = this.findSummariesByPeriodCacheable(context, dimensionName, startDateTime, endDateTime);
+		final List<StatisticsEventSummary> summaries = this.findByPeriodCacheable(context, dimensionName, startDateTime, endDateTime);
 		if ((summaries == null) || summaries.isEmpty()) {
 			throw new BusinessException(new SimpleMessage("statistics.event.summary.notfound"), HttpStatus.NOT_FOUND.value());
 		}
@@ -161,7 +160,7 @@ public class StatisticsEventSummaryServiceComponent {
 
 	/**
 	 * Finds all summaries for a context and dimension within a date range and merges them into a single
-	 * aggregated summary, truncating the bounds before delegating to {@link #findByPeriodCacheable}.
+	 * aggregated summary, truncating the bounds before delegating to {@link #summarizePeriodCacheable}.
 	 *
 	 * @param  context           Context.
 	 * @param  dimensionName     Dimension name.
@@ -170,12 +169,12 @@ public class StatisticsEventSummaryServiceComponent {
 	 * @return                   The aggregated statistics event summary.
 	 * @throws BusinessException If no summaries are found in the period.
 	 */
-	public StatisticsEventSummary findByPeriod(
+	public StatisticsEventSummary summarizePeriod(
 			final String context,
 			final String dimensionName,
 			final LocalDateTime startDateTime,
 			final LocalDateTime endDateTime) throws BusinessException {
-		return this.findByPeriodCacheable(context, dimensionName,
+		return this.summarizePeriodCacheable(context, dimensionName,
 				this.statisticsContextConfigurationServiceComponent.truncateDateTime(context, startDateTime),
 				this.statisticsContextConfigurationServiceComponent.truncateDateTime(context, endDateTime));
 	}
@@ -183,12 +182,46 @@ public class StatisticsEventSummaryServiceComponent {
 	// ---- Comparison ----
 
 	/**
-	 * Builds the drift comparison for every requested dimension, querying <strong>one dimension at a
-	 * time</strong> (each over the whole schedule's range) and bucketing the rows in memory. Returns
-	 * one comparison per distinct dimension, in request order. Does no truncation — the schedule is
-	 * already resolved and truncated by the caller. <strong>Good cache candidate:</strong> the
-	 * per-dimension fetch underneath is keyed on the value-independent
-	 * {@code (context, dimension, schedule-range)}.
+	 * Comparison sufficient-statistics seam: one Postgres query that reduces the schedule's sample and
+	 * reference windows to per-value sums (window bucketing, JSONB map merge and per-value summation
+	 * pushed into the database). The flat date arrays the query needs are derived from the schedule's
+	 * {@link StatisticsEventSummaryHelper.Window} records here, at the repo boundary.
+	 * <strong>Cache candidate:</strong> keyed on the value-independent {@code (context, dimensionName,
+	 * schedule)} — the schedule's windows are already truncated and a record, so the key has value-based
+	 * equality.
+	 *
+	 * @param  context       Context.
+	 * @param  dimensionName Dimension name.
+	 * @param  schedule      Resolved (truncated) sampling schedule (reference + sample windows).
+	 * @return               The sufficient-statistic rows for the dimension.
+	 */
+	@Transactional(
+			propagation = Propagation.NOT_SUPPORTED,
+			readOnly = true
+	)
+	protected List<StatisticsEventSummaryRepositoryCustom.ComparisonStatistic> compareStatisticsCacheable(
+			final String context,
+			final String dimensionName,
+			final WindowSchedule schedule) {
+		final List<StatisticsEventSummaryHelper.Window> sampleWindows = schedule.samples();
+		final LocalDateTime[] sampleStarts = new LocalDateTime[sampleWindows.size()];
+		final LocalDateTime[] sampleEnds = new LocalDateTime[sampleWindows.size()];
+		for (int sampleIndex = 0; sampleIndex < sampleWindows.size(); sampleIndex++) {
+			sampleStarts[sampleIndex] = sampleWindows.get(sampleIndex).start();
+			sampleEnds[sampleIndex] = sampleWindows.get(sampleIndex).end();
+		}
+		return this.statisticsEventSummaryRepository.compareStatistics(context, dimensionName,
+				sampleStarts, sampleEnds, schedule.reference().start(), schedule.reference().end());
+	}
+
+	/**
+	 * Builds the drift comparison per dimension from the Postgres-computed sufficient statistics: one
+	 * {@code dimensionName}-scoped query per dimension ({@link #compareStatisticsCacheable}) reduces the
+	 * sample/reference windows to per-value sums, then {@link StatisticsEventSummaryHelper#assembleComparison}
+	 * turns them into averages, std-devs, ratios and z-scores. No per-window maps cross the wire.
+	 * Returns one comparison per distinct dimension, in request order. Does no truncation — the schedule
+	 * is already resolved and truncated by the caller. <strong>Good cache candidate:</strong> keyed on
+	 * the value-independent {@code (context, dimension, schedule, window, step, steps)}.
 	 *
 	 * @param  context           Context.
 	 * @param  dimensionNames    Dimension names to compare.
@@ -210,16 +243,14 @@ public class StatisticsEventSummaryServiceComponent {
 			final Integer steps) throws BusinessException {
 		final List<StatisticsEventSummaryComparison> comparisons = new ArrayList<>();
 		for (final String dimensionName : dimensionNames.stream().distinct().toList()) {
-			final List<StatisticsEventSummary> dimensionSummaries = this.findSummariesByPeriodCacheable(context, dimensionName, schedule.overallStart(),
-					schedule.overallEnd());
-			final List<List<StatisticsEventSummary>> perWindowSummaries = StatisticsEventSummaryHelper.bucketByWindows(dimensionSummaries, schedule.samples());
-			final List<StatisticsEventSummary> referenceSummaries = StatisticsEventSummaryHelper.bucketByWindows(dimensionSummaries,
-					List.of(schedule.reference())).get(0);
-			comparisons.add(StatisticsEventSummaryHelper.computeComparison(referenceSummaries, perWindowSummaries, context, dimensionName,
+			final List<StatisticsEventSummaryRepositoryCustom.ComparisonStatistic> statistics =
+					this.compareStatisticsCacheable(context, dimensionName, schedule);
+			comparisons.add(StatisticsEventSummaryHelper.assembleComparison(statistics, schedule.samples().size(), context, dimensionName,
 					schedule.reference().start(), windowUnit, windowSize, stepUnit, steps));
 		}
 		return comparisons;
 	}
+
 
 	/**
 	 * Compares a reference window against historical periods for every requested dimension, providing

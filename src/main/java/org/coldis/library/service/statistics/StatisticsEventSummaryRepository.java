@@ -18,7 +18,8 @@ import org.springframework.transaction.annotation.Transactional;
  */
 @Repository
 public interface StatisticsEventSummaryRepository
-    extends PostgresJpaRepository<StatisticsEventSummary, StatisticsEventSummaryKey> {
+    extends PostgresJpaRepository<StatisticsEventSummary, StatisticsEventSummaryKey>,
+        StatisticsEventSummaryRepositoryCustom {
 
   /**
    * Atomically inserts a summary row if absent, no-op if a row with the same composite key already
