@@ -310,43 +310,4 @@ public class StatisticsEventSummaryServiceComponent {
 			final Integer steps) throws BusinessException {
 		return this.compareByPeriod(context, List.of(dimensionName), referenceDateTime, windowUnit, windowSize, stepUnit, steps).get(0);
 	}
-
-	// ---- Distribution / probability ----
-
-	// Pure reductions over already-computed results — like the z-score aggregators below, these take
-	// the output of the fetch/aggregate methods (a merged summary, or a list of single-dimension
-	// probabilities) and need none of the context/window arguments. Delegated to
-	// StatisticsEventSummaryHelper; let a caller that already holds the inputs compute without a fetch.
-
-	/**
-	 * Single-dimension probability for a value within a period, derived from that period's aggregated
-	 * summary (the return of {@link #findByPeriod}) — a pure {@code count/total} plus Laplace step, no
-	 * fetch.
-	 *
-	 * @param  summary        The period's aggregated summary.
-	 * @param  dimensionValue The value to evaluate.
-	 * @return                The single-dimension probability for the value.
-	 */
-	public StatisticsEventSingleDimensionProbability singleDimensionProbability(
-			final StatisticsEventSummary summary,
-			final String dimensionValue) {
-		return StatisticsEventSummaryHelper.singleDimensionProbability(summary, dimensionValue, StatisticsEventSummaryHelper.DEFAULT_SMOOTHING_FACTOR);
-	}
-
-	/**
-	 * Naive joint probability from one merged period summary per dimension plus the value to evaluate
-	 * for each (positionally paired) — derives each dimension's probability and combines them. A pure
-	 * reduction, no fetch; the per-dimension {@link #findByPeriod} returns feed straight in.
-	 *
-	 * @param  summaries         Per-dimension merged summaries (non-empty; aligned with {@code dimensionValues}).
-	 * @param  dimensionValues   The value to evaluate for each dimension (aligned with {@code summaries}).
-	 * @return                   The naive multi-dimension probability.
-	 * @throws BusinessException If {@code summaries} is null/empty or not positionally aligned with
-	 *                               {@code dimensionValues}.
-	 */
-	public StatisticsEventNaiveMultiDimensionProbability naiveMultiDimensionProbability(
-			final List<StatisticsEventSummary> summaries,
-			final List<String> dimensionValues) throws BusinessException {
-		return StatisticsEventSummaryHelper.naiveMultiDimensionProbability(summaries, dimensionValues);
-	}
 }

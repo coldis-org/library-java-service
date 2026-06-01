@@ -45,6 +45,12 @@ public final class StatisticsEventSummaryHelper {
 	/** Default additive (Laplace) smoothing factor for probability estimates. */
 	public static final double DEFAULT_SMOOTHING_FACTOR = 1.0;
 
+	/** Standard-normal critical value for a two-sided 95% interval (Wilson / credible bounds). */
+	private static final double Z_95 = 1.959963984540054;
+
+	/** Clamp applied to a probability before taking its logit, so {@code ln(p/(1−p))} stays finite. */
+	private static final double LOGIT_EPSILON = 1.0e-12;
+
 	/** Maximum total window span (6 months). */
 	private static final Duration MAX_TOTAL_WINDOW = Duration.ofDays(183);
 
@@ -665,10 +671,65 @@ public final class StatisticsEventSummaryHelper {
 	}
 
 	/**
+	 * Wilson score interval bounds for the proportion {@code valueCount/total} at the {@code Z_95}
+	 * confidence level. Unlike the raw point estimate, the interval narrows as {@code total} grows, so
+	 * {@code 1/2} (n=2) reports a far wider band than {@code 500/1000}. Returns {@code null} when there
+	 * is no sample ({@code total == 0}). Computed in {@code double} (transcendental {@code sqrt}).
+	 */
+	private static BigDecimal[] wilsonInterval(
+			final long valueCount,
+			final long total) {
+		if (total <= 0L) {
+			return null;
+		}
+		final double sampleProportion = (double) valueCount / (double) total;
+		final double zSquaredOverSample = (StatisticsEventSummaryHelper.Z_95 * StatisticsEventSummaryHelper.Z_95) / total;
+		final double center = (sampleProportion + (zSquaredOverSample / 2.0)) / (1.0 + zSquaredOverSample);
+		final double margin = (StatisticsEventSummaryHelper.Z_95 / (1.0 + zSquaredOverSample))
+				* Math.sqrt(((sampleProportion * (1.0 - sampleProportion)) / total) + (zSquaredOverSample / (4.0 * total)));
+		return new BigDecimal[] {
+				BigDecimal.valueOf(Math.max(0.0, center - margin)).round(StatisticsEventSummaryHelper.MATH_CONTEXT),
+				BigDecimal.valueOf(Math.min(1.0, center + margin)).round(StatisticsEventSummaryHelper.MATH_CONTEXT) };
+	}
+
+	/**
+	 * Variance of the Beta posterior {@code Beta(α', β')} whose mean is the Laplace-smoothed probability,
+	 * with {@code α' = valueCount + α} and {@code β' = (total − valueCount) + α·(V − 1)} under a symmetric
+	 * Dirichlet({@code α}) prior over {@code V = distinctValueCount} categories. {@code var = α'β' / ((α'+β')²(α'+β'+1))}.
+	 */
+	private static BigDecimal betaPosteriorVariance(
+			final long valueCount,
+			final long total,
+			final int distinctValueCount,
+			final double smoothingFactor) {
+		final double alpha = valueCount + smoothingFactor;
+		final double beta = (total - valueCount) + (smoothingFactor * (distinctValueCount - 1));
+		final double concentration = alpha + beta;
+		final double variance = (alpha * beta) / (concentration * concentration * (concentration + 1.0));
+		return BigDecimal.valueOf(variance).round(StatisticsEventSummaryHelper.MATH_CONTEXT);
+	}
+
+	/** Surprisal (self-information) {@code −ln(probability)} in nats, floored at zero. */
+	private static BigDecimal surprisal(
+			final double probability) {
+		return BigDecimal.valueOf(Math.max(0.0, -Math.log(probability))).round(StatisticsEventSummaryHelper.MATH_CONTEXT);
+	}
+
+	/** Log-odds {@code ln(p/(1−p))}, with {@code p} clamped to {@code [ε, 1−ε]} so the result stays finite. */
+	private static BigDecimal logOdds(
+			final double probability) {
+		final double clamped = Math.min(1.0 - StatisticsEventSummaryHelper.LOGIT_EPSILON,
+				Math.max(StatisticsEventSummaryHelper.LOGIT_EPSILON, probability));
+		return BigDecimal.valueOf(Math.log(clamped / (1.0 - clamped))).round(StatisticsEventSummaryHelper.MATH_CONTEXT);
+	}
+
+	/**
 	 * Derives one value's single-dimension probability from a period's aggregated summary: the raw
 	 * ratio {@code count/total} and the Laplace-smoothed {@code (count + α) / (total + α·V)} (an unseen
-	 * value never collapses the smoothed probability to zero). A pure reduction over the merged summary
-	 * — the {@code findByPeriod} return feeds straight in.
+	 * value never collapses the smoothed probability to zero), plus uncertainty descriptors — the 95%
+	 * Wilson score interval on the raw proportion, the Beta posterior variance and 95% credible interval
+	 * (normal approximation) behind the smoothed estimate, and the smoothed estimate's surprisal and
+	 * log-odds. A pure reduction over the merged summary — the {@code findByPeriod} return feeds straight in.
 	 *
 	 * @param  summary         The period's aggregated summary.
 	 * @param  dimensionValue  The value to evaluate.
@@ -691,11 +752,45 @@ public final class StatisticsEventSummaryHelper {
 		probability.setProbability(total > 0L
 				? BigDecimal.valueOf(valueCount).divide(BigDecimal.valueOf(total), StatisticsEventSummaryHelper.MATH_CONTEXT)
 				: BigDecimal.ZERO);
-		probability.setSmoothedProbability(distinctValueCount > 0
+		final BigDecimal smoothedProbability = distinctValueCount > 0
 				? StatisticsEventSummaryHelper.laplaceSmoothedProbability(BigDecimal.valueOf(valueCount), BigDecimal.valueOf(total), distinctValueCount,
 						smoothingFactor)
-				: BigDecimal.ZERO);
+				: BigDecimal.ZERO;
+		probability.setSmoothedProbability(smoothedProbability);
+		// Frequentist uncertainty band on the raw proportion (null when there is no sample to bound).
+		final BigDecimal[] wilsonBounds = StatisticsEventSummaryHelper.wilsonInterval(valueCount, total);
+		if (wilsonBounds != null) {
+			probability.setWilsonLowerBound(wilsonBounds[0]);
+			probability.setWilsonUpperBound(wilsonBounds[1]);
+		}
+		// Bayesian uncertainty around the smoothed (posterior-mean) estimate, only when a vocabulary exists.
+		if (distinctValueCount > 0) {
+			final BigDecimal posteriorVariance = StatisticsEventSummaryHelper.betaPosteriorVariance(valueCount, total, distinctValueCount, smoothingFactor);
+			probability.setPosteriorVariance(posteriorVariance);
+			final double posteriorStdDev = Math.sqrt(Math.max(0.0, posteriorVariance.doubleValue()));
+			final double credibleMargin = StatisticsEventSummaryHelper.Z_95 * posteriorStdDev;
+			probability.setCredibleLowerBound(
+					BigDecimal.valueOf(Math.max(0.0, smoothedProbability.doubleValue() - credibleMargin)).round(StatisticsEventSummaryHelper.MATH_CONTEXT));
+			probability.setCredibleUpperBound(
+					BigDecimal.valueOf(Math.min(1.0, smoothedProbability.doubleValue() + credibleMargin)).round(StatisticsEventSummaryHelper.MATH_CONTEXT));
+			probability.setSurprisal(StatisticsEventSummaryHelper.surprisal(smoothedProbability.doubleValue()));
+			probability.setLogOdds(StatisticsEventSummaryHelper.logOdds(smoothedProbability.doubleValue()));
+		}
 		return probability;
+	}
+
+	/**
+	 * Single-dimension probability with the {@link #DEFAULT_SMOOTHING_FACTOR} — the common entry point;
+	 * delegates to {@link #singleDimensionProbability(StatisticsEventSummary, String, double)}.
+	 *
+	 * @param  summary        The period's aggregated summary.
+	 * @param  dimensionValue The value to evaluate.
+	 * @return                The single-dimension probability.
+	 */
+	public static StatisticsEventSingleDimensionProbability singleDimensionProbability(
+			final StatisticsEventSummary summary,
+			final String dimensionValue) {
+		return StatisticsEventSummaryHelper.singleDimensionProbability(summary, dimensionValue, StatisticsEventSummaryHelper.DEFAULT_SMOOTHING_FACTOR);
 	}
 
 	/**
@@ -739,6 +834,101 @@ public final class StatisticsEventSummaryHelper {
 		result.setJointSmoothedLogProbability(BigDecimal.valueOf(jointSmoothedLogProbability).setScale(6, RoundingMode.HALF_UP));
 		result.setIndividualProbabilities(individualProbabilities);
 		return result;
+	}
+
+	/**
+	 * Distribution-level concentration of a dimension's value mix in a period: Shannon entropy (nats),
+	 * its {@code [0,1]} normalization by {@code ln(V)}, and the Gini-Simpson index {@code 1 − Σpᵢ²}.
+	 * A pure reduction over the merged summary's value counts — answers "how spread out is this
+	 * dimension?" rather than "how likely is one value?". Logarithms are taken in {@code double}; an
+	 * empty period yields all-zero measures.
+	 *
+	 * @param  summary The period's aggregated summary.
+	 * @return         The dimension's concentration measures.
+	 */
+	public static StatisticsEventDimensionConcentration dimensionConcentration(
+			final StatisticsEventSummary summary) {
+		final Map<String, Long> valueCounts = summary.getValueCounts();
+		final long total = summary.getTotalCount();
+		final int distinctValueCount = valueCounts.size();
+		final StatisticsEventDimensionConcentration concentration = new StatisticsEventDimensionConcentration();
+		concentration.setContext(summary.getContext());
+		concentration.setDimensionName(summary.getDimensionName());
+		concentration.setDistinctValueCount(distinctValueCount);
+		concentration.setTotalCount(total);
+		double entropy = 0.0;
+		double sumOfSquaredShares = 0.0;
+		if (total > 0L) {
+			for (final Long count : valueCounts.values()) {
+				if (count > 0L) {
+					final double share = (double) count / (double) total;
+					entropy -= share * Math.log(share);
+					sumOfSquaredShares += share * share;
+				}
+			}
+		}
+		concentration.setEntropy(BigDecimal.valueOf(entropy).round(StatisticsEventSummaryHelper.MATH_CONTEXT));
+		concentration.setNormalizedEntropy(distinctValueCount > 1
+				? BigDecimal.valueOf(entropy / Math.log(distinctValueCount)).round(StatisticsEventSummaryHelper.MATH_CONTEXT)
+				: BigDecimal.ZERO);
+		concentration.setGiniSimpsonIndex(total > 0L
+				? BigDecimal.valueOf(1.0 - sumOfSquaredShares).round(StatisticsEventSummaryHelper.MATH_CONTEXT)
+				: BigDecimal.ZERO);
+		return concentration;
+	}
+
+	/**
+	 * Windowed probability of a value across several per-window summaries (e.g. the raw per-bucket rows
+	 * from {@code findByPeriod}, before merging): the pooled (micro) {@code Σcount/Σtotal} alongside the
+	 * macro estimate — the equal-weighted mean of each window's own {@code count/total} ratio — and the
+	 * standard deviation of those per-window ratios. Pooling lets high-volume windows dominate; the macro
+	 * estimate treats every window equally and its std-dev exposes how stable the share is over time.
+	 * A pure reduction; windows with no events are ignored, and an empty input yields a zero-window result.
+	 *
+	 * @param  windowSummaries Per-window aggregated summaries (e.g. the {@code findByPeriod} rows).
+	 * @param  dimensionValue  The value to evaluate.
+	 * @return                 The windowed probability estimates.
+	 */
+	public static StatisticsEventWindowedProbability windowedValueProbability(
+			final List<StatisticsEventSummary> windowSummaries,
+			final String dimensionValue) {
+		final StatisticsEventWindowedProbability windowed = new StatisticsEventWindowedProbability();
+		windowed.setDimensionValue(dimensionValue);
+		final List<BigDecimal> perWindowRatios = new ArrayList<>();
+		long pooledValueCount = 0L;
+		long pooledTotal = 0L;
+		if (windowSummaries != null) {
+			for (final StatisticsEventSummary windowSummary : windowSummaries) {
+				if (windowSummary != null) {
+					if (windowed.getContext() == null) {
+						windowed.setContext(windowSummary.getContext());
+						windowed.setDimensionName(windowSummary.getDimensionName());
+					}
+					final long windowTotal = windowSummary.getTotalCount();
+					if (windowTotal > 0L) {
+						final long windowValueCount = windowSummary.getValueCounts().getOrDefault(dimensionValue, 0L);
+						perWindowRatios.add(BigDecimal.valueOf(windowValueCount).divide(BigDecimal.valueOf(windowTotal), StatisticsEventSummaryHelper.MATH_CONTEXT));
+						pooledValueCount += windowValueCount;
+						pooledTotal += windowTotal;
+					}
+				}
+			}
+		}
+		windowed.setWindowCount(perWindowRatios.size());
+		windowed.setPooledProbability(pooledTotal > 0L
+				? BigDecimal.valueOf(pooledValueCount).divide(BigDecimal.valueOf(pooledTotal), StatisticsEventSummaryHelper.MATH_CONTEXT)
+				: BigDecimal.ZERO);
+		if (perWindowRatios.isEmpty()) {
+			windowed.setMacroProbability(BigDecimal.ZERO);
+			windowed.setMacroProbabilityStdDev(BigDecimal.ZERO);
+		}
+		else {
+			final BigDecimal[] ratioArray = perWindowRatios.toArray(new BigDecimal[0]);
+			final BigDecimal macroProbability = StatisticsEventSummaryHelper.computeAverage(ratioArray);
+			windowed.setMacroProbability(macroProbability);
+			windowed.setMacroProbabilityStdDev(StatisticsEventSummaryHelper.computeStdDev(ratioArray, macroProbability));
+		}
+		return windowed;
 	}
 
 	// ---- Cross-dimension z-score reductions (private): shared by the public ratio / value families. ----
@@ -825,6 +1015,28 @@ public final class StatisticsEventSummaryHelper {
 			final List<BigDecimal> zScores) {
 		return zScores.isEmpty() ? null
 				: zScores.stream().reduce(BigDecimal.ZERO, BigDecimal::add).divide(BigDecimal.valueOf(zScores.size()), 6, RoundingMode.HALF_UP);
+	}
+
+	/** Mean of the strictly-positive z-scores only ({@code 0} when none are positive); {@code null} on empty. */
+	private static BigDecimal meanPositive(
+			final List<BigDecimal> zScores) {
+		if (zScores.isEmpty()) {
+			return null;
+		}
+		final List<BigDecimal> positives = zScores.stream().filter(zScore -> zScore.signum() > 0).toList();
+		return positives.isEmpty() ? BigDecimal.ZERO
+				: positives.stream().reduce(BigDecimal.ZERO, BigDecimal::add).divide(BigDecimal.valueOf(positives.size()), 6, RoundingMode.HALF_UP);
+	}
+
+	/** Mean of the strictly-negative z-scores only ({@code 0} when none are negative); {@code null} on empty. */
+	private static BigDecimal meanNegative(
+			final List<BigDecimal> zScores) {
+		if (zScores.isEmpty()) {
+			return null;
+		}
+		final List<BigDecimal> negatives = zScores.stream().filter(zScore -> zScore.signum() < 0).toList();
+		return negatives.isEmpty() ? BigDecimal.ZERO
+				: negatives.stream().reduce(BigDecimal.ZERO, BigDecimal::add).divide(BigDecimal.valueOf(negatives.size()), 6, RoundingMode.HALF_UP);
 	}
 
 	// ---- Public ratio (value/total share) z-score aggregators. Pure reductions, no DB access. ----
@@ -914,6 +1126,18 @@ public final class StatisticsEventSummaryHelper {
 		return StatisticsEventSummaryHelper.meanSigned(StatisticsEventSummaryHelper.flatRatioZScores(comparisons));
 	}
 
+	/** Mean of the positive ratio z-scores only — typical magnitude of upward (over-representation) drift. */
+	public static BigDecimal meanPositiveRatioZScore(
+			final List<StatisticsEventSummaryComparison> comparisons) {
+		return StatisticsEventSummaryHelper.meanPositive(StatisticsEventSummaryHelper.flatRatioZScores(comparisons));
+	}
+
+	/** Mean of the negative ratio z-scores only — typical magnitude of downward (under-representation) drift. */
+	public static BigDecimal meanNegativeRatioZScore(
+			final List<StatisticsEventSummaryComparison> comparisons) {
+		return StatisticsEventSummaryHelper.meanNegative(StatisticsEventSummaryHelper.flatRatioZScores(comparisons));
+	}
+
 	/** Count of dimension-value ratio z-scores strictly above {@code +threshold} (directional over-representation). */
 	public static BigDecimal countRatioZScoreAbove(
 			final List<StatisticsEventSummaryComparison> comparisons,
@@ -995,6 +1219,18 @@ public final class StatisticsEventSummaryHelper {
 	public static BigDecimal meanSignedValueZScore(
 			final List<StatisticsEventSummaryComparison> comparisons) {
 		return StatisticsEventSummaryHelper.meanSigned(StatisticsEventSummaryHelper.flatValueZScores(comparisons));
+	}
+
+	/** Mean of the positive per-value raw-count z-scores only. See {@link #meanPositiveRatioZScore}. */
+	public static BigDecimal meanPositiveValueZScore(
+			final List<StatisticsEventSummaryComparison> comparisons) {
+		return StatisticsEventSummaryHelper.meanPositive(StatisticsEventSummaryHelper.flatValueZScores(comparisons));
+	}
+
+	/** Mean of the negative per-value raw-count z-scores only. See {@link #meanNegativeRatioZScore}. */
+	public static BigDecimal meanNegativeValueZScore(
+			final List<StatisticsEventSummaryComparison> comparisons) {
+		return StatisticsEventSummaryHelper.meanNegative(StatisticsEventSummaryHelper.flatValueZScores(comparisons));
 	}
 
 	/** Count of per-value raw-count z-scores strictly above {@code +threshold}. See {@link #countRatioZScoreAbove}. */

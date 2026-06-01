@@ -7,32 +7,28 @@ import java.util.List;
 import java.util.Map;
 import org.coldis.library.exception.BusinessException;
 import org.coldis.library.service.statistics.MetricComparisonStats;
+import org.coldis.library.service.statistics.StatisticsEventDimensionConcentration;
 import org.coldis.library.service.statistics.StatisticsEventNaiveMultiDimensionProbability;
 import org.coldis.library.service.statistics.StatisticsEventSingleDimensionProbability;
 import org.coldis.library.service.statistics.StatisticsEventSummary;
 import org.coldis.library.service.statistics.StatisticsEventSummaryComparison;
 import org.coldis.library.service.statistics.StatisticsEventSummaryHelper;
-import org.coldis.library.service.statistics.StatisticsEventSummaryServiceComponent;
+import org.coldis.library.service.statistics.StatisticsEventWindowedProbability;
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
 /**
- * Pure unit tests for the cross-dimension z-score aggregators (static reductions on {@link
- * StatisticsEventSummaryHelper}) and for the probability entry points on {@link
- * StatisticsEventSummaryServiceComponent}. The aggregators come in three families that read three
- * different per-comparison maps off the count stats: <b>ratio</b> ({@code zScoreRatios} — per-value
- * share drift), <b>value</b> ({@code zScoreValues} — per-value raw-count drift) and <b>total</b>
- * ({@code zScoreTotal} — one overall-volume z per dimension). Each family has {@code |z|} and signed
- * variants. All reductions touch no component state, so they are fed hand-built comparisons — no
- * Spring context or database required; the component is instantiated directly only for the
- * probability methods.
+ * Pure unit tests for the static statistics reductions on {@link StatisticsEventSummaryHelper}: the
+ * cross-dimension z-score aggregators, the single-/multi-dimension probabilities and their
+ * uncertainty descriptors, the dimension concentration measures, and the windowed probability. The
+ * z-score aggregators come in three families that read three different per-comparison maps off the
+ * count stats: <b>ratio</b> ({@code zScoreRatios} — per-value share drift), <b>value</b> ({@code
+ * zScoreValues} — per-value raw-count drift) and <b>total</b> ({@code zScoreTotal} — one
+ * overall-volume z per dimension). Each family has {@code |z|} and signed variants. Everything here
+ * is a pure reduction over hand-built inputs — no Spring context or database required.
  */
 public class StatisticsEventSummaryServiceComponentZScoreTest {
-
-  /** Component under test (only its pure probability methods are exercised). */
-  private final StatisticsEventSummaryServiceComponent component =
-      new StatisticsEventSummaryServiceComponent();
 
   /**
    * Ratio fixture spanning two dimensions with z-scores {@code 1, -2} and {@code 3}; the flat
@@ -133,6 +129,8 @@ public class StatisticsEventSummaryServiceComponentZScoreTest {
     Assertions.assertNull(StatisticsEventSummaryHelper.maxSignedRatioZScore(input));
     Assertions.assertNull(StatisticsEventSummaryHelper.minSignedRatioZScore(input));
     Assertions.assertNull(StatisticsEventSummaryHelper.meanSignedRatioZScore(input));
+    Assertions.assertNull(StatisticsEventSummaryHelper.meanPositiveRatioZScore(input));
+    Assertions.assertNull(StatisticsEventSummaryHelper.meanNegativeRatioZScore(input));
     Assertions.assertNull(StatisticsEventSummaryHelper.countRatioZScoreAbove(input, 1.0));
     Assertions.assertNull(StatisticsEventSummaryHelper.countRatioZScoreBelow(input, 1.0));
     // Value family (|z| and signed).
@@ -147,6 +145,8 @@ public class StatisticsEventSummaryServiceComponentZScoreTest {
     Assertions.assertNull(StatisticsEventSummaryHelper.maxSignedValueZScore(input));
     Assertions.assertNull(StatisticsEventSummaryHelper.minSignedValueZScore(input));
     Assertions.assertNull(StatisticsEventSummaryHelper.meanSignedValueZScore(input));
+    Assertions.assertNull(StatisticsEventSummaryHelper.meanPositiveValueZScore(input));
+    Assertions.assertNull(StatisticsEventSummaryHelper.meanNegativeValueZScore(input));
     Assertions.assertNull(StatisticsEventSummaryHelper.countValueZScoreAbove(input, 1.0));
     Assertions.assertNull(StatisticsEventSummaryHelper.countValueZScoreBelow(input, 1.0));
     // Total family.
@@ -349,6 +349,29 @@ public class StatisticsEventSummaryServiceComponentZScoreTest {
   }
 
   @Test
+  @DisplayName("mean-positive / mean-negative split the tails: each averages only its own side (0 when a side is empty)")
+  public void testMeanPositiveNegativeSplitTails() {
+    // fixture flat signed set is [1, -2, 3]: positives {1, 3} -> 2.0, negatives {-2} -> -2.0.
+    Assertions.assertEquals(
+        0, StatisticsEventSummaryHelper.meanPositiveRatioZScore(this.fixture).compareTo(BigDecimal.valueOf(2.0)));
+    Assertions.assertEquals(
+        0, StatisticsEventSummaryHelper.meanNegativeRatioZScore(this.fixture).compareTo(BigDecimal.valueOf(-2.0)));
+    // Value family reads its own [1, -2, 3] map.
+    Assertions.assertEquals(
+        0, StatisticsEventSummaryHelper.meanPositiveValueZScore(this.valueFixture).compareTo(BigDecimal.valueOf(2.0)));
+    Assertions.assertEquals(
+        0, StatisticsEventSummaryHelper.meanNegativeValueZScore(this.valueFixture).compareTo(BigDecimal.valueOf(-2.0)));
+    // One-sided data: all-positive -> the negative side is present but empty, so it is 0, not null.
+    final List<StatisticsEventSummaryComparison> allPositive =
+        List.of(
+            StatisticsEventSummaryServiceComponentZScoreTest.ratioComparison(
+                Map.of("a", BigDecimal.valueOf(2.0), "b", BigDecimal.valueOf(4.0))));
+    Assertions.assertEquals(
+        0, StatisticsEventSummaryHelper.meanPositiveRatioZScore(allPositive).compareTo(BigDecimal.valueOf(3.0)));
+    Assertions.assertEquals(0, StatisticsEventSummaryHelper.meanNegativeRatioZScore(allPositive).signum());
+  }
+
+  @Test
   @DisplayName("Value family reduces the raw-count z map with the same math as the ratio family")
   public void testValueFamilyMatchesRatioMath() {
     // valueFixture carries [1, -2, 3] on zScoreValues (k = 3, Σz² = 14).
@@ -410,10 +433,111 @@ public class StatisticsEventSummaryServiceComponentZScoreTest {
     final StatisticsEventSummary summary = new StatisticsEventSummary("ctx", "dim", null);
     summary.setTotalCount(0L);
     final StatisticsEventSingleDimensionProbability probability =
-        this.component.singleDimensionProbability(summary, "anything");
+        StatisticsEventSummaryHelper.singleDimensionProbability(summary, "anything");
     Assertions.assertEquals(0, probability.getProbability().signum());
     Assertions.assertEquals(0, probability.getSmoothedProbability().signum());
     Assertions.assertEquals(0, probability.getDistinctValueCount());
+    // No sample and no vocabulary -> every uncertainty descriptor is left null rather than NaN/Infinity.
+    Assertions.assertNull(probability.getWilsonLowerBound());
+    Assertions.assertNull(probability.getWilsonUpperBound());
+    Assertions.assertNull(probability.getPosteriorVariance());
+    Assertions.assertNull(probability.getCredibleLowerBound());
+    Assertions.assertNull(probability.getCredibleUpperBound());
+    Assertions.assertNull(probability.getSurprisal());
+    Assertions.assertNull(probability.getLogOdds());
+  }
+
+  @Test
+  @DisplayName("Single-dimension uncertainty descriptors: Wilson, Beta posterior, surprisal and log-odds at p=1/2")
+  public void testSingleDimensionProbabilityUncertaintyDescriptors() {
+    // 50 of 100 over two values: raw = smoothed = 0.5 (smoothed is (50+1)/(100+2) = 51/102).
+    final StatisticsEventSummary summary =
+        StatisticsEventSummaryServiceComponentZScoreTest.summaryOf("city", Map.of("sao-paulo", 50L, "rio", 50L));
+    final StatisticsEventSingleDimensionProbability probability =
+        StatisticsEventSummaryHelper.singleDimensionProbability(summary, "sao-paulo");
+    Assertions.assertEquals(0.5, probability.getProbability().doubleValue(), 1e-9);
+    Assertions.assertEquals(0.5, probability.getSmoothedProbability().doubleValue(), 1e-9);
+    // Wilson 95% score interval for 50/100 is approximately [0.40383, 0.59617].
+    Assertions.assertEquals(0.40383, probability.getWilsonLowerBound().doubleValue(), 1e-3);
+    Assertions.assertEquals(0.59617, probability.getWilsonUpperBound().doubleValue(), 1e-3);
+    // Beta(51,51) posterior variance = 51*51 / (102^2 * 103) ~= 0.0024272.
+    Assertions.assertEquals(0.0024272, probability.getPosteriorVariance().doubleValue(), 1e-6);
+    // Normal-approx 95% credible interval around the 0.5 mean ~= [0.40344, 0.59656].
+    Assertions.assertEquals(0.40344, probability.getCredibleLowerBound().doubleValue(), 1e-3);
+    Assertions.assertEquals(0.59656, probability.getCredibleUpperBound().doubleValue(), 1e-3);
+    // Surprisal -ln(0.5) = ln(2); log-odds of 0.5 is exactly 0.
+    Assertions.assertEquals(Math.log(2.0), probability.getSurprisal().doubleValue(), 1e-6);
+    Assertions.assertEquals(0.0, probability.getLogOdds().doubleValue(), 1e-9);
+  }
+
+  @Test
+  @DisplayName("Wilson interval narrows as the sample grows (10 vs 100 at the same proportion)")
+  public void testWilsonIntervalNarrowsWithSampleSize() {
+    final StatisticsEventSingleDimensionProbability small =
+        StatisticsEventSummaryHelper.singleDimensionProbability(
+            StatisticsEventSummaryServiceComponentZScoreTest.summaryOf("d", Map.of("x", 5L, "y", 5L)), "x");
+    final StatisticsEventSingleDimensionProbability large =
+        StatisticsEventSummaryHelper.singleDimensionProbability(
+            StatisticsEventSummaryServiceComponentZScoreTest.summaryOf("d", Map.of("x", 50L, "y", 50L)), "x");
+    final double smallWidth = small.getWilsonUpperBound().doubleValue() - small.getWilsonLowerBound().doubleValue();
+    final double largeWidth = large.getWilsonUpperBound().doubleValue() - large.getWilsonLowerBound().doubleValue();
+    Assertions.assertTrue(smallWidth > largeWidth, "10-sample band should be wider than the 100-sample band");
+  }
+
+  @Test
+  @DisplayName("Dimension concentration: uniform mix is maximally spread, a single value is fully concentrated")
+  public void testDimensionConcentration() {
+    // Uniform over four values: entropy = ln(4), normalized = 1, Gini-Simpson = 1 - 4*(0.25^2) = 0.75.
+    final StatisticsEventDimensionConcentration uniform =
+        StatisticsEventSummaryHelper.dimensionConcentration(
+            StatisticsEventSummaryServiceComponentZScoreTest.summaryOf("u", Map.of("a", 1L, "b", 1L, "c", 1L, "d", 1L)));
+    Assertions.assertEquals(4, uniform.getDistinctValueCount());
+    Assertions.assertEquals(Math.log(4.0), uniform.getEntropy().doubleValue(), 1e-6);
+    Assertions.assertEquals(1.0, uniform.getNormalizedEntropy().doubleValue(), 1e-9);
+    Assertions.assertEquals(0.75, uniform.getGiniSimpsonIndex().doubleValue(), 1e-9);
+    // Single value carries everything: zero entropy and zero Gini-Simpson.
+    final StatisticsEventDimensionConcentration concentrated =
+        StatisticsEventSummaryHelper.dimensionConcentration(
+            StatisticsEventSummaryServiceComponentZScoreTest.summaryOf("c", Map.of("only", 5L)));
+    Assertions.assertEquals(0.0, concentrated.getEntropy().doubleValue(), 1e-9);
+    Assertions.assertEquals(0.0, concentrated.getNormalizedEntropy().doubleValue(), 1e-9);
+    Assertions.assertEquals(0.0, concentrated.getGiniSimpsonIndex().doubleValue(), 1e-9);
+  }
+
+  @Test
+  @DisplayName("Windowed probability: macro (equal-weighted) differs from pooled (volume-weighted) and carries dispersion")
+  public void testWindowedValueProbabilityMacroVsPooled() {
+    // Window 1: x = 1/1 (ratio 1.0). Window 2: x = 1/10 (ratio 0.1).
+    final StatisticsEventWindowedProbability windowed =
+        StatisticsEventSummaryHelper.windowedValueProbability(
+            List.of(
+                StatisticsEventSummaryServiceComponentZScoreTest.summaryOf("city", Map.of("x", 1L)),
+                StatisticsEventSummaryServiceComponentZScoreTest.summaryOf("city", Map.of("x", 1L, "y", 9L))),
+            "x");
+    Assertions.assertEquals(2, windowed.getWindowCount());
+    Assertions.assertEquals("ctx", windowed.getContext());
+    Assertions.assertEquals("city", windowed.getDimensionName());
+    // Macro = mean(1.0, 0.1) = 0.55; pooled = (1+1)/(1+10) = 2/11.
+    Assertions.assertEquals(0.55, windowed.getMacroProbability().doubleValue(), 1e-9);
+    Assertions.assertEquals(2.0 / 11.0, windowed.getPooledProbability().doubleValue(), 1e-9);
+    // Population std dev of [1.0, 0.1] around 0.55 is 0.45.
+    Assertions.assertEquals(0.45, windowed.getMacroProbabilityStdDev().doubleValue(), 1e-9);
+  }
+
+  @Test
+  @DisplayName("Windowed probability over no windows yields a zero-window, zero-probability result")
+  public void testWindowedValueProbabilityEmpty() {
+    final StatisticsEventWindowedProbability windowed =
+        StatisticsEventSummaryHelper.windowedValueProbability(List.of(), "x");
+    Assertions.assertEquals(0, windowed.getWindowCount());
+    Assertions.assertEquals(0, windowed.getPooledProbability().signum());
+    Assertions.assertEquals(0, windowed.getMacroProbability().signum());
+    Assertions.assertEquals(0, windowed.getMacroProbabilityStdDev().signum());
+    // A null window list is treated the same as an empty one (no NPE).
+    final StatisticsEventWindowedProbability fromNull =
+        StatisticsEventSummaryHelper.windowedValueProbability(null, "x");
+    Assertions.assertEquals(0, fromNull.getWindowCount());
+    Assertions.assertEquals(0, fromNull.getMacroProbability().signum());
   }
 
   @Test
@@ -426,7 +550,7 @@ public class StatisticsEventSummaryServiceComponentZScoreTest {
     final StatisticsEventSummary summaryC =
         StatisticsEventSummaryServiceComponentZScoreTest.summaryOf("C", Map.of("p", 1L, "q", 1L, "r", 2L));
     final StatisticsEventNaiveMultiDimensionProbability joint =
-        this.component.naiveMultiDimensionProbability(
+        StatisticsEventSummaryHelper.naiveMultiDimensionProbability(
             List.of(summaryA, summaryB, summaryC), List.of("x", "m", "p"));
     Assertions.assertEquals(3, joint.getIndividualProbabilities().size());
     Assertions.assertEquals("ctx", joint.getContext());
@@ -446,14 +570,79 @@ public class StatisticsEventSummaryServiceComponentZScoreTest {
     // Empty summaries.
     Assertions.assertThrows(
         BusinessException.class,
-        () -> this.component.naiveMultiDimensionProbability(List.of(), List.of()));
+        () -> StatisticsEventSummaryHelper.naiveMultiDimensionProbability(List.of(), List.of()));
     // Null summaries.
     Assertions.assertThrows(
         BusinessException.class,
-        () -> this.component.naiveMultiDimensionProbability(null, List.of("x")));
+        () -> StatisticsEventSummaryHelper.naiveMultiDimensionProbability(null, List.of("x")));
     // Size mismatch between summaries and values.
     Assertions.assertThrows(
         BusinessException.class,
-        () -> this.component.naiveMultiDimensionProbability(List.of(summary), List.of("x", "y")));
+        () -> StatisticsEventSummaryHelper.naiveMultiDimensionProbability(List.of(summary), List.of("x", "y")));
+  }
+
+  @Test
+  @DisplayName("Descriptors away from 1/2: log-odds takes the value's side and an unseen value stays finite")
+  public void testSingleDimensionProbabilityAsymmetricDescriptors() {
+    // 9 of 10 are "x", 1 is "y"; two distinct values, default smoothing.
+    final StatisticsEventSummary summary =
+        StatisticsEventSummaryServiceComponentZScoreTest.summaryOf("city", Map.of("x", 9L, "y", 1L));
+    // Frequent value: raw 0.9, smoothed (9+1)/(10+2) = 10/12; log-odds positive, surprisal small.
+    final StatisticsEventSingleDimensionProbability frequent =
+        StatisticsEventSummaryHelper.singleDimensionProbability(summary, "x");
+    Assertions.assertEquals(0.9, frequent.getProbability().doubleValue(), 1e-9);
+    Assertions.assertEquals(10.0 / 12.0, frequent.getSmoothedProbability().doubleValue(), 1e-9);
+    Assertions.assertEquals(Math.log((10.0 / 12.0) / (2.0 / 12.0)), frequent.getLogOdds().doubleValue(), 1e-6);
+    Assertions.assertTrue(frequent.getLogOdds().signum() > 0, "log-odds positive for a value seen more than half the time");
+    Assertions.assertEquals(-Math.log(10.0 / 12.0), frequent.getSurprisal().doubleValue(), 1e-6);
+    // Unseen value: raw probability 0, but the smoothed estimate stays > 0 (never collapses), log-odds negative.
+    final StatisticsEventSingleDimensionProbability unseen =
+        StatisticsEventSummaryHelper.singleDimensionProbability(summary, "never-seen");
+    Assertions.assertEquals(0, unseen.getProbability().signum());
+    Assertions.assertEquals(1.0 / 12.0, unseen.getSmoothedProbability().doubleValue(), 1e-9);
+    Assertions.assertTrue(unseen.getSmoothedProbability().signum() > 0, "smoothed probability never collapses to zero");
+    Assertions.assertTrue(unseen.getLogOdds().signum() < 0, "log-odds negative for an unlikely value");
+    Assertions.assertEquals(-Math.log(1.0 / 12.0), unseen.getSurprisal().doubleValue(), 1e-6);
+    // Wilson lower bound on a zero-count proportion is clamped at zero (never negative).
+    Assertions.assertTrue(unseen.getWilsonLowerBound().doubleValue() >= 0.0);
+  }
+
+  @Test
+  @DisplayName("Concentration of a skewed mix sits strictly between fully concentrated and uniform")
+  public void testDimensionConcentrationSkewed() {
+    // 3 "a" and 1 "b": p = {0.75, 0.25}.
+    final StatisticsEventDimensionConcentration skewed =
+        StatisticsEventSummaryHelper.dimensionConcentration(
+            StatisticsEventSummaryServiceComponentZScoreTest.summaryOf("s", Map.of("a", 3L, "b", 1L)));
+    final double expectedEntropy = -((0.75 * Math.log(0.75)) + (0.25 * Math.log(0.25)));
+    Assertions.assertEquals(expectedEntropy, skewed.getEntropy().doubleValue(), 1e-6);
+    Assertions.assertEquals(expectedEntropy / Math.log(2.0), skewed.getNormalizedEntropy().doubleValue(), 1e-6);
+    Assertions.assertTrue(
+        (skewed.getNormalizedEntropy().doubleValue() > 0.0) && (skewed.getNormalizedEntropy().doubleValue() < 1.0),
+        "a skewed-but-not-degenerate split is between 0 and 1");
+    // Gini-Simpson = 1 - (0.75^2 + 0.25^2) = 0.375.
+    Assertions.assertEquals(0.375, skewed.getGiniSimpsonIndex().doubleValue(), 1e-9);
+  }
+
+  @Test
+  @DisplayName("Windowed: a single window has zero dispersion and macro == pooled; empty windows are ignored")
+  public void testWindowedValueProbabilitySingleAndZeroTotalWindows() {
+    // One window x = 3/4: macro and pooled both 0.75, std dev 0.
+    final StatisticsEventWindowedProbability single =
+        StatisticsEventSummaryHelper.windowedValueProbability(
+            List.of(StatisticsEventSummaryServiceComponentZScoreTest.summaryOf("city", Map.of("x", 3L, "y", 1L))), "x");
+    Assertions.assertEquals(1, single.getWindowCount());
+    Assertions.assertEquals(0.75, single.getMacroProbability().doubleValue(), 1e-9);
+    Assertions.assertEquals(0.75, single.getPooledProbability().doubleValue(), 1e-9);
+    Assertions.assertEquals(0, single.getMacroProbabilityStdDev().signum());
+    // A window with no events is skipped, so only the populated window counts.
+    final StatisticsEventWindowedProbability withEmpty =
+        StatisticsEventSummaryHelper.windowedValueProbability(
+            List.of(
+                StatisticsEventSummaryServiceComponentZScoreTest.summaryOf("city", Map.of("x", 1L)),
+                StatisticsEventSummaryServiceComponentZScoreTest.summaryOf("city", Map.of())),
+            "x");
+    Assertions.assertEquals(1, withEmpty.getWindowCount());
+    Assertions.assertEquals(1.0, withEmpty.getMacroProbability().doubleValue(), 1e-9);
   }
 }

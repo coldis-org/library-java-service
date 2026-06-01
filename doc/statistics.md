@@ -184,10 +184,12 @@ Each context can define its own time bucket size via `StatisticsContextConfigura
 
 ### Probability Analysis
 
-Probability is a pooled estimate over a period: fetch the period's merged summary with `findByPeriod`, then reduce (the reductions are pure — no fetch, no window arguments):
+Probability is a pooled estimate over a period: fetch the period's merged summary with `findByPeriod`, then reduce. Like the z-score aggregators, these are **pure `static` methods on `StatisticsEventSummaryHelper`** (no fetch, no component state) — call them directly on the helper:
 
-- `singleDimensionProbability(mergedSummary, dimensionValue)` — the raw ratio `count/total` of the value within the period plus the Laplace-smoothed `(count + α) / (total + α·V)` (never zero, so an unseen value stays finite).
-- `naiveMultiDimensionProbability(List<StatisticsEventSummary> summaries, List<String> dimensionValues)` — one merged summary per dimension plus the value to evaluate for each (positionally paired); derives each dimension's probability and multiplies them, assuming independence (P(A and B) = P(A) x P(B)).
+- `singleDimensionProbability(mergedSummary, dimensionValue)` — the raw ratio `count/total` of the value within the period plus the Laplace-smoothed `(count + α) / (total + α·V)` (never zero, so an unseen value stays finite). The result also carries **uncertainty descriptors over counts**: the 95% **Wilson score interval** (`wilsonLowerBound`/`wilsonUpperBound`) on the raw proportion — sample-size-aware, so `1/2` (n=2) reports a far wider band than `500/1000`; the **Beta posterior** behind the smoothed estimate (`posteriorVariance` plus a normal-approx 95% `credibleLowerBound`/`credibleUpperBound` — the smoothed value is that posterior's mean); and the smoothed estimate's `surprisal` (`−ln p`, nats) and `logOdds` (`ln(p/(1−p))`). A `(smoothingFactor)` overload overrides the default α.
+- `naiveMultiDimensionProbability(List<StatisticsEventSummary> summaries, List<String> dimensionValues)` — one merged summary per dimension plus the value to evaluate for each (positionally paired); derives each dimension's probability and multiplies them, assuming independence (P(A and B) = P(A) x P(B)). Only marginal per-dimension counts are stored, so a *true* joint isn't computable — this is the independence approximation.
+- `dimensionConcentration(mergedSummary)` — distribution-level, not per-value: Shannon `entropy` (nats), `normalizedEntropy` in `[0,1]` (1 = uniform, 0 = a single value carries everything), and the Gini-Simpson index (`1 − Σpᵢ²`). Answers "how spread out is this dimension?".
+- `windowedValueProbability(List<StatisticsEventSummary> windowSummaries, dimensionValue)` — pass the raw per-bucket rows from `findByPeriod` (before merging). Returns the `pooledProbability` (micro, `Σcount/Σtotal` — high-volume windows dominate, same as the single-period estimate) alongside the `macroProbability` (equal-weighted mean of each window's own ratio) and `macroProbabilityStdDev` (how stable the share is across windows).
 
 Same shape as the cross-dimension z-score aggregators below, which reduce a `List<StatisticsEventSummaryComparison>` (the return of `compareByPeriod`) with no extra arguments. Per-period variance / anomaly detection lives in `compareByPeriod`, not in probability.
 
@@ -206,7 +208,7 @@ Each comparison's count stats carry three z-score shapes, and there is one aggre
 Within each per-value family (ratio, value) the reductions are:
 
 - **`|z|` magnitude:** `maxAbs…`, `minAbs…`, `meanAbs…`, `countAbs…ZScoreAbove(threshold)` (count of `|z|` strictly above a threshold), `rootSumSquare…` (`sqrt(Σz²)` — Euclidean drift energy, grows with the number of z-scores), `standardizedChiSquare…` (`(Σz² − k)/sqrt(2k)` — mean 0 / variance 1, comparable across populations), `fisherCombined…` (`Σ −log(2·(1−Φ(|z|)))` — Fisher combined surprise), `standardizedFisher…` (`(S − k)/sqrt(k)`).
-- **Signed (direction-preserving):** `maxSigned…` (strongest upward shift), `minSigned…` (strongest downward shift), `meanSigned…` (net direction — per-value deviations partly cancel), and the directional counts `count…ZScoreAbove(threshold)` / `count…ZScoreBelow(threshold)` (z strictly above `+threshold` / strictly below `−threshold` — over- vs under-representation). The `|z|` aggregators discard direction; the signed ones keep it.
+- **Signed (direction-preserving):** `maxSigned…` (strongest upward shift), `minSigned…` (strongest downward shift), `meanSigned…` (net direction — per-value deviations partly cancel), `meanPositive…` / `meanNegative…` (the average of each tail on its own — typical magnitude of up- vs down-drift, `0` when a side is empty), and the directional counts `count…ZScoreAbove(threshold)` / `count…ZScoreBelow(threshold)` (z strictly above `+threshold` / strictly below `−threshold` — over- vs under-representation). The `|z|` aggregators discard direction; the signed ones keep it.
 
 The **total** family is the dimension's overall-volume z (a single value per dimension), so only the averages are exposed: `meanSignedTotalZScore` (signed overall drift) and `meanAbsTotalZScore` (magnitude). Note that within one context every dimension typically emits one event per subject, so the total z is uniform across dimensions and the mean simply collapses those equal values.
 
@@ -306,18 +308,26 @@ List<StatisticsEventSummaryComparison> comparisons = summaryComponent.compareByP
 BigDecimal maxRatioDrift = StatisticsEventSummaryHelper.maxAbsRatioZScore(comparisons);
 BigDecimal strongestUpwardDrift = StatisticsEventSummaryHelper.maxSignedRatioZScore(comparisons);
 
-// Probability — fetch the period's merged summary, then reduce (pooled count/total + Laplace)
+// Probability — fetch the period's merged summary, then reduce with the static helper
+// (raw count/total + Laplace, plus Wilson/Beta/surprisal/log-odds descriptors)
 StatisticsEventSummary cityPeriod = summaryComponent.findByPeriod(
     "my-context", "city", startDateTime, endDateTime);
 StatisticsEventSingleDimensionProbability probability =
-    summaryComponent.singleDimensionProbability(cityPeriod, "sao-paulo");
+    StatisticsEventSummaryHelper.singleDimensionProbability(cityPeriod, "sao-paulo");
 
 // Joint probability — one merged summary per dimension plus the value to evaluate for each
 StatisticsEventSummary devicePeriod = summaryComponent.findByPeriod(
     "my-context", "device", startDateTime, endDateTime);
 StatisticsEventNaiveMultiDimensionProbability joint =
-    summaryComponent.naiveMultiDimensionProbability(
+    StatisticsEventSummaryHelper.naiveMultiDimensionProbability(
         List.of(cityPeriod, devicePeriod), List.of("sao-paulo", "mobile"));
+
+// Distribution concentration (how spread out the dimension is) and windowed (macro vs pooled)
+StatisticsEventDimensionConcentration concentration =
+    StatisticsEventSummaryHelper.dimensionConcentration(cityPeriod);
+StatisticsEventWindowedProbability windowed =
+    StatisticsEventSummaryHelper.windowedValueProbability(
+        summaryComponent.findByPeriod("my-context", "city", startDateTime, endDateTime), "sao-paulo");
 ```
 
 ### Configure Truncation

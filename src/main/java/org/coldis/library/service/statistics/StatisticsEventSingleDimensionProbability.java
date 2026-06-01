@@ -34,6 +34,27 @@ public class StatisticsEventSingleDimensionProbability implements Serializable {
   /** Laplace-smoothed probability {@code (count + α) / (total + α·V)}, never zero. */
   private BigDecimal smoothedProbability;
 
+  /** Lower bound of the 95% Wilson score interval on the raw {@code count/total} proportion. */
+  private BigDecimal wilsonLowerBound;
+
+  /** Upper bound of the 95% Wilson score interval on the raw {@code count/total} proportion. */
+  private BigDecimal wilsonUpperBound;
+
+  /** Variance of the Beta posterior whose mean is {@link #smoothedProbability} (Dirichlet-multinomial). */
+  private BigDecimal posteriorVariance;
+
+  /** Lower bound of the 95% credible interval (normal approximation to the Beta posterior), clamped to [0,1]. */
+  private BigDecimal credibleLowerBound;
+
+  /** Upper bound of the 95% credible interval (normal approximation to the Beta posterior), clamped to [0,1]. */
+  private BigDecimal credibleUpperBound;
+
+  /** Surprisal (self-information) {@code -ln(smoothedProbability)} in nats; zero when the value is certain. */
+  private BigDecimal surprisal;
+
+  /** Log-odds (logit) {@code ln(p / (1 - p))} of the smoothed probability; positive favours the value. */
+  private BigDecimal logOdds;
+
   /** No arguments constructor. */
   public StatisticsEventSingleDimensionProbability() {}
 
@@ -149,6 +170,139 @@ public class StatisticsEventSingleDimensionProbability implements Serializable {
    */
   public void setSmoothedProbability(final BigDecimal smoothedProbability) {
     this.smoothedProbability = smoothedProbability;
+  }
+
+  /**
+   * Gets the lower bound of the 95% Wilson score interval on the raw proportion.
+   *
+   * @return The Wilson lower bound.
+   */
+  @JsonView({ModelView.Persistent.class, ModelView.Public.class})
+  public BigDecimal getWilsonLowerBound() {
+    return this.wilsonLowerBound;
+  }
+
+  /**
+   * Sets the Wilson score interval lower bound.
+   *
+   * @param wilsonLowerBound New Wilson lower bound.
+   */
+  public void setWilsonLowerBound(final BigDecimal wilsonLowerBound) {
+    this.wilsonLowerBound = wilsonLowerBound;
+  }
+
+  /**
+   * Gets the upper bound of the 95% Wilson score interval on the raw proportion.
+   *
+   * @return The Wilson upper bound.
+   */
+  @JsonView({ModelView.Persistent.class, ModelView.Public.class})
+  public BigDecimal getWilsonUpperBound() {
+    return this.wilsonUpperBound;
+  }
+
+  /**
+   * Sets the Wilson score interval upper bound.
+   *
+   * @param wilsonUpperBound New Wilson upper bound.
+   */
+  public void setWilsonUpperBound(final BigDecimal wilsonUpperBound) {
+    this.wilsonUpperBound = wilsonUpperBound;
+  }
+
+  /**
+   * Gets the variance of the Beta posterior whose mean is the smoothed probability.
+   *
+   * @return The posterior variance.
+   */
+  @JsonView({ModelView.Persistent.class, ModelView.Public.class})
+  public BigDecimal getPosteriorVariance() {
+    return this.posteriorVariance;
+  }
+
+  /**
+   * Sets the posterior variance.
+   *
+   * @param posteriorVariance New posterior variance.
+   */
+  public void setPosteriorVariance(final BigDecimal posteriorVariance) {
+    this.posteriorVariance = posteriorVariance;
+  }
+
+  /**
+   * Gets the lower bound of the 95% credible interval (normal approximation to the Beta posterior).
+   *
+   * @return The credible interval lower bound.
+   */
+  @JsonView({ModelView.Persistent.class, ModelView.Public.class})
+  public BigDecimal getCredibleLowerBound() {
+    return this.credibleLowerBound;
+  }
+
+  /**
+   * Sets the credible interval lower bound.
+   *
+   * @param credibleLowerBound New credible interval lower bound.
+   */
+  public void setCredibleLowerBound(final BigDecimal credibleLowerBound) {
+    this.credibleLowerBound = credibleLowerBound;
+  }
+
+  /**
+   * Gets the upper bound of the 95% credible interval (normal approximation to the Beta posterior).
+   *
+   * @return The credible interval upper bound.
+   */
+  @JsonView({ModelView.Persistent.class, ModelView.Public.class})
+  public BigDecimal getCredibleUpperBound() {
+    return this.credibleUpperBound;
+  }
+
+  /**
+   * Sets the credible interval upper bound.
+   *
+   * @param credibleUpperBound New credible interval upper bound.
+   */
+  public void setCredibleUpperBound(final BigDecimal credibleUpperBound) {
+    this.credibleUpperBound = credibleUpperBound;
+  }
+
+  /**
+   * Gets the surprisal (self-information) {@code -ln(smoothedProbability)} in nats.
+   *
+   * @return The surprisal.
+   */
+  @JsonView({ModelView.Persistent.class, ModelView.Public.class})
+  public BigDecimal getSurprisal() {
+    return this.surprisal;
+  }
+
+  /**
+   * Sets the surprisal.
+   *
+   * @param surprisal New surprisal.
+   */
+  public void setSurprisal(final BigDecimal surprisal) {
+    this.surprisal = surprisal;
+  }
+
+  /**
+   * Gets the log-odds (logit) of the smoothed probability.
+   *
+   * @return The log-odds.
+   */
+  @JsonView({ModelView.Persistent.class, ModelView.Public.class})
+  public BigDecimal getLogOdds() {
+    return this.logOdds;
+  }
+
+  /**
+   * Sets the log-odds.
+   *
+   * @param logOdds New log-odds.
+   */
+  public void setLogOdds(final BigDecimal logOdds) {
+    this.logOdds = logOdds;
   }
 
   /**

@@ -116,7 +116,7 @@ public class StatisticsEventServiceComponentTest extends ContainerTestHelper {
       final LocalDateTime startDateTime,
       final LocalDateTime endDateTime)
       throws BusinessException {
-    return this.statisticsEventSummaryServiceComponent.singleDimensionProbability(
+    return StatisticsEventSummaryHelper.singleDimensionProbability(
         this.statisticsEventSummaryServiceComponent.summarizePeriod(context, dimensionName, startDateTime, endDateTime),
         dimensionValue);
   }
@@ -1095,7 +1095,7 @@ public class StatisticsEventServiceComponentTest extends ContainerTestHelper {
 
     // Joint from one merged summary per dimension plus the value to evaluate for each.
     final StatisticsEventNaiveMultiDimensionProbability jointResult =
-        this.statisticsEventSummaryServiceComponent.naiveMultiDimensionProbability(
+        StatisticsEventSummaryHelper.naiveMultiDimensionProbability(
             List.of(cityMerged, deviceMerged), List.of("sao-paulo", "mobile"));
 
     Assertions.assertNotNull(jointResult);
