@@ -309,6 +309,19 @@ public class StatisticsEventServiceComponent {
   }
 
   /**
+   * Enqueues a delete-expired trigger with a fixed last-value key so duplicate enqueues collapse
+   * at the broker (only one pending trigger is ever needed — the listener self-reschedules).
+   */
+  private void sendDeleteExpiredTrigger() {
+    this.jmsTemplateHelper.send(
+        this.jmsTemplate,
+        new JmsMessage<String>()
+            .withDestination(StatisticsEventServiceComponent.DELETE_EXPIRED_QUEUE)
+            .withMessage("delete-expired")
+            .withLastValueKey(StatisticsEventServiceComponent.DELETE_EXPIRED_QUEUE));
+  }
+
+  /**
    * Deletes a batch of expired statistics events. If rows were deleted, re-enqueues itself to
    * continue the loop. The re-enqueue uses a last-value key so the queue holds at most one pending
    * trigger — duplicates from scheduler + self-rescheduling collapse.
@@ -339,18 +352,5 @@ public class StatisticsEventServiceComponent {
           "${org.coldis.library.service.statistics.event.deleteexpired.cron:0 0 3 * * *}")
   public void scheduleDeleteExpired() {
     this.sendDeleteExpiredTrigger();
-  }
-
-  /**
-   * Enqueues a delete-expired trigger with a fixed last-value key so duplicate enqueues collapse
-   * at the broker (only one pending trigger is ever needed — the listener self-reschedules).
-   */
-  private void sendDeleteExpiredTrigger() {
-    this.jmsTemplateHelper.send(
-        this.jmsTemplate,
-        new JmsMessage<String>()
-            .withDestination(StatisticsEventServiceComponent.DELETE_EXPIRED_QUEUE)
-            .withMessage("delete-expired")
-            .withLastValueKey(StatisticsEventServiceComponent.DELETE_EXPIRED_QUEUE));
   }
 }

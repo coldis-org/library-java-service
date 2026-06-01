@@ -630,11 +630,16 @@ public final class StatisticsEventSummaryHelper {
 		if ((sum == null) || (sumSquare == null) || (count == 0)) {
 			return BigDecimal.ZERO;
 		}
-		final BigDecimal windowCount = BigDecimal.valueOf(count);
-		final BigDecimal mean = sum.divide(windowCount, StatisticsEventSummaryHelper.MATH_CONTEXT);
-		final BigDecimal variance = sumSquare.divide(windowCount, StatisticsEventSummaryHelper.MATH_CONTEXT)
-				.subtract(mean.multiply(mean, StatisticsEventSummaryHelper.MATH_CONTEXT), StatisticsEventSummaryHelper.MATH_CONTEXT);
-		return BigDecimal.valueOf(Math.sqrt(Math.max(variance.doubleValue(), 0.0))).round(StatisticsEventSummaryHelper.MATH_CONTEXT);
+		// Centre the sum of squares in EXACT arithmetic (no MathContext): n·Σx² − (Σx)² cancels to
+		// exactly zero when every sample is equal (e.g. a single window) and is ≥ 0 by Cauchy-Schwarz.
+		// Doing the subtraction in DECIMAL64 instead leaves a rounding residual that an irrational
+		// ratio turns into a tiny non-zero std-dev — and a divide-by-near-zero z-score blow-up.
+		final BigDecimal centeredSumSquare = sumSquare.multiply(BigDecimal.valueOf(count)).subtract(sum.multiply(sum));
+		if (centeredSumSquare.signum() <= 0) {
+			return BigDecimal.ZERO;
+		}
+		final double variance = centeredSumSquare.doubleValue() / ((double) count * (double) count);
+		return BigDecimal.valueOf(Math.sqrt(Math.max(variance, 0.0))).round(StatisticsEventSummaryHelper.MATH_CONTEXT);
 	}
 
 	/**
@@ -678,13 +683,21 @@ public final class StatisticsEventSummaryHelper {
 	 * reduction over the merged summaries — the per-dimension {@code findByPeriod} returns feed straight
 	 * in; context is taken from the summaries.
 	 *
-	 * @param  summaries       Per-dimension merged summaries (non-empty; aligned with {@code dimensionValues}).
-	 * @param  dimensionValues The value to evaluate for each dimension (aligned with {@code summaries}).
-	 * @return                 The naive multi-dimension probability.
+	 * @param  summaries         Per-dimension merged summaries (non-empty; aligned with {@code dimensionValues}).
+	 * @param  dimensionValues   The value to evaluate for each dimension (aligned with {@code summaries}).
+	 * @return                   The naive multi-dimension probability.
+	 * @throws BusinessException If {@code summaries} is null/empty or not positionally aligned with
+	 *                               {@code dimensionValues}.
 	 */
 	public static StatisticsEventNaiveMultiDimensionProbability naiveMultiDimensionProbability(
 			final List<StatisticsEventSummary> summaries,
-			final List<String> dimensionValues) {
+			final List<String> dimensionValues) throws BusinessException {
+		if ((summaries == null) || summaries.isEmpty()) {
+			throw new BusinessException(new SimpleMessage("statistics.event.summary.probability.nodimensions"), HttpStatus.BAD_REQUEST.value());
+		}
+		if ((dimensionValues == null) || (dimensionValues.size() != summaries.size())) {
+			throw new BusinessException(new SimpleMessage("statistics.event.summary.probability.misaligned"), HttpStatus.BAD_REQUEST.value());
+		}
 		final List<StatisticsEventSingleDimensionProbability> individualProbabilities = new ArrayList<>();
 		BigDecimal jointProbability = BigDecimal.ONE;
 		BigDecimal jointSmoothedProbability = BigDecimal.ONE;

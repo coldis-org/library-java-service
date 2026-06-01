@@ -5,7 +5,11 @@ import java.util.Arrays;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import org.coldis.library.exception.BusinessException;
 import org.coldis.library.service.statistics.MetricComparisonStats;
+import org.coldis.library.service.statistics.StatisticsEventNaiveMultiDimensionProbability;
+import org.coldis.library.service.statistics.StatisticsEventSingleDimensionProbability;
+import org.coldis.library.service.statistics.StatisticsEventSummary;
 import org.coldis.library.service.statistics.StatisticsEventSummaryComparison;
 import org.coldis.library.service.statistics.StatisticsEventSummaryServiceComponent;
 import org.junit.jupiter.api.Assertions;
@@ -43,6 +47,15 @@ public class StatisticsEventSummaryServiceComponentZScoreTest {
     final StatisticsEventSummaryComparison comparison = new StatisticsEventSummaryComparison();
     comparison.setCountStats(countStats);
     return comparison;
+  }
+
+  /** Builds a single-period summary in context {@code "ctx"} with the given value counts (total = Σ). */
+  private static StatisticsEventSummary summaryOf(
+      final String dimensionName, final Map<String, Long> valueCounts) {
+    final StatisticsEventSummary summary = new StatisticsEventSummary("ctx", dimensionName, null);
+    summary.setValueCounts(new HashMap<>(valueCounts));
+    summary.setTotalCount(valueCounts.values().stream().mapToLong(Long::longValue).sum());
+    return summary;
   }
 
   /** Asserts every aggregator returns {@code null} for the given input. */
@@ -202,5 +215,85 @@ public class StatisticsEventSummaryServiceComponentZScoreTest {
                 StatisticsEventSummaryServiceComponentZScoreTest.comparison(
                     Map.of("x", BigDecimal.valueOf(3.0)))));
     Assertions.assertTrue(smaller.doubleValue() < larger.doubleValue());
+  }
+
+  @Test
+  @DisplayName("Fisher surprise matches the known two-sided normal tail at moderate z (CDF accuracy)")
+  public void testFisherSurpriseMatchesKnownNormalTails() {
+    // z = 1.0: Φ(1) = 0.8413447 -> two-sided tail 0.3173106 -> surprise = -ln(tail).
+    final double expectedAtOne = -Math.log(2.0 * (1.0 - 0.8413447461));
+    Assertions.assertEquals(
+        expectedAtOne,
+        this.component
+            .fisherCombinedRatioZScore(
+                List.of(
+                    StatisticsEventSummaryServiceComponentZScoreTest.comparison(
+                        Map.of("x", BigDecimal.valueOf(1.0)))))
+            .doubleValue(),
+        1e-3);
+    // z = 1.96: Φ(1.96) = 0.9750021 -> two-sided tail ~0.05 -> surprise = -ln(tail).
+    final double expectedAtCritical = -Math.log(2.0 * (1.0 - 0.9750021048));
+    Assertions.assertEquals(
+        expectedAtCritical,
+        this.component
+            .fisherCombinedRatioZScore(
+                List.of(
+                    StatisticsEventSummaryServiceComponentZScoreTest.comparison(
+                        Map.of("y", BigDecimal.valueOf(1.96)))))
+            .doubleValue(),
+        1e-3);
+  }
+
+  @Test
+  @DisplayName("Single-dimension probability of an empty (zero-total) summary is zero, not NaN")
+  public void testSingleDimensionProbabilityOnEmptySummary() {
+    final StatisticsEventSummary summary = new StatisticsEventSummary("ctx", "dim", null);
+    summary.setTotalCount(0L);
+    final StatisticsEventSingleDimensionProbability probability =
+        this.component.singleDimensionProbability(summary, "anything");
+    Assertions.assertEquals(0, probability.getProbability().signum());
+    Assertions.assertEquals(0, probability.getSmoothedProbability().signum());
+    Assertions.assertEquals(0, probability.getDistinctValueCount());
+  }
+
+  @Test
+  @DisplayName("Naive joint over three dimensions multiplies the probabilities and sums their logs")
+  public void testNaiveMultiDimensionProbabilityOverThreeDimensions() throws Exception {
+    final StatisticsEventSummary summaryA =
+        StatisticsEventSummaryServiceComponentZScoreTest.summaryOf("A", Map.of("x", 2L, "y", 2L));
+    final StatisticsEventSummary summaryB =
+        StatisticsEventSummaryServiceComponentZScoreTest.summaryOf("B", Map.of("m", 3L, "n", 1L));
+    final StatisticsEventSummary summaryC =
+        StatisticsEventSummaryServiceComponentZScoreTest.summaryOf("C", Map.of("p", 1L, "q", 1L, "r", 2L));
+    final StatisticsEventNaiveMultiDimensionProbability joint =
+        this.component.naiveMultiDimensionProbability(
+            List.of(summaryA, summaryB, summaryC), List.of("x", "m", "p"));
+    Assertions.assertEquals(3, joint.getIndividualProbabilities().size());
+    Assertions.assertEquals("ctx", joint.getContext());
+    // Raw: P(x)=2/4, P(m)=3/4, P(p)=1/4 -> joint 0.09375.
+    Assertions.assertEquals(0.5 * 0.75 * 0.25, joint.getJointProbability().doubleValue(), 1e-9);
+    // Smoothed: (2+1)/(4+2)=0.5, (3+1)/(4+2)=2/3, (1+1)/(4+3)=2/7.
+    final double expectedSmoothed = 0.5 * (2.0 / 3.0) * (2.0 / 7.0);
+    Assertions.assertEquals(expectedSmoothed, joint.getJointSmoothedProbability().doubleValue(), 1e-9);
+    Assertions.assertEquals(Math.log(expectedSmoothed), joint.getJointSmoothedLogProbability().doubleValue(), 1e-6);
+  }
+
+  @Test
+  @DisplayName("Naive joint rejects empty, null and misaligned inputs with a BusinessException")
+  public void testNaiveMultiDimensionProbabilityRejectsInvalidInput() {
+    final StatisticsEventSummary summary =
+        StatisticsEventSummaryServiceComponentZScoreTest.summaryOf("A", Map.of("x", 2L, "y", 2L));
+    // Empty summaries.
+    Assertions.assertThrows(
+        BusinessException.class,
+        () -> this.component.naiveMultiDimensionProbability(List.of(), List.of()));
+    // Null summaries.
+    Assertions.assertThrows(
+        BusinessException.class,
+        () -> this.component.naiveMultiDimensionProbability(null, List.of("x")));
+    // Size mismatch between summaries and values.
+    Assertions.assertThrows(
+        BusinessException.class,
+        () -> this.component.naiveMultiDimensionProbability(List.of(summary), List.of("x", "y")));
   }
 }

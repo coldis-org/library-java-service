@@ -1411,4 +1411,121 @@ public class StatisticsEventServiceComponentTest extends ContainerTestHelper {
       this.assertComparisonsClose(dimension, oracle, sqlComparison);
     }
   }
+
+  /**
+   * Comparison when the reference window has no data but the sample windows do: it must not throw
+   * {@code nodata} (the samples carry the baseline), and the reference / z-score stats must stay unset
+   * (matching the in-memory path), while the historical averages are still produced.
+   */
+  @Test
+  public void testCompareByPeriodEmptyReferenceWindow() throws Exception {
+    final String context = "test-comparison-empty-reference";
+    final LocalDateTime reference = LocalDateTime.of(2026, 1, 8, 10, 0, 0);
+    // Seed only the historical sample windows (Jan 1..Jan 7); the reference window (Jan 8) stays empty.
+    final List<SummarySpec> specs = new ArrayList<>();
+    for (int day = 1; day <= 7; day++) {
+      specs.add(
+          new SummarySpec(
+              "city",
+              LocalDateTime.of(2026, 1, day, 10, 0, 0),
+              Map.of("sao-paulo", (long) day, "rio", (long) (8 - day)),
+              Map.of("sao-paulo", new BigDecimal(10 * day), "rio", new BigDecimal(10 * (8 - day)))));
+    }
+    this.seedParitySummaries(context, specs);
+    this.cacheHelper.clearCaches();
+
+    final StatisticsEventSummaryComparison sql =
+        this.statisticsEventSummaryServiceComponent.compareByPeriod(
+            context, "city", reference, ChronoUnit.HOURS, 1, ChronoUnit.DAYS, 7);
+    Assertions.assertEquals(7, sql.getSampleSize());
+    Assertions.assertNotNull(sql.getCountStats().getAverageValues().get("sao-paulo"));
+    Assertions.assertNull(sql.getCountStats().getReferenceTotal(), "empty reference -> null referenceTotal");
+    Assertions.assertNull(sql.getCountStats().getZScoreTotal(), "empty reference -> null zScoreTotal");
+    this.assertComparisonsClose(
+        "city (empty reference)", this.inMemoryComparisonOracle(context, "city", reference, 7), sql);
+  }
+
+  /**
+   * The multi-dimension {@code compareByPeriod(Collection)} overload returns one comparison per
+   * dimension in request order, each identical to the single-dimension call, and the resulting list
+   * feeds the cross-dimension z-score aggregators.
+   */
+  @Test
+  public void testCompareByPeriodMultipleDimensions() throws Exception {
+    final String context = "test-comparison-multi";
+    final LocalDateTime reference = LocalDateTime.of(2026, 1, 4, 10, 0, 0);
+    final List<SummarySpec> specs = new ArrayList<>();
+    for (int day = 1; day <= 4; day++) {
+      specs.add(
+          new SummarySpec(
+              "city",
+              LocalDateTime.of(2026, 1, day, 10, 0, 0),
+              Map.of("sao-paulo", (long) day, "rio", (long) (5 - day)),
+              Map.of("sao-paulo", new BigDecimal(10 * day), "rio", new BigDecimal(10 * (5 - day)))));
+      specs.add(
+          new SummarySpec(
+              "device",
+              LocalDateTime.of(2026, 1, day, 10, 0, 0),
+              Map.of("mobile", (long) (5 - day), "desktop", (long) day),
+              Map.of("mobile", new BigDecimal(9 * (5 - day)), "desktop", new BigDecimal(9 * day))));
+    }
+    this.seedParitySummaries(context, specs);
+    this.cacheHelper.clearCaches();
+
+    final List<StatisticsEventSummaryComparison> multi =
+        this.statisticsEventSummaryServiceComponent.compareByPeriod(
+            context, List.of("city", "device"), reference, ChronoUnit.HOURS, 1, ChronoUnit.DAYS, 3);
+    Assertions.assertEquals(2, multi.size());
+    Assertions.assertEquals("city", multi.get(0).getDimensionName());
+    Assertions.assertEquals("device", multi.get(1).getDimensionName());
+
+    // Each multi-dimension result equals the single-dimension call for that dimension.
+    this.cacheHelper.clearCaches();
+    this.assertComparisonsClose(
+        "city",
+        this.statisticsEventSummaryServiceComponent.compareByPeriod(context, "city", reference, ChronoUnit.HOURS, 1, ChronoUnit.DAYS, 3),
+        multi.get(0));
+    this.assertComparisonsClose(
+        "device",
+        this.statisticsEventSummaryServiceComponent.compareByPeriod(context, "device", reference, ChronoUnit.HOURS, 1, ChronoUnit.DAYS, 3),
+        multi.get(1));
+
+    // The list feeds the cross-dimension z-score aggregators directly.
+    Assertions.assertNotNull(this.statisticsEventSummaryServiceComponent.maxAbsRatioZScore(multi));
+  }
+
+  /**
+   * Comparison with a single historical window ({@code steps = 1}): std-dev is zero everywhere and
+   * every z-score collapses to zero, while the averages equal that one window's values.
+   */
+  @Test
+  public void testCompareByPeriodSingleHistoricalWindow() throws Exception {
+    final String context = "test-comparison-single-step";
+    final LocalDateTime reference = LocalDateTime.of(2026, 1, 2, 10, 0, 0);
+    this.seedParitySummaries(
+        context,
+        List.of(
+            new SummarySpec(
+                "city",
+                LocalDateTime.of(2026, 1, 1, 10, 0, 0),
+                Map.of("sao-paulo", 3L, "rio", 1L),
+                Map.of("sao-paulo", new BigDecimal("30"), "rio", new BigDecimal("12"))),
+            new SummarySpec(
+                "city",
+                LocalDateTime.of(2026, 1, 2, 10, 0, 0),
+                Map.of("sao-paulo", 1L, "rio", 2L),
+                Map.of("sao-paulo", new BigDecimal("11"), "rio", new BigDecimal("21")))));
+    this.cacheHelper.clearCaches();
+
+    final StatisticsEventSummaryComparison sql =
+        this.statisticsEventSummaryServiceComponent.compareByPeriod(
+            context, "city", reference, ChronoUnit.HOURS, 1, ChronoUnit.DAYS, 1);
+    Assertions.assertEquals(1, sql.getSampleSize());
+    assertBigDecimalEquals(BigDecimal.ZERO, sql.getCountStats().getStdDevTotal(), TOLERANCE);
+    assertBigDecimalEquals(new BigDecimal("3"), sql.getCountStats().getAverageValues().get("sao-paulo"), TOLERANCE);
+    assertBigDecimalEquals(BigDecimal.ZERO, sql.getCountStats().getStdDevValues().get("sao-paulo"), TOLERANCE);
+    assertBigDecimalEquals(BigDecimal.ZERO, sql.getCountStats().getZScoreValues().get("sao-paulo"), TOLERANCE);
+    this.assertComparisonsClose(
+        "city (steps=1)", this.inMemoryComparisonOracle(context, "city", reference, 1), sql);
+  }
 }

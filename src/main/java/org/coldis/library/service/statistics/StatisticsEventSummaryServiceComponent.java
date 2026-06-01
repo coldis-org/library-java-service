@@ -338,13 +338,15 @@ public class StatisticsEventSummaryServiceComponent {
 	 * for each (positionally paired) — derives each dimension's probability and combines them. A pure
 	 * reduction, no fetch; the per-dimension {@link #findByPeriod} returns feed straight in.
 	 *
-	 * @param  summaries       Per-dimension merged summaries (non-empty; aligned with {@code dimensionValues}).
-	 * @param  dimensionValues The value to evaluate for each dimension (aligned with {@code summaries}).
-	 * @return                 The naive multi-dimension probability.
+	 * @param  summaries         Per-dimension merged summaries (non-empty; aligned with {@code dimensionValues}).
+	 * @param  dimensionValues   The value to evaluate for each dimension (aligned with {@code summaries}).
+	 * @return                   The naive multi-dimension probability.
+	 * @throws BusinessException If {@code summaries} is null/empty or not positionally aligned with
+	 *                               {@code dimensionValues}.
 	 */
 	public StatisticsEventNaiveMultiDimensionProbability naiveMultiDimensionProbability(
 			final List<StatisticsEventSummary> summaries,
-			final List<String> dimensionValues) {
+			final List<String> dimensionValues) throws BusinessException {
 		return StatisticsEventSummaryHelper.naiveMultiDimensionProbability(summaries, dimensionValues);
 	}
 

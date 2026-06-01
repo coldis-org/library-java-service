@@ -4,7 +4,7 @@ import java.math.BigDecimal;
 import java.time.LocalDateTime;
 
 /**
- * Per-key result of {@link StatisticsEventServiceComponent#upsertEventBatch} — captures whether
+ * Per-key result of {@link StatisticsEventRepositoryCustom#upsertBatch} — captures whether
  * the row was applied (vs. filtered out as stale), whether it was a fresh insert (vs. an update),
  * and the pre-update state needed for summary delta computation.
  */
