@@ -931,6 +931,46 @@ public final class StatisticsEventSummaryHelper {
 		return windowed;
 	}
 
+	/**
+	 * Mean macro-probability std-dev across the per-dimension windowed results — the applicant's overall
+	 * share-stability over windows (lower = steadier; higher = its values' shares swing). Aggregate of
+	 * {@link StatisticsEventWindowedProbability#getMacroProbabilityStdDev}; null entries are skipped and an
+	 * empty input yields {@code null}.
+	 *
+	 * @param  windowedProbabilities One windowed result per dimension (the applicant's own value in each).
+	 * @return                       Mean per-dimension share-stability, or {@code null} when none are present.
+	 */
+	public static BigDecimal meanWindowedShareStdDev(
+			final List<StatisticsEventWindowedProbability> windowedProbabilities) {
+		if (windowedProbabilities == null) {
+			return null;
+		}
+		final List<BigDecimal> stdDevs = windowedProbabilities.stream().filter(Objects::nonNull)
+				.map(StatisticsEventWindowedProbability::getMacroProbabilityStdDev).filter(Objects::nonNull).toList();
+		return stdDevs.isEmpty() ? null : StatisticsEventSummaryHelper.computeAverage(stdDevs.toArray(new BigDecimal[0]));
+	}
+
+	/**
+	 * Mean logit (log-odds) of the pooled share across the per-dimension windowed results — a tail-emphasising
+	 * transform of how (un)common the applicant's values are: a rare value pushes strongly negative, a
+	 * dominant value strongly positive (with the share clamped so the log stays finite). Aggregate of
+	 * {@code logit(}{@link StatisticsEventWindowedProbability#getPooledProbability}{@code )}; null entries are
+	 * skipped and an empty input yields {@code null}.
+	 *
+	 * @param  windowedProbabilities One windowed result per dimension (the applicant's own value in each).
+	 * @return                       Mean per-dimension share logit, or {@code null} when none are present.
+	 */
+	public static BigDecimal meanWindowedShareLogit(
+			final List<StatisticsEventWindowedProbability> windowedProbabilities) {
+		if (windowedProbabilities == null) {
+			return null;
+		}
+		final List<BigDecimal> logits = windowedProbabilities.stream().filter(Objects::nonNull)
+				.map(StatisticsEventWindowedProbability::getPooledProbability).filter(Objects::nonNull)
+				.map(share -> StatisticsEventSummaryHelper.logOdds(share.doubleValue())).toList();
+		return logits.isEmpty() ? null : StatisticsEventSummaryHelper.computeAverage(logits.toArray(new BigDecimal[0]));
+	}
+
 	// ---- Cross-dimension z-score reductions (private): shared by the public ratio / value families. ----
 
 	private static BigDecimal maxAbs(

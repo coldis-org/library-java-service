@@ -645,4 +645,37 @@ public class StatisticsEventSummaryServiceComponentZScoreTest {
     Assertions.assertEquals(1, withEmpty.getWindowCount());
     Assertions.assertEquals(1.0, withEmpty.getMacroProbability().doubleValue(), 1e-9);
   }
+
+  @Test
+  @DisplayName("Windowed cross-dimension aggregates: mean share-stability and mean share logit (null/empty -> null)")
+  public void testWindowedShareAggregates() {
+    // Dim A, value "x": windows 1/1 (1.0) and 1/10 (0.1) -> pooled 2/11, macro 0.55, std dev 0.45.
+    final StatisticsEventWindowedProbability dimA =
+        StatisticsEventSummaryHelper.windowedValueProbability(
+            List.of(
+                StatisticsEventSummaryServiceComponentZScoreTest.summaryOf("A", Map.of("x", 1L)),
+                StatisticsEventSummaryServiceComponentZScoreTest.summaryOf("A", Map.of("x", 1L, "y", 9L))),
+            "x");
+    // Dim B, value "m": both windows 2/4 (0.5) -> pooled 0.5, macro 0.5, std dev 0.
+    final StatisticsEventWindowedProbability dimB =
+        StatisticsEventSummaryHelper.windowedValueProbability(
+            List.of(
+                StatisticsEventSummaryServiceComponentZScoreTest.summaryOf("B", Map.of("m", 2L, "n", 2L)),
+                StatisticsEventSummaryServiceComponentZScoreTest.summaryOf("B", Map.of("m", 2L, "n", 2L))),
+            "m");
+    final List<StatisticsEventWindowedProbability> windowed = List.of(dimA, dimB);
+    // Mean share-stability = (0.45 + 0.0) / 2 = 0.225.
+    Assertions.assertEquals(
+        0.225, StatisticsEventSummaryHelper.meanWindowedShareStdDev(windowed).doubleValue(), 1e-9);
+    // Mean share logit = (logit(2/11) + logit(0.5)) / 2 = ln((2/11)/(9/11)) / 2 = ln(2/9) / 2.
+    Assertions.assertEquals(
+        Math.log(2.0 / 9.0) / 2.0,
+        StatisticsEventSummaryHelper.meanWindowedShareLogit(windowed).doubleValue(),
+        1e-6);
+    // Null/empty inputs yield null on both aggregates.
+    Assertions.assertNull(StatisticsEventSummaryHelper.meanWindowedShareStdDev(null));
+    Assertions.assertNull(StatisticsEventSummaryHelper.meanWindowedShareStdDev(List.of()));
+    Assertions.assertNull(StatisticsEventSummaryHelper.meanWindowedShareLogit(null));
+    Assertions.assertNull(StatisticsEventSummaryHelper.meanWindowedShareLogit(List.of()));
+  }
 }
