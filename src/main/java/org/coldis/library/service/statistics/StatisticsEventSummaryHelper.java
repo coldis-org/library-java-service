@@ -14,6 +14,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
+import java.util.function.Function;
 import java.util.stream.Stream;
 
 import org.coldis.library.exception.BusinessException;
@@ -201,12 +202,33 @@ public final class StatisticsEventSummaryHelper {
 		return sum;
 	}
 
-	/** Flat stream of non-null ratio z-scores across every comparison's value map. */
-	private static Stream<BigDecimal> flatRatioZScores(
-			final List<StatisticsEventSummaryComparison> comparisons) {
-		return comparisons == null ? Stream.empty()
+	/** Flat list of non-null per-value z-scores across every comparison, pulled from the given metric map. */
+	private static List<BigDecimal> flatZScores(
+			final List<StatisticsEventSummaryComparison> comparisons,
+			final Function<MetricComparisonStats, Map<String, BigDecimal>> mapExtractor) {
+		return comparisons == null ? List.of()
 				: comparisons.stream().filter(Objects::nonNull).map(StatisticsEventSummaryComparison::getCountStats).filter(Objects::nonNull)
-						.map(MetricComparisonStats::getZScoreRatios).filter(Objects::nonNull).flatMap(map -> map.values().stream()).filter(Objects::nonNull);
+						.map(mapExtractor).filter(Objects::nonNull).flatMap(map -> map.values().stream()).filter(Objects::nonNull).toList();
+	}
+
+	/** Flat list of per-value ratio (share) z-scores across every comparison. */
+	private static List<BigDecimal> flatRatioZScores(
+			final List<StatisticsEventSummaryComparison> comparisons) {
+		return StatisticsEventSummaryHelper.flatZScores(comparisons, MetricComparisonStats::getZScoreRatios);
+	}
+
+	/** Flat list of per-value raw-count z-scores across every comparison. */
+	private static List<BigDecimal> flatValueZScores(
+			final List<StatisticsEventSummaryComparison> comparisons) {
+		return StatisticsEventSummaryHelper.flatZScores(comparisons, MetricComparisonStats::getZScoreValues);
+	}
+
+	/** Flat list of per-dimension total-volume z-scores across every comparison (one per dimension). */
+	private static List<BigDecimal> flatTotalZScores(
+			final List<StatisticsEventSummaryComparison> comparisons) {
+		return comparisons == null ? List.of()
+				: comparisons.stream().filter(Objects::nonNull).map(StatisticsEventSummaryComparison::getCountStats).filter(Objects::nonNull)
+						.map(MetricComparisonStats::getZScoreTotal).filter(Objects::nonNull).toList();
 	}
 
 	// ---- Mid-level aggregation builders ----
@@ -719,94 +741,289 @@ public final class StatisticsEventSummaryHelper {
 		return result;
 	}
 
-	// ---- Public cross-dimension z-score aggregators ----
-	// Pure reductions over already-computed comparisons (no DB access).
+	// ---- Cross-dimension z-score reductions (private): shared by the public ratio / value families. ----
 
-	/** Maximum {@code |z|} across every dimension's value-level ratio z-scores. */
-	public static BigDecimal maxAbsRatioZScore(
-			final List<StatisticsEventSummaryComparison> comparisons) {
-		return StatisticsEventSummaryHelper.flatRatioZScores(comparisons).map(BigDecimal::abs).max(Comparator.naturalOrder()).orElse(null);
+	private static BigDecimal maxAbs(
+			final List<BigDecimal> zScores) {
+		return zScores.stream().map(BigDecimal::abs).max(Comparator.naturalOrder()).orElse(null);
 	}
 
-	/** Minimum {@code |z|} across every dimension's value-level ratio z-scores. */
-	public static BigDecimal minAbsRatioZScore(
-			final List<StatisticsEventSummaryComparison> comparisons) {
-		return StatisticsEventSummaryHelper.flatRatioZScores(comparisons).map(BigDecimal::abs).min(Comparator.naturalOrder()).orElse(null);
+	private static BigDecimal minAbs(
+			final List<BigDecimal> zScores) {
+		return zScores.stream().map(BigDecimal::abs).min(Comparator.naturalOrder()).orElse(null);
 	}
 
-	/** Mean {@code |z|} across every dimension's value-level ratio z-scores. */
-	public static BigDecimal meanAbsRatioZScore(
-			final List<StatisticsEventSummaryComparison> comparisons) {
-		final List<BigDecimal> absoluteZScores = StatisticsEventSummaryHelper.flatRatioZScores(comparisons).map(BigDecimal::abs).toList();
-		return absoluteZScores.isEmpty() ? null
-				: absoluteZScores.stream().reduce(BigDecimal.ZERO, BigDecimal::add).divide(BigDecimal.valueOf(absoluteZScores.size()), 6, RoundingMode.HALF_UP);
+	private static BigDecimal meanAbs(
+			final List<BigDecimal> zScores) {
+		return zScores.isEmpty() ? null
+				: zScores.stream().map(BigDecimal::abs).reduce(BigDecimal.ZERO, BigDecimal::add).divide(BigDecimal.valueOf(zScores.size()), 6,
+						RoundingMode.HALF_UP);
 	}
 
-	/**
-	 * Count of dimension-value z-scores whose {@code |z|} strictly exceeds {@code threshold}.
-	 * Returned as {@code BigDecimal} (never {@code double}) for uniformity with the sibling
-	 * aggregators, all of which feed a {@code BigDecimal}-typed feature.
-	 */
-	public static BigDecimal countAbsRatioZScoreAbove(
-			final List<StatisticsEventSummaryComparison> comparisons,
+	private static BigDecimal countAbsAbove(
+			final List<BigDecimal> zScores,
 			final double threshold) {
 		final BigDecimal thresholdValue = BigDecimal.valueOf(threshold);
-		final List<BigDecimal> zScores = StatisticsEventSummaryHelper.flatRatioZScores(comparisons).toList();
 		return zScores.isEmpty() ? null
 				: BigDecimal.valueOf(zScores.stream().filter(zScore -> zScore.abs().compareTo(thresholdValue) > 0).count());
 	}
 
-	/**
-	 * Raw {@code sqrt(Σ z²)} — the z-score vector's Euclidean length ("total drift energy"). The
-	 * {@code Σ z²} is summed exactly in {@code BigDecimal}; only the final {@code sqrt}
-	 * (transcendental) is taken in {@code double}. Grows with the number of z-scores, so prefer
-	 * {@link #standardizedChiSquareRatioZScore} to compare across populations.
-	 */
-	public static BigDecimal rootSumSquareRatioZScore(
-			final List<StatisticsEventSummaryComparison> comparisons) {
-		final List<BigDecimal> zScores = StatisticsEventSummaryHelper.flatRatioZScores(comparisons).toList();
+	private static BigDecimal countAbove(
+			final List<BigDecimal> zScores,
+			final double threshold) {
+		final BigDecimal thresholdValue = BigDecimal.valueOf(threshold);
+		return zScores.isEmpty() ? null
+				: BigDecimal.valueOf(zScores.stream().filter(zScore -> zScore.compareTo(thresholdValue) > 0).count());
+	}
+
+	private static BigDecimal countBelow(
+			final List<BigDecimal> zScores,
+			final double threshold) {
+		final BigDecimal thresholdValue = BigDecimal.valueOf(-threshold);
+		return zScores.isEmpty() ? null
+				: BigDecimal.valueOf(zScores.stream().filter(zScore -> zScore.compareTo(thresholdValue) < 0).count());
+	}
+
+	private static BigDecimal rootSumSquare(
+			final List<BigDecimal> zScores) {
 		return zScores.isEmpty() ? null
 				: BigDecimal.valueOf(Math.sqrt(StatisticsEventSummaryHelper.sumOfSquares(zScores).doubleValue())).setScale(6, RoundingMode.HALF_UP);
 	}
 
-	/**
-	 * Standardized chi-square {@code (Σ z² − k) / sqrt(2k)}. Under independent standard-normal
-	 * z-scores {@code Σ z² ~ χ²(k)}, so this is mean 0 / variance 1 — comparable across populations
-	 * and window configurations regardless of how many z-scores {@code k} are present. {@code Σ z²} is
-	 * summed exactly in {@code BigDecimal}; only the {@code sqrt} normalization is {@code double}.
-	 */
-	public static BigDecimal standardizedChiSquareRatioZScore(
-			final List<StatisticsEventSummaryComparison> comparisons) {
-		final List<BigDecimal> zScores = StatisticsEventSummaryHelper.flatRatioZScores(comparisons).toList();
+	private static BigDecimal standardizedChiSquare(
+			final List<BigDecimal> zScores) {
 		final int count = zScores.size();
 		return count == 0 ? null
 				: BigDecimal.valueOf((StatisticsEventSummaryHelper.sumOfSquares(zScores).doubleValue() - count) / Math.sqrt(2.0 * count)).setScale(6,
 						RoundingMode.HALF_UP);
 	}
 
-	/**
-	 * Raw Fisher combined surprise {@code Σ −log(2·(1−Φ(|z|)))}: each z-score's two-sided p-value
-	 * turned into a surprise and summed (Fisher's combined-probability method). Grows with the number
-	 * of z-scores, so prefer {@link #standardizedFisherRatioZScore} to compare across populations.
-	 */
-	public static BigDecimal fisherCombinedRatioZScore(
-			final List<StatisticsEventSummaryComparison> comparisons) {
-		final List<BigDecimal> zScores = StatisticsEventSummaryHelper.flatRatioZScores(comparisons).toList();
+	private static BigDecimal fisherCombined(
+			final List<BigDecimal> zScores) {
 		return zScores.isEmpty() ? null
 				: BigDecimal.valueOf(StatisticsEventSummaryHelper.fisherCombinedSum(zScores)).setScale(6, RoundingMode.HALF_UP);
 	}
 
-	/**
-	 * Standardized Fisher {@code (S − k) / sqrt(k)} where {@code S = Σ −log(2·(1−Φ(|z|)))}. Under
-	 * independent standard-normal z-scores each surprise is {@code Exponential(1)}, so {@code S} has
-	 * mean {@code k} and variance {@code k}; this is mean 0 / variance 1 — comparable across
-	 * populations and window configurations.
-	 */
-	public static BigDecimal standardizedFisherRatioZScore(
-			final List<StatisticsEventSummaryComparison> comparisons) {
-		final List<BigDecimal> zScores = StatisticsEventSummaryHelper.flatRatioZScores(comparisons).toList();
+	private static BigDecimal standardizedFisher(
+			final List<BigDecimal> zScores) {
 		final int count = zScores.size();
 		return count == 0 ? null
 				: BigDecimal.valueOf((StatisticsEventSummaryHelper.fisherCombinedSum(zScores) - count) / Math.sqrt(count)).setScale(6, RoundingMode.HALF_UP);
+	}
+
+	private static BigDecimal maxSigned(
+			final List<BigDecimal> zScores) {
+		return zScores.stream().max(Comparator.naturalOrder()).orElse(null);
+	}
+
+	private static BigDecimal minSigned(
+			final List<BigDecimal> zScores) {
+		return zScores.stream().min(Comparator.naturalOrder()).orElse(null);
+	}
+
+	private static BigDecimal meanSigned(
+			final List<BigDecimal> zScores) {
+		return zScores.isEmpty() ? null
+				: zScores.stream().reduce(BigDecimal.ZERO, BigDecimal::add).divide(BigDecimal.valueOf(zScores.size()), 6, RoundingMode.HALF_UP);
+	}
+
+	// ---- Public ratio (value/total share) z-score aggregators. Pure reductions, no DB access. ----
+
+	/** Maximum {@code |z|} across every dimension's value-level ratio z-scores. */
+	public static BigDecimal maxAbsRatioZScore(
+			final List<StatisticsEventSummaryComparison> comparisons) {
+		return StatisticsEventSummaryHelper.maxAbs(StatisticsEventSummaryHelper.flatRatioZScores(comparisons));
+	}
+
+	/** Minimum {@code |z|} across every dimension's value-level ratio z-scores. */
+	public static BigDecimal minAbsRatioZScore(
+			final List<StatisticsEventSummaryComparison> comparisons) {
+		return StatisticsEventSummaryHelper.minAbs(StatisticsEventSummaryHelper.flatRatioZScores(comparisons));
+	}
+
+	/** Mean {@code |z|} across every dimension's value-level ratio z-scores. */
+	public static BigDecimal meanAbsRatioZScore(
+			final List<StatisticsEventSummaryComparison> comparisons) {
+		return StatisticsEventSummaryHelper.meanAbs(StatisticsEventSummaryHelper.flatRatioZScores(comparisons));
+	}
+
+	/**
+	 * Count of dimension-value ratio z-scores whose {@code |z|} strictly exceeds {@code threshold}, as
+	 * {@code BigDecimal} for uniformity with the sibling aggregators.
+	 */
+	public static BigDecimal countAbsRatioZScoreAbove(
+			final List<StatisticsEventSummaryComparison> comparisons,
+			final double threshold) {
+		return StatisticsEventSummaryHelper.countAbsAbove(StatisticsEventSummaryHelper.flatRatioZScores(comparisons), threshold);
+	}
+
+	/**
+	 * Raw {@code sqrt(Σ z²)} over the ratio z-scores — the vector's Euclidean length ("drift energy").
+	 * Grows with the number of z-scores, so prefer {@link #standardizedChiSquareRatioZScore} across
+	 * populations.
+	 */
+	public static BigDecimal rootSumSquareRatioZScore(
+			final List<StatisticsEventSummaryComparison> comparisons) {
+		return StatisticsEventSummaryHelper.rootSumSquare(StatisticsEventSummaryHelper.flatRatioZScores(comparisons));
+	}
+
+	/**
+	 * Standardized chi-square {@code (Σ z² − k)/sqrt(2k)} over the ratio z-scores. Under independent
+	 * standard normals {@code Σ z² ~ χ²(k)}, so mean 0 / variance 1 — comparable across populations.
+	 */
+	public static BigDecimal standardizedChiSquareRatioZScore(
+			final List<StatisticsEventSummaryComparison> comparisons) {
+		return StatisticsEventSummaryHelper.standardizedChiSquare(StatisticsEventSummaryHelper.flatRatioZScores(comparisons));
+	}
+
+	/**
+	 * Raw Fisher combined surprise {@code Σ −log(2·(1−Φ(|z|)))} over the ratio z-scores. Grows with the
+	 * number of z-scores, so prefer {@link #standardizedFisherRatioZScore} across populations.
+	 */
+	public static BigDecimal fisherCombinedRatioZScore(
+			final List<StatisticsEventSummaryComparison> comparisons) {
+		return StatisticsEventSummaryHelper.fisherCombined(StatisticsEventSummaryHelper.flatRatioZScores(comparisons));
+	}
+
+	/**
+	 * Standardized Fisher {@code (S − k)/sqrt(k)} over the ratio z-scores — mean 0 / variance 1 across
+	 * populations.
+	 */
+	public static BigDecimal standardizedFisherRatioZScore(
+			final List<StatisticsEventSummaryComparison> comparisons) {
+		return StatisticsEventSummaryHelper.standardizedFisher(StatisticsEventSummaryHelper.flatRatioZScores(comparisons));
+	}
+
+	// ---- Signed ratio variants: preserve drift direction (the |z| aggregators above discard it). ----
+
+	/** Maximum signed ratio z-score — the strongest upward shift in a value's share (positive). */
+	public static BigDecimal maxSignedRatioZScore(
+			final List<StatisticsEventSummaryComparison> comparisons) {
+		return StatisticsEventSummaryHelper.maxSigned(StatisticsEventSummaryHelper.flatRatioZScores(comparisons));
+	}
+
+	/** Minimum signed ratio z-score — the strongest downward shift in a value's share (most negative). */
+	public static BigDecimal minSignedRatioZScore(
+			final List<StatisticsEventSummaryComparison> comparisons) {
+		return StatisticsEventSummaryHelper.minSigned(StatisticsEventSummaryHelper.flatRatioZScores(comparisons));
+	}
+
+	/** Mean signed ratio z-score — net drift direction (per-value deviations partly cancel within a dimension). */
+	public static BigDecimal meanSignedRatioZScore(
+			final List<StatisticsEventSummaryComparison> comparisons) {
+		return StatisticsEventSummaryHelper.meanSigned(StatisticsEventSummaryHelper.flatRatioZScores(comparisons));
+	}
+
+	/** Count of dimension-value ratio z-scores strictly above {@code +threshold} (directional over-representation). */
+	public static BigDecimal countRatioZScoreAbove(
+			final List<StatisticsEventSummaryComparison> comparisons,
+			final double threshold) {
+		return StatisticsEventSummaryHelper.countAbove(StatisticsEventSummaryHelper.flatRatioZScores(comparisons), threshold);
+	}
+
+	/** Count of dimension-value ratio z-scores strictly below {@code −threshold} (directional under-representation). */
+	public static BigDecimal countRatioZScoreBelow(
+			final List<StatisticsEventSummaryComparison> comparisons,
+			final double threshold) {
+		return StatisticsEventSummaryHelper.countBelow(StatisticsEventSummaryHelper.flatRatioZScores(comparisons), threshold);
+	}
+
+	// ---- Public value (per-value raw count) z-score aggregators: same reductions over count z. ----
+
+	/** Maximum {@code |z|} over per-value raw-count z-scores. See {@link #maxAbsRatioZScore}. */
+	public static BigDecimal maxAbsValueZScore(
+			final List<StatisticsEventSummaryComparison> comparisons) {
+		return StatisticsEventSummaryHelper.maxAbs(StatisticsEventSummaryHelper.flatValueZScores(comparisons));
+	}
+
+	/** Minimum {@code |z|} over per-value raw-count z-scores. See {@link #minAbsRatioZScore}. */
+	public static BigDecimal minAbsValueZScore(
+			final List<StatisticsEventSummaryComparison> comparisons) {
+		return StatisticsEventSummaryHelper.minAbs(StatisticsEventSummaryHelper.flatValueZScores(comparisons));
+	}
+
+	/** Mean {@code |z|} over per-value raw-count z-scores. See {@link #meanAbsRatioZScore}. */
+	public static BigDecimal meanAbsValueZScore(
+			final List<StatisticsEventSummaryComparison> comparisons) {
+		return StatisticsEventSummaryHelper.meanAbs(StatisticsEventSummaryHelper.flatValueZScores(comparisons));
+	}
+
+	/** Count of per-value raw-count z-scores with {@code |z|} above {@code threshold}. See {@link #countAbsRatioZScoreAbove}. */
+	public static BigDecimal countAbsValueZScoreAbove(
+			final List<StatisticsEventSummaryComparison> comparisons,
+			final double threshold) {
+		return StatisticsEventSummaryHelper.countAbsAbove(StatisticsEventSummaryHelper.flatValueZScores(comparisons), threshold);
+	}
+
+	/** {@code sqrt(Σ z²)} over per-value raw-count z-scores. See {@link #rootSumSquareRatioZScore}. */
+	public static BigDecimal rootSumSquareValueZScore(
+			final List<StatisticsEventSummaryComparison> comparisons) {
+		return StatisticsEventSummaryHelper.rootSumSquare(StatisticsEventSummaryHelper.flatValueZScores(comparisons));
+	}
+
+	/** Standardized chi-square over per-value raw-count z-scores. See {@link #standardizedChiSquareRatioZScore}. */
+	public static BigDecimal standardizedChiSquareValueZScore(
+			final List<StatisticsEventSummaryComparison> comparisons) {
+		return StatisticsEventSummaryHelper.standardizedChiSquare(StatisticsEventSummaryHelper.flatValueZScores(comparisons));
+	}
+
+	/** Raw Fisher combined surprise over per-value raw-count z-scores. See {@link #fisherCombinedRatioZScore}. */
+	public static BigDecimal fisherCombinedValueZScore(
+			final List<StatisticsEventSummaryComparison> comparisons) {
+		return StatisticsEventSummaryHelper.fisherCombined(StatisticsEventSummaryHelper.flatValueZScores(comparisons));
+	}
+
+	/** Standardized Fisher over per-value raw-count z-scores. See {@link #standardizedFisherRatioZScore}. */
+	public static BigDecimal standardizedFisherValueZScore(
+			final List<StatisticsEventSummaryComparison> comparisons) {
+		return StatisticsEventSummaryHelper.standardizedFisher(StatisticsEventSummaryHelper.flatValueZScores(comparisons));
+	}
+
+	/** Maximum signed per-value raw-count z-score — the strongest count surge. See {@link #maxSignedRatioZScore}. */
+	public static BigDecimal maxSignedValueZScore(
+			final List<StatisticsEventSummaryComparison> comparisons) {
+		return StatisticsEventSummaryHelper.maxSigned(StatisticsEventSummaryHelper.flatValueZScores(comparisons));
+	}
+
+	/** Minimum signed per-value raw-count z-score — the strongest count drop. See {@link #minSignedRatioZScore}. */
+	public static BigDecimal minSignedValueZScore(
+			final List<StatisticsEventSummaryComparison> comparisons) {
+		return StatisticsEventSummaryHelper.minSigned(StatisticsEventSummaryHelper.flatValueZScores(comparisons));
+	}
+
+	/** Mean signed per-value raw-count z-score. See {@link #meanSignedRatioZScore}. */
+	public static BigDecimal meanSignedValueZScore(
+			final List<StatisticsEventSummaryComparison> comparisons) {
+		return StatisticsEventSummaryHelper.meanSigned(StatisticsEventSummaryHelper.flatValueZScores(comparisons));
+	}
+
+	/** Count of per-value raw-count z-scores strictly above {@code +threshold}. See {@link #countRatioZScoreAbove}. */
+	public static BigDecimal countValueZScoreAbove(
+			final List<StatisticsEventSummaryComparison> comparisons,
+			final double threshold) {
+		return StatisticsEventSummaryHelper.countAbove(StatisticsEventSummaryHelper.flatValueZScores(comparisons), threshold);
+	}
+
+	/** Count of per-value raw-count z-scores strictly below {@code −threshold}. See {@link #countRatioZScoreBelow}. */
+	public static BigDecimal countValueZScoreBelow(
+			final List<StatisticsEventSummaryComparison> comparisons,
+			final double threshold) {
+		return StatisticsEventSummaryHelper.countBelow(StatisticsEventSummaryHelper.flatValueZScores(comparisons), threshold);
+	}
+
+	// ---- Public total (overall volume) z-score aggregators. zScoreTotal is the dimension's total-volume
+	// z; within a context every dimension emits one event per loan, so it is uniform across dimensions —
+	// a single volume-drift signal (the mean just collapses the equal per-dimension values). ----
+
+	/** Mean signed total-volume z-score — overall volume drift, signed (surge positive, drop negative). */
+	public static BigDecimal meanSignedTotalZScore(
+			final List<StatisticsEventSummaryComparison> comparisons) {
+		return StatisticsEventSummaryHelper.meanSigned(StatisticsEventSummaryHelper.flatTotalZScores(comparisons));
+	}
+
+	/** Mean {@code |z|} total-volume z-score — overall volume drift magnitude. */
+	public static BigDecimal meanAbsTotalZScore(
+			final List<StatisticsEventSummaryComparison> comparisons) {
+		return StatisticsEventSummaryHelper.meanAbs(StatisticsEventSummaryHelper.flatTotalZScores(comparisons));
 	}
 }

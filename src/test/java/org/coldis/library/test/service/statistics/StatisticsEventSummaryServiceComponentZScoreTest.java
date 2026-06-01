@@ -11,39 +11,100 @@ import org.coldis.library.service.statistics.StatisticsEventNaiveMultiDimensionP
 import org.coldis.library.service.statistics.StatisticsEventSingleDimensionProbability;
 import org.coldis.library.service.statistics.StatisticsEventSummary;
 import org.coldis.library.service.statistics.StatisticsEventSummaryComparison;
+import org.coldis.library.service.statistics.StatisticsEventSummaryHelper;
 import org.coldis.library.service.statistics.StatisticsEventSummaryServiceComponent;
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
 /**
- * Pure unit tests for the cross-dimension z-score aggregators on {@link
- * StatisticsEventSummaryServiceComponent}. These reductions touch no component state, so the
- * component is instantiated directly and fed hand-built comparisons — no Spring context or database
- * required.
+ * Pure unit tests for the cross-dimension z-score aggregators (static reductions on {@link
+ * StatisticsEventSummaryHelper}) and for the probability entry points on {@link
+ * StatisticsEventSummaryServiceComponent}. The aggregators come in three families that read three
+ * different per-comparison maps off the count stats: <b>ratio</b> ({@code zScoreRatios} — per-value
+ * share drift), <b>value</b> ({@code zScoreValues} — per-value raw-count drift) and <b>total</b>
+ * ({@code zScoreTotal} — one overall-volume z per dimension). Each family has {@code |z|} and signed
+ * variants. All reductions touch no component state, so they are fed hand-built comparisons — no
+ * Spring context or database required; the component is instantiated directly only for the
+ * probability methods.
  */
 public class StatisticsEventSummaryServiceComponentZScoreTest {
 
-  /** Component under test (only its pure aggregator methods are exercised). */
+  /** Component under test (only its pure probability methods are exercised). */
   private final StatisticsEventSummaryServiceComponent component =
       new StatisticsEventSummaryServiceComponent();
 
   /**
-   * Fixture spanning two dimensions with ratio z-scores {@code 1, -2} and {@code 3}; the flat
-   * absolute set is {@code {1, 2, 3}} (k = 3, Σz² = 14).
+   * Ratio fixture spanning two dimensions with z-scores {@code 1, -2} and {@code 3}; the flat
+   * absolute set is {@code {1, 2, 3}} (k = 3, Σz² = 14), the flat signed set is {@code [1, -2, 3]}.
    */
   private final List<StatisticsEventSummaryComparison> fixture =
       List.of(
-          StatisticsEventSummaryServiceComponentZScoreTest.comparison(
+          StatisticsEventSummaryServiceComponentZScoreTest.ratioComparison(
               Map.of("a", BigDecimal.valueOf(1.0), "b", BigDecimal.valueOf(-2.0))),
-          StatisticsEventSummaryServiceComponentZScoreTest.comparison(
+          StatisticsEventSummaryServiceComponentZScoreTest.ratioComparison(
               Map.of("c", BigDecimal.valueOf(3.0))));
 
+  /**
+   * Signed ratio fixture {@code [1, -4, 3]} — chosen so the largest-magnitude z ({@code -4}) is
+   * negative, separating {@code maxAbsSigned} (-4) from {@code maxSigned} (3) and giving a net mean
+   * of exactly 0.
+   */
+  private final List<StatisticsEventSummaryComparison> signedFixture =
+      List.of(
+          StatisticsEventSummaryServiceComponentZScoreTest.ratioComparison(
+              Map.of("a", BigDecimal.valueOf(1.0), "b", BigDecimal.valueOf(-4.0))),
+          StatisticsEventSummaryServiceComponentZScoreTest.ratioComparison(
+              Map.of("c", BigDecimal.valueOf(3.0))));
+
+  /**
+   * Value fixture carrying the same {@code [1, -2, 3]} numbers as {@link #fixture} but on {@code
+   * zScoreValues}; each comparison also carries a decoy {@code zScoreRatios} of {@code 99} to prove
+   * the value family reads its own map.
+   */
+  private final List<StatisticsEventSummaryComparison> valueFixture =
+      List.of(
+          StatisticsEventSummaryServiceComponentZScoreTest.fullComparison(
+              Map.of("a", BigDecimal.valueOf(99.0)),
+              Map.of("a", BigDecimal.valueOf(1.0), "b", BigDecimal.valueOf(-2.0)),
+              null),
+          StatisticsEventSummaryServiceComponentZScoreTest.fullComparison(
+              Map.of("c", BigDecimal.valueOf(99.0)),
+              Map.of("c", BigDecimal.valueOf(3.0)),
+              null));
+
+  /** Total fixture: one total-volume z per dimension, {@code -1} and {@code 3}. */
+  private final List<StatisticsEventSummaryComparison> totalFixture =
+      List.of(
+          StatisticsEventSummaryServiceComponentZScoreTest.totalComparison(BigDecimal.valueOf(-1.0)),
+          StatisticsEventSummaryServiceComponentZScoreTest.totalComparison(BigDecimal.valueOf(3.0)));
+
   /** Builds a comparison carrying the given ratio z-score map on its count stats. */
-  private static StatisticsEventSummaryComparison comparison(
+  private static StatisticsEventSummaryComparison ratioComparison(
       final Map<String, BigDecimal> zScoreRatios) {
+    return StatisticsEventSummaryServiceComponentZScoreTest.fullComparison(zScoreRatios, null, null);
+  }
+
+  /** Builds a comparison carrying the given raw-count value z-score map on its count stats. */
+  private static StatisticsEventSummaryComparison valueComparison(
+      final Map<String, BigDecimal> zScoreValues) {
+    return StatisticsEventSummaryServiceComponentZScoreTest.fullComparison(null, zScoreValues, null);
+  }
+
+  /** Builds a comparison carrying only the given total-volume z-score on its count stats. */
+  private static StatisticsEventSummaryComparison totalComparison(final BigDecimal zScoreTotal) {
+    return StatisticsEventSummaryServiceComponentZScoreTest.fullComparison(null, null, zScoreTotal);
+  }
+
+  /** Builds a comparison whose count stats carry any combination of the three z-score shapes. */
+  private static StatisticsEventSummaryComparison fullComparison(
+      final Map<String, BigDecimal> zScoreRatios,
+      final Map<String, BigDecimal> zScoreValues,
+      final BigDecimal zScoreTotal) {
     final MetricComparisonStats countStats = new MetricComparisonStats();
     countStats.setZScoreRatios(zScoreRatios);
+    countStats.setZScoreValues(zScoreValues);
+    countStats.setZScoreTotal(zScoreTotal);
     final StatisticsEventSummaryComparison comparison = new StatisticsEventSummaryComparison();
     comparison.setCountStats(countStats);
     return comparison;
@@ -58,16 +119,37 @@ public class StatisticsEventSummaryServiceComponentZScoreTest {
     return summary;
   }
 
-  /** Asserts every aggregator returns {@code null} for the given input. */
+  /** Asserts every aggregator across all three families returns {@code null} for the given input. */
   private void assertAllNull(final List<StatisticsEventSummaryComparison> input) {
-    Assertions.assertNull(this.component.maxAbsRatioZScore(input));
-    Assertions.assertNull(this.component.minAbsRatioZScore(input));
-    Assertions.assertNull(this.component.meanAbsRatioZScore(input));
-    Assertions.assertNull(this.component.countAbsRatioZScoreAbove(input, 1.0));
-    Assertions.assertNull(this.component.rootSumSquareRatioZScore(input));
-    Assertions.assertNull(this.component.standardizedChiSquareRatioZScore(input));
-    Assertions.assertNull(this.component.fisherCombinedRatioZScore(input));
-    Assertions.assertNull(this.component.standardizedFisherRatioZScore(input));
+    // Ratio family (|z| and signed).
+    Assertions.assertNull(StatisticsEventSummaryHelper.maxAbsRatioZScore(input));
+    Assertions.assertNull(StatisticsEventSummaryHelper.minAbsRatioZScore(input));
+    Assertions.assertNull(StatisticsEventSummaryHelper.meanAbsRatioZScore(input));
+    Assertions.assertNull(StatisticsEventSummaryHelper.countAbsRatioZScoreAbove(input, 1.0));
+    Assertions.assertNull(StatisticsEventSummaryHelper.rootSumSquareRatioZScore(input));
+    Assertions.assertNull(StatisticsEventSummaryHelper.standardizedChiSquareRatioZScore(input));
+    Assertions.assertNull(StatisticsEventSummaryHelper.fisherCombinedRatioZScore(input));
+    Assertions.assertNull(StatisticsEventSummaryHelper.standardizedFisherRatioZScore(input));
+    Assertions.assertNull(StatisticsEventSummaryHelper.maxSignedRatioZScore(input));
+    Assertions.assertNull(StatisticsEventSummaryHelper.minSignedRatioZScore(input));
+    Assertions.assertNull(StatisticsEventSummaryHelper.meanSignedRatioZScore(input));
+    Assertions.assertNull(StatisticsEventSummaryHelper.maxAbsSignedRatioZScore(input));
+    // Value family (|z| and signed).
+    Assertions.assertNull(StatisticsEventSummaryHelper.maxAbsValueZScore(input));
+    Assertions.assertNull(StatisticsEventSummaryHelper.minAbsValueZScore(input));
+    Assertions.assertNull(StatisticsEventSummaryHelper.meanAbsValueZScore(input));
+    Assertions.assertNull(StatisticsEventSummaryHelper.countAbsValueZScoreAbove(input, 1.0));
+    Assertions.assertNull(StatisticsEventSummaryHelper.rootSumSquareValueZScore(input));
+    Assertions.assertNull(StatisticsEventSummaryHelper.standardizedChiSquareValueZScore(input));
+    Assertions.assertNull(StatisticsEventSummaryHelper.fisherCombinedValueZScore(input));
+    Assertions.assertNull(StatisticsEventSummaryHelper.standardizedFisherValueZScore(input));
+    Assertions.assertNull(StatisticsEventSummaryHelper.maxSignedValueZScore(input));
+    Assertions.assertNull(StatisticsEventSummaryHelper.minSignedValueZScore(input));
+    Assertions.assertNull(StatisticsEventSummaryHelper.meanSignedValueZScore(input));
+    Assertions.assertNull(StatisticsEventSummaryHelper.maxAbsSignedValueZScore(input));
+    // Total family.
+    Assertions.assertNull(StatisticsEventSummaryHelper.meanSignedTotalZScore(input));
+    Assertions.assertNull(StatisticsEventSummaryHelper.meanAbsTotalZScore(input));
   }
 
   @Test
@@ -86,7 +168,7 @@ public class StatisticsEventSummaryServiceComponentZScoreTest {
   @DisplayName("Every aggregator returns null when no z-scores are present")
   public void testEmptyZScoreMapYieldsNull() {
     this.assertAllNull(
-        List.of(StatisticsEventSummaryServiceComponentZScoreTest.comparison(Map.of())));
+        List.of(StatisticsEventSummaryServiceComponentZScoreTest.ratioComparison(Map.of())));
   }
 
   @Test
@@ -110,52 +192,52 @@ public class StatisticsEventSummaryServiceComponentZScoreTest {
     withNulls.put("present", BigDecimal.valueOf(2.0));
     withNulls.put("missing", null);
     final List<StatisticsEventSummaryComparison> input =
-        List.of(StatisticsEventSummaryServiceComponentZScoreTest.comparison(withNulls));
+        List.of(StatisticsEventSummaryServiceComponentZScoreTest.ratioComparison(withNulls));
     Assertions.assertEquals(
-        0, this.component.maxAbsRatioZScore(input).compareTo(BigDecimal.valueOf(2.0)));
+        0, StatisticsEventSummaryHelper.maxAbsRatioZScore(input).compareTo(BigDecimal.valueOf(2.0)));
     Assertions.assertEquals(
-        0, this.component.minAbsRatioZScore(input).compareTo(BigDecimal.valueOf(2.0)));
+        0, StatisticsEventSummaryHelper.minAbsRatioZScore(input).compareTo(BigDecimal.valueOf(2.0)));
   }
 
   @Test
   @DisplayName("maxAbs returns the largest |z| across dimensions")
   public void testMaxAbs() {
     Assertions.assertEquals(
-        0, this.component.maxAbsRatioZScore(this.fixture).compareTo(BigDecimal.valueOf(3.0)));
+        0, StatisticsEventSummaryHelper.maxAbsRatioZScore(this.fixture).compareTo(BigDecimal.valueOf(3.0)));
   }
 
   @Test
   @DisplayName("minAbs returns the smallest |z| across dimensions")
   public void testMinAbs() {
     Assertions.assertEquals(
-        0, this.component.minAbsRatioZScore(this.fixture).compareTo(BigDecimal.valueOf(1.0)));
+        0, StatisticsEventSummaryHelper.minAbsRatioZScore(this.fixture).compareTo(BigDecimal.valueOf(1.0)));
   }
 
   @Test
   @DisplayName("meanAbs returns the mean |z| across dimensions")
   public void testMeanAbs() {
     Assertions.assertEquals(
-        0, this.component.meanAbsRatioZScore(this.fixture).compareTo(BigDecimal.valueOf(2.0)));
+        0, StatisticsEventSummaryHelper.meanAbsRatioZScore(this.fixture).compareTo(BigDecimal.valueOf(2.0)));
   }
 
   @Test
   @DisplayName("countAbove counts |z| strictly exceeding the threshold (0 stays 0, never null)")
   public void testCountAbove() {
     Assertions.assertEquals(
-        0, this.component.countAbsRatioZScoreAbove(this.fixture, 2.0).compareTo(BigDecimal.ONE));
+        0, StatisticsEventSummaryHelper.countAbsRatioZScoreAbove(this.fixture, 2.0).compareTo(BigDecimal.ONE));
     Assertions.assertEquals(
         0,
-        this.component.countAbsRatioZScoreAbove(this.fixture, 0.5).compareTo(BigDecimal.valueOf(3)));
+        StatisticsEventSummaryHelper.countAbsRatioZScoreAbove(this.fixture, 0.5).compareTo(BigDecimal.valueOf(3)));
     Assertions.assertEquals(
         0,
-        this.component.countAbsRatioZScoreAbove(this.fixture, 5.0).compareTo(BigDecimal.ZERO));
+        StatisticsEventSummaryHelper.countAbsRatioZScoreAbove(this.fixture, 5.0).compareTo(BigDecimal.ZERO));
   }
 
   @Test
   @DisplayName("rootSumSquare returns sqrt(Σz²)")
   public void testRootSumSquare() {
     Assertions.assertEquals(
-        Math.sqrt(14.0), this.component.rootSumSquareRatioZScore(this.fixture).doubleValue(), 1e-6);
+        Math.sqrt(14.0), StatisticsEventSummaryHelper.rootSumSquareRatioZScore(this.fixture).doubleValue(), 1e-6);
   }
 
   @Test
@@ -163,7 +245,7 @@ public class StatisticsEventSummaryServiceComponentZScoreTest {
   public void testStandardizedChiSquare() {
     final double expected = (14.0 - 3.0) / Math.sqrt(2.0 * 3.0);
     Assertions.assertEquals(
-        expected, this.component.standardizedChiSquareRatioZScore(this.fixture).doubleValue(), 1e-6);
+        expected, StatisticsEventSummaryHelper.standardizedChiSquareRatioZScore(this.fixture).doubleValue(), 1e-6);
   }
 
   @Test
@@ -171,10 +253,10 @@ public class StatisticsEventSummaryServiceComponentZScoreTest {
   public void testFisherIsZeroWhenNoDeviation() {
     final List<StatisticsEventSummaryComparison> zeros =
         List.of(
-            StatisticsEventSummaryServiceComponentZScoreTest.comparison(
+            StatisticsEventSummaryServiceComponentZScoreTest.ratioComparison(
                 Map.of("a", BigDecimal.ZERO, "b", BigDecimal.ZERO)));
     Assertions.assertEquals(
-        0.0, this.component.fisherCombinedRatioZScore(zeros).doubleValue(), 1e-9);
+        0.0, StatisticsEventSummaryHelper.fisherCombinedRatioZScore(zeros).doubleValue(), 1e-9);
   }
 
   @Test
@@ -182,11 +264,11 @@ public class StatisticsEventSummaryServiceComponentZScoreTest {
   public void testStandardizedFisherWhenNoDeviation() {
     final List<StatisticsEventSummaryComparison> zeros =
         List.of(
-            StatisticsEventSummaryServiceComponentZScoreTest.comparison(
+            StatisticsEventSummaryServiceComponentZScoreTest.ratioComparison(
                 Map.of("a", BigDecimal.ZERO, "b", BigDecimal.ZERO)));
     Assertions.assertEquals(
         -2.0 / Math.sqrt(2.0),
-        this.component.standardizedFisherRatioZScore(zeros).doubleValue(),
+        StatisticsEventSummaryHelper.standardizedFisherRatioZScore(zeros).doubleValue(),
         1e-6);
   }
 
@@ -195,24 +277,24 @@ public class StatisticsEventSummaryServiceComponentZScoreTest {
   public void testFisherClampsExtremeZScore() {
     final List<StatisticsEventSummaryComparison> extreme =
         List.of(
-            StatisticsEventSummaryServiceComponentZScoreTest.comparison(
+            StatisticsEventSummaryServiceComponentZScoreTest.ratioComparison(
                 Map.of("x", BigDecimal.valueOf(100.0))));
     Assertions.assertEquals(
-        -Math.log(1e-300), this.component.fisherCombinedRatioZScore(extreme).doubleValue(), 1e-3);
+        -Math.log(1e-300), StatisticsEventSummaryHelper.fisherCombinedRatioZScore(extreme).doubleValue(), 1e-3);
   }
 
   @Test
   @DisplayName("Fisher combined surprise increases monotonically with |z|")
   public void testFisherIsMonotonicInZScore() {
     final BigDecimal smaller =
-        this.component.fisherCombinedRatioZScore(
+        StatisticsEventSummaryHelper.fisherCombinedRatioZScore(
             List.of(
-                StatisticsEventSummaryServiceComponentZScoreTest.comparison(
+                StatisticsEventSummaryServiceComponentZScoreTest.ratioComparison(
                     Map.of("x", BigDecimal.valueOf(1.0)))));
     final BigDecimal larger =
-        this.component.fisherCombinedRatioZScore(
+        StatisticsEventSummaryHelper.fisherCombinedRatioZScore(
             List.of(
-                StatisticsEventSummaryServiceComponentZScoreTest.comparison(
+                StatisticsEventSummaryServiceComponentZScoreTest.ratioComparison(
                     Map.of("x", BigDecimal.valueOf(3.0)))));
     Assertions.assertTrue(smaller.doubleValue() < larger.doubleValue());
   }
@@ -224,10 +306,10 @@ public class StatisticsEventSummaryServiceComponentZScoreTest {
     final double expectedAtOne = -Math.log(2.0 * (1.0 - 0.8413447461));
     Assertions.assertEquals(
         expectedAtOne,
-        this.component
+        StatisticsEventSummaryHelper
             .fisherCombinedRatioZScore(
                 List.of(
-                    StatisticsEventSummaryServiceComponentZScoreTest.comparison(
+                    StatisticsEventSummaryServiceComponentZScoreTest.ratioComparison(
                         Map.of("x", BigDecimal.valueOf(1.0)))))
             .doubleValue(),
         1e-3);
@@ -235,13 +317,80 @@ public class StatisticsEventSummaryServiceComponentZScoreTest {
     final double expectedAtCritical = -Math.log(2.0 * (1.0 - 0.9750021048));
     Assertions.assertEquals(
         expectedAtCritical,
-        this.component
+        StatisticsEventSummaryHelper
             .fisherCombinedRatioZScore(
                 List.of(
-                    StatisticsEventSummaryServiceComponentZScoreTest.comparison(
+                    StatisticsEventSummaryServiceComponentZScoreTest.ratioComparison(
                         Map.of("y", BigDecimal.valueOf(1.96)))))
             .doubleValue(),
         1e-3);
+  }
+
+  @Test
+  @DisplayName("Signed ratio aggregators preserve drift direction (max +3, min -4, mean 0, maxAbsSigned -4)")
+  public void testSignedRatioAggregatorsPreserveDirection() {
+    // signedFixture flat signed set is [1, -4, 3].
+    Assertions.assertEquals(
+        0, StatisticsEventSummaryHelper.maxSignedRatioZScore(this.signedFixture).compareTo(BigDecimal.valueOf(3.0)));
+    Assertions.assertEquals(
+        0, StatisticsEventSummaryHelper.minSignedRatioZScore(this.signedFixture).compareTo(BigDecimal.valueOf(-4.0)));
+    Assertions.assertEquals(
+        0.0, StatisticsEventSummaryHelper.meanSignedRatioZScore(this.signedFixture).doubleValue(), 1e-9);
+    // maxAbsSigned keeps the sign of the largest-magnitude z, which is -4 (not the +3 that maxSigned returns).
+    Assertions.assertEquals(
+        0,
+        StatisticsEventSummaryHelper.maxAbsSignedRatioZScore(this.signedFixture).compareTo(BigDecimal.valueOf(-4.0)));
+  }
+
+  @Test
+  @DisplayName("Value family reduces the raw-count z map with the same math as the ratio family")
+  public void testValueFamilyMatchesRatioMath() {
+    // valueFixture carries [1, -2, 3] on zScoreValues (k = 3, Σz² = 14).
+    Assertions.assertEquals(
+        0, StatisticsEventSummaryHelper.maxAbsValueZScore(this.valueFixture).compareTo(BigDecimal.valueOf(3.0)));
+    Assertions.assertEquals(
+        0, StatisticsEventSummaryHelper.minAbsValueZScore(this.valueFixture).compareTo(BigDecimal.valueOf(1.0)));
+    Assertions.assertEquals(
+        0, StatisticsEventSummaryHelper.meanAbsValueZScore(this.valueFixture).compareTo(BigDecimal.valueOf(2.0)));
+    Assertions.assertEquals(
+        0, StatisticsEventSummaryHelper.countAbsValueZScoreAbove(this.valueFixture, 2.0).compareTo(BigDecimal.ONE));
+    Assertions.assertEquals(
+        Math.sqrt(14.0), StatisticsEventSummaryHelper.rootSumSquareValueZScore(this.valueFixture).doubleValue(), 1e-6);
+    Assertions.assertEquals(
+        (14.0 - 3.0) / Math.sqrt(2.0 * 3.0),
+        StatisticsEventSummaryHelper.standardizedChiSquareValueZScore(this.valueFixture).doubleValue(),
+        1e-6);
+    // Signed value variants over [1, -2, 3].
+    Assertions.assertEquals(
+        0, StatisticsEventSummaryHelper.maxSignedValueZScore(this.valueFixture).compareTo(BigDecimal.valueOf(3.0)));
+    Assertions.assertEquals(
+        0, StatisticsEventSummaryHelper.minSignedValueZScore(this.valueFixture).compareTo(BigDecimal.valueOf(-2.0)));
+  }
+
+  @Test
+  @DisplayName("Ratio and value families read independent maps; value ignores the ratio decoy and vice versa")
+  public void testRatioAndValueFamiliesReadSeparateMaps() {
+    // valueFixture carries decoy zScoreRatios of 99 alongside the real [1, -2, 3] on zScoreValues.
+    Assertions.assertEquals(
+        0, StatisticsEventSummaryHelper.maxAbsRatioZScore(this.valueFixture).compareTo(BigDecimal.valueOf(99.0)));
+    Assertions.assertEquals(
+        0, StatisticsEventSummaryHelper.maxAbsValueZScore(this.valueFixture).compareTo(BigDecimal.valueOf(3.0)));
+    // The ratio-only fixture has no zScoreValues, so the value family sees nothing there.
+    Assertions.assertNull(StatisticsEventSummaryHelper.maxAbsValueZScore(this.fixture));
+    // The value-only/decoy fixture has no zScoreTotal, so the total family sees nothing there.
+    Assertions.assertNull(StatisticsEventSummaryHelper.meanSignedTotalZScore(this.valueFixture));
+  }
+
+  @Test
+  @DisplayName("Total family averages one volume z per dimension, signed and absolute")
+  public void testTotalAggregators() {
+    // totalFixture is one total z per dimension: [-1, 3].
+    Assertions.assertEquals(
+        0, StatisticsEventSummaryHelper.meanSignedTotalZScore(this.totalFixture).compareTo(BigDecimal.valueOf(1.0)));
+    Assertions.assertEquals(
+        0, StatisticsEventSummaryHelper.meanAbsTotalZScore(this.totalFixture).compareTo(BigDecimal.valueOf(2.0)));
+    // The ratio family reads the value map, not the total z, so it sees nothing on a total-only fixture.
+    Assertions.assertNull(StatisticsEventSummaryHelper.maxAbsRatioZScore(this.totalFixture));
   }
 
   @Test

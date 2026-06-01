@@ -38,7 +38,8 @@ org.coldis.library.service.statistics
 | `StatisticsContextConfiguration` | JPA entity. Key: `context`. Stores `truncationMinutes`. |
 | `StatisticsEventServiceComponent` | Business logic: upsert, delete, batch upsert, expired event purge. |
 | `StatisticsEventSummaryBufferServiceComponent` | Summary write path: delta buffering/flushing/applying, single-key lookup (`findById`) and find-or-create. |
-| `StatisticsEventSummaryServiceComponent` | Summary read path: period queries, comparison, distribution, probability, z-score aggregators. |
+| `StatisticsEventSummaryServiceComponent` | Summary read path: period queries, comparison, probability. |
+| `StatisticsEventSummaryHelper` | Pure (no I/O) statistics math: window scheduling, period aggregation, comparison assembly, probability, and the `static` cross-dimension z-score aggregators. |
 | `StatisticsContextConfigurationServiceComponent` | Cached context configuration lookup, context-aware time truncation. |
 | `StatisticsAutoConfiguration` | Spring `@Configuration` that enables scheduling. Conditional on `statistics-enabled`. |
 
@@ -188,7 +189,26 @@ Probability is a pooled estimate over a period: fetch the period's merged summar
 - `singleDimensionProbability(mergedSummary, dimensionValue)` — the raw ratio `count/total` of the value within the period plus the Laplace-smoothed `(count + α) / (total + α·V)` (never zero, so an unseen value stays finite).
 - `naiveMultiDimensionProbability(List<StatisticsEventSummary> summaries, List<String> dimensionValues)` — one merged summary per dimension plus the value to evaluate for each (positionally paired); derives each dimension's probability and multiplies them, assuming independence (P(A and B) = P(A) x P(B)).
 
-The same pattern as the cross-dimension z-score aggregators, which reduce a `List<StatisticsEventSummaryComparison>` (the return of `compareByPeriod`) with no extra arguments. Per-period variance / anomaly detection lives in `compareByPeriod`, not in probability.
+Same shape as the cross-dimension z-score aggregators below, which reduce a `List<StatisticsEventSummaryComparison>` (the return of `compareByPeriod`) with no extra arguments. Per-period variance / anomaly detection lives in `compareByPeriod`, not in probability.
+
+### Cross-Dimension Z-Score Aggregators
+
+`StatisticsEventSummaryHelper` exposes `static` reductions that collapse a `List<StatisticsEventSummaryComparison>` (the return of `compareByPeriod`) into a single drift signal — one number you can feed straight into a model feature or alert threshold. They take no extra arguments (except the threshold for the count aggregators) and return `null` when there is nothing to reduce (null/empty list, no z-scores present), so a missing signal is distinguishable from a genuine zero. They are `static` (pure, no component state) — call them on the helper, e.g. `StatisticsEventSummaryHelper.maxAbsRatioZScore(comparisons)`.
+
+Each comparison's count stats carry three z-score shapes, and there is one aggregator family per shape:
+
+| Family | Reads | Meaning |
+|--------|-------|---------|
+| **Ratio** (`…RatioZScore`) | `zScoreRatios` (per-value) | Drift in each value's **share** of the dimension |
+| **Value** (`…ValueZScore`) | `zScoreValues` (per-value) | Drift in each value's **raw count** |
+| **Total** (`…TotalZScore`) | `zScoreTotal` (one per dimension) | Drift in the dimension's **overall volume** |
+
+Within each per-value family (ratio, value) the reductions are:
+
+- **`|z|` magnitude:** `maxAbs…`, `minAbs…`, `meanAbs…`, `countAbs…ZScoreAbove(threshold)` (count of `|z|` strictly above a threshold), `rootSumSquare…` (`sqrt(Σz²)` — Euclidean drift energy, grows with the number of z-scores), `standardizedChiSquare…` (`(Σz² − k)/sqrt(2k)` — mean 0 / variance 1, comparable across populations), `fisherCombined…` (`Σ −log(2·(1−Φ(|z|)))` — Fisher combined surprise), `standardizedFisher…` (`(S − k)/sqrt(k)`).
+- **Signed (direction-preserving):** `maxSigned…`, `minSigned…`, `meanSigned…` (net direction — per-value deviations partly cancel), and `maxAbsSigned…` (the largest-magnitude z **with its sign** — the dominant drift and its direction). The `|z|` aggregators discard direction; the signed ones keep it.
+
+The **total** family is the dimension's overall-volume z (a single value per dimension), so only the averages are exposed: `meanSignedTotalZScore` (signed overall drift) and `meanAbsTotalZScore` (magnitude). Note that within one context every dimension typically emits one event per subject, so the total z is uniform across dimensions and the mean simply collapses those equal values.
 
 ### Windowed Sampling, Per-Dimension Fetch, and Empty Windows
 
@@ -278,6 +298,13 @@ StatisticsEventSummary period = summaryComponent.findByPeriod(
 StatisticsEventSummaryComparison comparison = summaryComponent.compareByPeriod(
     "my-context", "city", referenceDateTime,
     ChronoUnit.HOURS, 1, ChronoUnit.DAYS, 7);
+
+// Reduce a multi-dimension comparison list into a single cross-dimension drift signal
+List<StatisticsEventSummaryComparison> comparisons = summaryComponent.compareByPeriod(
+    "my-context", List.of("city", "device"), referenceDateTime,
+    ChronoUnit.HOURS, 1, ChronoUnit.DAYS, 7);
+BigDecimal maxRatioDrift = StatisticsEventSummaryHelper.maxAbsRatioZScore(comparisons);
+BigDecimal dominantSignedDrift = StatisticsEventSummaryHelper.maxAbsSignedRatioZScore(comparisons);
 
 // Probability — fetch the period's merged summary, then reduce (pooled count/total + Laplace)
 StatisticsEventSummary cityPeriod = summaryComponent.findByPeriod(

@@ -1491,7 +1491,7 @@ public class StatisticsEventServiceComponentTest extends ContainerTestHelper {
         multi.get(1));
 
     // The list feeds the cross-dimension z-score aggregators directly.
-    Assertions.assertNotNull(this.statisticsEventSummaryServiceComponent.maxAbsRatioZScore(multi));
+    Assertions.assertNotNull(StatisticsEventSummaryHelper.maxAbsRatioZScore(multi));
   }
 
   /**
