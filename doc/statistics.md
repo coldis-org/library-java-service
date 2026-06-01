@@ -206,7 +206,7 @@ Each comparison's count stats carry three z-score shapes, and there is one aggre
 Within each per-value family (ratio, value) the reductions are:
 
 - **`|z|` magnitude:** `maxAbs…`, `minAbs…`, `meanAbs…`, `countAbs…ZScoreAbove(threshold)` (count of `|z|` strictly above a threshold), `rootSumSquare…` (`sqrt(Σz²)` — Euclidean drift energy, grows with the number of z-scores), `standardizedChiSquare…` (`(Σz² − k)/sqrt(2k)` — mean 0 / variance 1, comparable across populations), `fisherCombined…` (`Σ −log(2·(1−Φ(|z|)))` — Fisher combined surprise), `standardizedFisher…` (`(S − k)/sqrt(k)`).
-- **Signed (direction-preserving):** `maxSigned…`, `minSigned…`, `meanSigned…` (net direction — per-value deviations partly cancel), and `maxAbsSigned…` (the largest-magnitude z **with its sign** — the dominant drift and its direction). The `|z|` aggregators discard direction; the signed ones keep it.
+- **Signed (direction-preserving):** `maxSigned…` (strongest upward shift), `minSigned…` (strongest downward shift), `meanSigned…` (net direction — per-value deviations partly cancel), and the directional counts `count…ZScoreAbove(threshold)` / `count…ZScoreBelow(threshold)` (z strictly above `+threshold` / strictly below `−threshold` — over- vs under-representation). The `|z|` aggregators discard direction; the signed ones keep it.
 
 The **total** family is the dimension's overall-volume z (a single value per dimension), so only the averages are exposed: `meanSignedTotalZScore` (signed overall drift) and `meanAbsTotalZScore` (magnitude). Note that within one context every dimension typically emits one event per subject, so the total z is uniform across dimensions and the mean simply collapses those equal values.
 
@@ -304,7 +304,7 @@ List<StatisticsEventSummaryComparison> comparisons = summaryComponent.compareByP
     "my-context", List.of("city", "device"), referenceDateTime,
     ChronoUnit.HOURS, 1, ChronoUnit.DAYS, 7);
 BigDecimal maxRatioDrift = StatisticsEventSummaryHelper.maxAbsRatioZScore(comparisons);
-BigDecimal dominantSignedDrift = StatisticsEventSummaryHelper.maxAbsSignedRatioZScore(comparisons);
+BigDecimal strongestUpwardDrift = StatisticsEventSummaryHelper.maxSignedRatioZScore(comparisons);
 
 // Probability — fetch the period's merged summary, then reduce (pooled count/total + Laplace)
 StatisticsEventSummary cityPeriod = summaryComponent.findByPeriod(

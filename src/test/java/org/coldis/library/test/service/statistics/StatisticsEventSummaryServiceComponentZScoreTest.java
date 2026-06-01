@@ -133,7 +133,8 @@ public class StatisticsEventSummaryServiceComponentZScoreTest {
     Assertions.assertNull(StatisticsEventSummaryHelper.maxSignedRatioZScore(input));
     Assertions.assertNull(StatisticsEventSummaryHelper.minSignedRatioZScore(input));
     Assertions.assertNull(StatisticsEventSummaryHelper.meanSignedRatioZScore(input));
-    Assertions.assertNull(StatisticsEventSummaryHelper.maxAbsSignedRatioZScore(input));
+    Assertions.assertNull(StatisticsEventSummaryHelper.countRatioZScoreAbove(input, 1.0));
+    Assertions.assertNull(StatisticsEventSummaryHelper.countRatioZScoreBelow(input, 1.0));
     // Value family (|z| and signed).
     Assertions.assertNull(StatisticsEventSummaryHelper.maxAbsValueZScore(input));
     Assertions.assertNull(StatisticsEventSummaryHelper.minAbsValueZScore(input));
@@ -146,7 +147,8 @@ public class StatisticsEventSummaryServiceComponentZScoreTest {
     Assertions.assertNull(StatisticsEventSummaryHelper.maxSignedValueZScore(input));
     Assertions.assertNull(StatisticsEventSummaryHelper.minSignedValueZScore(input));
     Assertions.assertNull(StatisticsEventSummaryHelper.meanSignedValueZScore(input));
-    Assertions.assertNull(StatisticsEventSummaryHelper.maxAbsSignedValueZScore(input));
+    Assertions.assertNull(StatisticsEventSummaryHelper.countValueZScoreAbove(input, 1.0));
+    Assertions.assertNull(StatisticsEventSummaryHelper.countValueZScoreBelow(input, 1.0));
     // Total family.
     Assertions.assertNull(StatisticsEventSummaryHelper.meanSignedTotalZScore(input));
     Assertions.assertNull(StatisticsEventSummaryHelper.meanAbsTotalZScore(input));
@@ -327,7 +329,7 @@ public class StatisticsEventSummaryServiceComponentZScoreTest {
   }
 
   @Test
-  @DisplayName("Signed ratio aggregators preserve drift direction (max +3, min -4, mean 0, maxAbsSigned -4)")
+  @DisplayName("Signed ratio aggregators preserve drift direction (max +3, min -4, mean 0) with directional counts")
   public void testSignedRatioAggregatorsPreserveDirection() {
     // signedFixture flat signed set is [1, -4, 3].
     Assertions.assertEquals(
@@ -336,10 +338,14 @@ public class StatisticsEventSummaryServiceComponentZScoreTest {
         0, StatisticsEventSummaryHelper.minSignedRatioZScore(this.signedFixture).compareTo(BigDecimal.valueOf(-4.0)));
     Assertions.assertEquals(
         0.0, StatisticsEventSummaryHelper.meanSignedRatioZScore(this.signedFixture).doubleValue(), 1e-9);
-    // maxAbsSigned keeps the sign of the largest-magnitude z, which is -4 (not the +3 that maxSigned returns).
+    // Directional counts are signed, not |z|: above(+2) catches only +3; below(2) catches only -4.
     Assertions.assertEquals(
-        0,
-        StatisticsEventSummaryHelper.maxAbsSignedRatioZScore(this.signedFixture).compareTo(BigDecimal.valueOf(-4.0)));
+        0, StatisticsEventSummaryHelper.countRatioZScoreAbove(this.signedFixture, 2.0).compareTo(BigDecimal.ONE));
+    Assertions.assertEquals(
+        0, StatisticsEventSummaryHelper.countRatioZScoreBelow(this.signedFixture, 2.0).compareTo(BigDecimal.ONE));
+    // +1 is neither above +2 nor below -2, so a threshold of 2 leaves it out of both counts.
+    Assertions.assertEquals(
+        0, StatisticsEventSummaryHelper.countRatioZScoreAbove(this.signedFixture, 0.5).compareTo(BigDecimal.valueOf(2)));
   }
 
   @Test
@@ -365,6 +371,11 @@ public class StatisticsEventSummaryServiceComponentZScoreTest {
         0, StatisticsEventSummaryHelper.maxSignedValueZScore(this.valueFixture).compareTo(BigDecimal.valueOf(3.0)));
     Assertions.assertEquals(
         0, StatisticsEventSummaryHelper.minSignedValueZScore(this.valueFixture).compareTo(BigDecimal.valueOf(-2.0)));
+    // Directional counts over [1, -2, 3]: above(+2) -> just +3; below(1) -> just -2.
+    Assertions.assertEquals(
+        0, StatisticsEventSummaryHelper.countValueZScoreAbove(this.valueFixture, 2.0).compareTo(BigDecimal.ONE));
+    Assertions.assertEquals(
+        0, StatisticsEventSummaryHelper.countValueZScoreBelow(this.valueFixture, 1.0).compareTo(BigDecimal.ONE));
   }
 
   @Test
