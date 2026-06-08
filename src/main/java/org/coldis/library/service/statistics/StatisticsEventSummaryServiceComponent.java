@@ -125,10 +125,6 @@ public class StatisticsEventSummaryServiceComponent {
 	 * @param  parallel             Fetch the per-bucket reads concurrently.
 	 * @return                      The window's summaries.
 	 */
-	@Transactional(
-			propagation = Propagation.NOT_SUPPORTED,
-			readOnly = true
-	)
 	protected List<StatisticsEventSummary> fetchPeriodCacheable(
 			final String context,
 			final String dimensionName,
