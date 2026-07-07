@@ -587,25 +587,27 @@ public class ExtendedArtemisProperties extends ArtemisProperties implements Arte
 	}
 
 	/**
-	 * Queue depth at which dynamic credit scaling activates. Below this value
-	 * credits are passed through unchanged (one message at a time). Above it,
-	 * credits grow proportionally with depth. When null, dynamic credit scaling
-	 * is disabled entirely.
+	 * Per-consumer share of the queue depth ({@code pendingDepth / consumersOnQueue})
+	 * at which dynamic credit scaling activates. At or below this share credits are
+	 * passed through unchanged (one message at a time). Above it, each consumer's
+	 * prefetch window grows with its share of the backlog — and decays back once the
+	 * share falls again. When null, dynamic credit scaling is disabled entirely.
 	 */
 	private Long dynamicCreditsDepthThreshold;
 
 	/**
-	 * Multiplier applied to the proportional credit grant once depth exceeds
-	 * {@link #dynamicCreditsDepthThreshold}. A value of {@code 1.0} means
-	 * credits scale 1-for-1 with depth multiples; {@code 2.0} doubles the rate.
-	 * Defaults to {@code 1.0} when not set.
+	 * Ramp aggressiveness once the per-consumer depth share exceeds
+	 * {@link #dynamicCreditsDepthThreshold}: the window reaches its full size when
+	 * {@code (share/threshold - 1) × multiplier >= 1}, so a larger multiplier
+	 * reaches the full window at a shallower share. Defaults to {@code 1.0} when
+	 * not set.
 	 */
 	private Double dynamicCreditsMultiplier;
 
 	/**
-	 * Maximum credits that can be granted in a single replenishment, in bytes.
-	 * Acts as a ceiling so consumers never prefetch more than this amount
-	 * regardless of queue depth. Defaults to {@code 10485760} (10 MB) when not set.
+	 * Hard cap on outstanding credits per consumer, in bytes. Consumers never
+	 * prefetch more than this amount regardless of queue depth. Defaults to
+	 * {@code 10485760} (10 MB) when not set.
 	 */
 	private Integer dynamicCreditsMaxCredits;
 

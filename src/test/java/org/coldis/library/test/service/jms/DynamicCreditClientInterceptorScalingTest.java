@@ -41,14 +41,26 @@ class DynamicCreditClientInterceptorScalingTest {
 		}
 	}
 
-	/** Registers a consumer (id 0) on the given channel via the real create path. */
+	/** Registers a consumer (id 0) on the given channel and queue via the real create path. */
+	private void createConsumer(
+			final StubbedDepthInterceptor interceptor,
+			final long channelId,
+			final String queueName) throws Exception {
+		final SessionCreateConsumerMessage createConsumerMessage =
+				new SessionCreateConsumerMessage(0L, SimpleString.of(queueName), null, 0, false, true);
+		createConsumerMessage.setChannelID(channelId);
+		interceptor.intercept(createConsumerMessage, null);
+	}
+
+	/**
+	 * Registers a consumer (id 0) on the given channel via the real create path,
+	 * on a channel-specific queue so single-consumer tests keep a consumer count
+	 * of one per queue.
+	 */
 	private void createConsumer(
 			final StubbedDepthInterceptor interceptor,
 			final long channelId) throws Exception {
-		final SessionCreateConsumerMessage createConsumerMessage =
-				new SessionCreateConsumerMessage(0L, SimpleString.of("orders"), null, 0, false, true);
-		createConsumerMessage.setChannelID(channelId);
-		interceptor.intercept(createConsumerMessage, null);
+		this.createConsumer(interceptor, channelId, "orders-" + channelId);
 	}
 
 	/** Sends one flow-credit packet for consumer 0 on the given channel and returns the (possibly rewritten) credits. */
@@ -141,5 +153,59 @@ class DynamicCreditClientInterceptorScalingTest {
 		this.createConsumer(interceptor, 1L);
 		Assertions.assertEquals(MAX_CREDITS, this.sendCreditPacket(interceptor, 1L, REQUESTED_CREDITS),
 				"A recreated consumer starts with a fresh broker window; the tracked window must restart too");
+	}
+
+	@Test
+	@DisplayName("slow-consumer sentinel (credit 1) passes through untouched and does not inflate the window")
+	void testSentinelPassesThroughWithoutInflation() throws Exception {
+		// The 1-credit packet sent before every poll is the dispatch trigger, not a
+		// byte refill: inflating it would hand a full window to idle pollers and
+		// drift the tracked window on every poll.
+		final StubbedDepthInterceptor interceptor = new StubbedDepthInterceptor(2.0);
+		interceptor.stubbedDepth = VERY_DEEP_QUEUE_DEPTH;
+		this.createConsumer(interceptor, 1L);
+		Assertions.assertEquals(1, this.sendCreditPacket(interceptor, 1L, 1),
+				"The sentinel credit must pass through untouched even on a deep queue");
+	}
+
+	@Test
+	@DisplayName("window decays back to pass-through once depth falls below the justified target")
+	void testWindowDecaysWhenDepthFallsBelowTarget() throws Exception {
+		final int refillCredits = 400_000;
+		final StubbedDepthInterceptor interceptor = new StubbedDepthInterceptor(2.0);
+		interceptor.stubbedDepth = VERY_DEEP_QUEUE_DEPTH;
+		this.createConsumer(interceptor, 1L);
+		Assertions.assertEquals(MAX_CREDITS, this.sendCreditPacket(interceptor, 1L, refillCredits),
+				"A fresh consumer on a deep queue fills the window");
+		// The queue drains below the threshold: the inflated window must shrink
+		// (grant only a single credit per refill) instead of staying at maxCredits
+		// forever and hoarding prefetch on a shallow queue.
+		interceptor.stubbedDepth = 0L;
+		Assertions.assertEquals(1, this.sendCreditPacket(interceptor, 1L, refillCredits),
+				"An over-inflated window must decay: grant a single credit, not the freed bytes");
+		Assertions.assertEquals(1, this.sendCreditPacket(interceptor, 1L, refillCredits),
+				"Decay must continue while the window is still above the justified target");
+		Assertions.assertEquals(refillCredits, this.sendCreditPacket(interceptor, 1L, refillCredits),
+				"Once the window has decayed to the justified target, refills pass through again");
+	}
+
+	@Test
+	@DisplayName("the target window is computed from each consumer's share of the depth, not the raw depth")
+	void testTargetWindowSplitsAcrossConsumersOnSameQueue() throws Exception {
+		// threshold=100, multiplier=1.0, depth=150.
+		// A single consumer owns the whole depth: 150 > 100 → window inflates.
+		final StubbedDepthInterceptor aloneInterceptor = new StubbedDepthInterceptor(1.0);
+		aloneInterceptor.stubbedDepth = 150L;
+		this.createConsumer(aloneInterceptor, 1L, "orders-shared");
+		Assertions.assertEquals(MAX_CREDITS / 2, this.sendCreditPacket(aloneInterceptor, 1L, REQUESTED_CREDITS),
+				"A single consumer's target is computed from the full depth");
+		// Two consumers share the same queue: each consumer's share is 75 ≤ 100,
+		// so neither window may inflate — the backlog is not deep enough for both.
+		final StubbedDepthInterceptor sharedInterceptor = new StubbedDepthInterceptor(1.0);
+		sharedInterceptor.stubbedDepth = 150L;
+		this.createConsumer(sharedInterceptor, 1L, "orders-shared");
+		this.createConsumer(sharedInterceptor, 2L, "orders-shared");
+		Assertions.assertEquals(REQUESTED_CREDITS, this.sendCreditPacket(sharedInterceptor, 1L, REQUESTED_CREDITS),
+				"With two consumers the per-consumer share (75) is below the threshold — no inflation");
 	}
 }

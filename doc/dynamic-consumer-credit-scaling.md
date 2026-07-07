@@ -47,8 +47,8 @@ be overridden by environment variables. Defaults shown are from
 | Property | Default | Meaning |
 | --- | --- | --- |
 | `consumer-window-size` | `0` | Broker consumer window (bytes). `0` = slow-consumer mode; must be `0` for the interceptor to be active (it disables itself when `> 0`). |
-| `dynamic-credits-depth-threshold` | `200` | Pending message count above which scaling kicks in. **`null` disables the feature entirely** (no interceptor registered). |
-| `dynamic-credits-multiplier` | `2.0` | Ramp aggressiveness. The window reaches its cap once `(depth/threshold − 1) × multiplier ≥ 1`; a larger multiplier reaches the full window at a shallower depth. |
+| `dynamic-credits-depth-threshold` | `200` | Per-consumer share of the pending depth (`depth / consumersOnQueue`) above which scaling kicks in. **`null` disables the feature entirely** (no interceptor registered). |
+| `dynamic-credits-multiplier` | `2.0` | Ramp aggressiveness. The window reaches its cap once `(share/threshold − 1) × multiplier ≥ 1`; a larger multiplier reaches the full window at a shallower share. |
 | `dynamic-credits-max-credits` | `131072` (128 KB) | Hard cap on outstanding credits **per consumer** (bytes). |
 | `dynamic-credits-cache-ttl` | `5000` | How long (ms) a queue's depth reading is cached, to bound broker round-trips. |
 
@@ -93,32 +93,55 @@ consumers would not increase throughput.
 
 ### Grant computation
 
-On each flow-credit packet, inside a per-consumer lock:
+The slow-consumer **sentinel** (a single credit sent before every poll) passes
+through untouched and untracked: it is the dispatch trigger, not a byte refill.
+Counting it would drift the tracked window upward on every poll, and inflating it
+would hand full windows to idle pollers that have consumed nothing.
+
+For every other positive flow-credit packet, inside a per-consumer lock:
 
 1. `requestedCredits` = the credits the client is asking for (the bytes it just
    freed by consuming a message).
 2. `outstandingAfterFreed = max(0, currentOutstanding − requestedCredits)`.
-3. `depthTargetWindow = computeTargetWindow(pendingDepth)` (see below).
-4. `targetOutstanding = max(outstandingAfterFreed + requestedCredits, depthTargetWindow)`
-   — never grant less than requested (that would throttle below the baseline),
-   and never fall short of what the depth warrants.
-5. `grantedCredits = targetOutstanding − outstandingAfterFreed`; store
-   `targetOutstanding` as the new outstanding.
+3. `fairShareTargetWindow = computeTargetWindow(pendingDepth / consumersOnQueue)`
+   (see below) — the target is derived from this consumer's **fair share** of the
+   backlog, so windows only inflate when there is enough depth for every consumer.
+4. **Decay** — if `outstandingAfterFreed > fairShareTargetWindow` (the queue
+   drained or siblings joined), grant only a single credit: the freed bytes shrink
+   the broker-side window by ~1 message per message processed until it matches the
+   target, then pass-through resumes. A grant of `0` is never emitted (that is a
+   reset on the wire).
+5. **Inflate/hold** — otherwise
+   `targetOutstanding = max(outstandingAfterFreed + requestedCredits, fairShareTargetWindow)`
+   — never grant less than requested (that would throttle below the baseline), and
+   never fall short of what the share warrants. `grantedCredits = targetOutstanding
+   − outstandingAfterFreed`; store `targetOutstanding` as the new outstanding.
 6. If `grantedCredits != requestedCredits`, write it back onto the packet (via
    reflection into the packet's private `credits` field). The broker adds the
-   larger credit and bursts out `grantedCredits / messageSize` messages.
+   granted credit and bursts out up to `grantedCredits / messageSize` messages.
 
-`computeTargetWindow(pendingDepth)`:
+`computeTargetWindow(fairShareDepth)`:
 
 ```
-if pendingDepth <= depthThreshold:       return 0          # pass-through, one at a time
-fraction = min(1, (pendingDepth/depthThreshold - 1) * multiplier)
-return min(maxCredits, ceil(maxCredits * fraction))         # grows with depth, capped
+if fairShareDepth <= depthThreshold:     return 0          # pass-through, one at a time
+fraction = min(1, (fairShareDepth/depthThreshold - 1) * multiplier)
+return min(maxCredits, ceil(maxCredits * fraction))         # grows with the share, capped
 ```
 
-The window (not the raw request) is scaled deliberately: in slow-consumer mode the
-client often sends the sentinel credit `1`, which — if scaled directly — would
-produce a meaningless grant.
+### Fairness across consumers
+
+Three mechanisms keep distribution even when many threads consume one queue:
+
+- **Per-consumer symmetric cap** — every consumer's window is bounded by the same
+  depth-derived target and `maxCredits`; no consumer can hold more than the cap,
+  and the broker round-robins dispatch among consumers with credits.
+- **Fair-share target** — the window inflates in proportion to
+  `depth / consumersOnQueue`, so inflation only starts when the backlog is deep
+  enough for every consumer to fill a window; a lone consumer cannot buffer a
+  mid-size backlog that its siblings could be draining.
+- **Decay** — windows shrink back to one-at-a-time as the backlog drains (or as
+  consumers join), so an inflated consumer does not keep hoarding prefetch on a
+  now-shallow queue.
 
 ### Protocol control packets (reset / disable)
 
@@ -167,11 +190,13 @@ the depth-proportional window to drain faster.
 ## Observability
 
 - `getConsumersRegistered()` / `getCreditPacketsIntercepted()` /
-  `getCreditPacketsScaled()` — counters (used by tests and available for metrics).
+  `getCreditPacketsScaled()` / `getCreditPacketsDecayed()` — counters (used by
+  tests and available for metrics). `Scaled` counts inflations, `Decayed` counts
+  window shrink grants.
 - DEBUG `DynamicCredit — depth query queue='…' exists=… messageCount=…` — every
   real depth read.
 - DEBUG `DynamicCredit — queue=… requested=… granted=… outstanding=…` — every
-  scaled packet.
+  inflated packet; `DynamicCredit — decay queue=…` — every decayed packet.
 - INFO `DynamicCredit — queue=… depth=… requested=… granted=… totalOutstanding=…`
   — throttled to once per queue per 5 minutes, summing outstanding credits across
   all consumers on the queue.
@@ -197,6 +222,6 @@ If scaling never seems to engage, check: the INFO line never appears →
 | Test | What it covers |
 | --- | --- |
 | `DynamicCreditClientInterceptorUnitTest` | `computeTargetWindow` pure function: pass-through below threshold, proportional ramp, cap, multiplier effect, monotonicity. |
-| `DynamicCreditClientInterceptorScalingTest` | Broker-free: grant grows with depth, caps at `maxCredits`, passes through below threshold; reset (`0`) and disable (`-1`) packets pass through untouched, the window re-inflates after a reset, and a failover recreate restarts the window (stubs `getPendingDepth`). |
+| `DynamicCreditClientInterceptorScalingTest` | Broker-free: grant grows with depth, caps at `maxCredits`, passes through below threshold; reset (`0`), disable (`-1`) and sentinel (`1`) packets pass through untouched; the window re-inflates after a reset, decays once depth falls below the justified target, splits the target across consumers sharing a queue, and a failover recreate restarts the window (stubs `getPendingDepth`). |
 | `DynamicCreditClientInterceptorSessionScopingTest` | Broker-free: two sessions' consumer `0` are tracked independently; a new consumer does not reset a sibling's window. |
 | `DynamicCreditClientInterceptorTest` | Container-based: deep queue scales, shallow queue passes through, untracked consumers are ignored, concurrent intercepts don't trip Artemis' `AMQ212051` (shared query session is synchronized), and scaling recovers after a real slow-consumer reset (a timed-out empty poll on the same consumer). |
