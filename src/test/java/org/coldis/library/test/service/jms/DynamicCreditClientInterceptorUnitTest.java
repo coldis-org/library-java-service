@@ -2,106 +2,83 @@ package org.coldis.library.test.service.jms;
 
 import org.coldis.library.service.jms.DynamicCreditClientInterceptor;
 import org.junit.jupiter.api.Assertions;
-import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
 /**
- * Unit tests for {@link DynamicCreditClientInterceptor#computeGranted}.
- * No Spring context or broker required.
+ * Unit tests for {@link DynamicCreditClientInterceptor#computeTargetWindow}, the
+ * pure depth → target-window function. No Spring context or broker required.
+ *
+ * <p>{@code maxCredits} is 1000 here so the expected byte targets are easy to read.
  */
-@DisplayName("DynamicCreditClientInterceptor — computeGranted logic")
+@DisplayName("DynamicCreditClientInterceptor — computeTargetWindow logic")
 class DynamicCreditClientInterceptorUnitTest {
 
 	private static final long THRESHOLD = 100L;
-	private static final double MULTIPLIER = 2.0;
-	private static final int MAX_CREDITS = 10 * 1024 * 1024;
-	private static final int REQUESTED = 500;
+	private static final int MAX_CREDITS = 1000;
+	private static final long CACHE_TTL_MILLIS = 5000L;
 
-	private DynamicCreditClientInterceptor interceptor;
-
-	@BeforeEach
-	void setUp() {
-		this.interceptor = new DynamicCreditClientInterceptor(null, THRESHOLD, MULTIPLIER, MAX_CREDITS, 5000L);
+	private DynamicCreditClientInterceptor interceptorWithMultiplier(final double multiplier) {
+		return new DynamicCreditClientInterceptor(null, THRESHOLD, multiplier, MAX_CREDITS, CACHE_TTL_MILLIS);
 	}
 
 	@Test
-	@DisplayName("depth=0 → returns requested unchanged")
-	void testAtZeroDepthReturnsRequested() {
-		Assertions.assertEquals(REQUESTED, this.interceptor.computeGranted(0L, REQUESTED));
+	@DisplayName("depth = 0 → target window is 0 (pass-through)")
+	void testZeroDepthWindowIsZero() {
+		Assertions.assertEquals(0, this.interceptorWithMultiplier(1.0).computeTargetWindow(0L));
 	}
 
 	@Test
-	@DisplayName("depth < threshold → returns requested unchanged")
-	void testBelowThresholdReturnsRequested() {
-		Assertions.assertEquals(REQUESTED, this.interceptor.computeGranted(THRESHOLD - 1, REQUESTED));
+	@DisplayName("depth < threshold → target window is 0")
+	void testBelowThresholdWindowIsZero() {
+		Assertions.assertEquals(0, this.interceptorWithMultiplier(1.0).computeTargetWindow(THRESHOLD - 1));
 	}
 
 	@Test
-	@DisplayName("depth == threshold → returns requested unchanged (boundary)")
-	void testAtThresholdReturnsRequested() {
-		Assertions.assertEquals(REQUESTED, this.interceptor.computeGranted(THRESHOLD, REQUESTED));
+	@DisplayName("depth == threshold → target window is 0 (boundary)")
+	void testAtThresholdWindowIsZero() {
+		Assertions.assertEquals(0, this.interceptorWithMultiplier(1.0).computeTargetWindow(THRESHOLD));
 	}
 
 	@Test
-	@DisplayName("depth = 2× threshold → returns requested × scale × multiplier")
-	void testAtTwiceThresholdReturnsScaled() {
-		// scale = (200/100) × 2 = 4  →  ceil(500 × 4) = 2000
-		Assertions.assertEquals(2000, this.interceptor.computeGranted(THRESHOLD * 2, REQUESTED));
+	@DisplayName("multiplier=1.0, depth = 1.5× threshold → half the window")
+	void testInsideRampHalfWindow() {
+		// (150/100 - 1) × 1.0 = 0.5 → 1000 × 0.5 = 500
+		Assertions.assertEquals(500, this.interceptorWithMultiplier(1.0).computeTargetWindow(150L));
 	}
 
 	@Test
-	@DisplayName("depth = 10× threshold → scales proportionally")
-	void testAtTenTimesThresholdReturnsScaled() {
-		// scale = (1000/100) × 2 = 20  →  ceil(500 × 20) = 10 000
-		Assertions.assertEquals(10_000, this.interceptor.computeGranted(THRESHOLD * 10, REQUESTED));
+	@DisplayName("multiplier=1.0, depth = 2× threshold → full window (reaches cap)")
+	void testReachesCapAtTwiceThreshold() {
+		// (200/100 - 1) × 1.0 = 1.0 → capped at maxCredits
+		Assertions.assertEquals(MAX_CREDITS, this.interceptorWithMultiplier(1.0).computeTargetWindow(200L));
 	}
 
 	@Test
-	@DisplayName("very deep queue → computeGranted returns uncapped scaled value; cap is enforced by handleFlowCredit headroom")
-	void testVeryDeepQueueReturnsScaledUncapped() {
-		// computeGranted no longer applies the maxCredits cap — that is the caller's
-		// responsibility via the outstanding-credit headroom.
-		// ceil(500 × (2_000_000/100) × 2.0) = 20_000_000
-		Assertions.assertEquals(20_000_000, this.interceptor.computeGranted(2_000_000L, REQUESTED));
+	@DisplayName("very deep queue → target window capped at maxCredits")
+	void testVeryDeepQueueCappedAtMaxCredits() {
+		Assertions.assertEquals(MAX_CREDITS, this.interceptorWithMultiplier(2.0).computeTargetWindow(2_000_000L));
 	}
 
 	@Test
-	@DisplayName("grant is never less than requested at any depth")
-	void testGrantIsNeverLessThanRequested() {
-		for (final long depth : new long[] { 0, 1, 50, 100, 101, 500, 10_000 }) {
-			Assertions.assertTrue(
-					this.interceptor.computeGranted(depth, 1) >= 1,
-					"grant must be >= requested at depth " + depth);
+	@DisplayName("larger multiplier reaches the full window at a shallower depth")
+	void testLargerMultiplierRampsFaster() {
+		// multiplier=2.0, depth=1.25× threshold: (0.25) × 2.0 = 0.5 → 500
+		Assertions.assertEquals(500, this.interceptorWithMultiplier(2.0).computeTargetWindow(125L));
+		// multiplier=0.5, same depth: (0.25) × 0.5 = 0.125 → 125
+		Assertions.assertEquals(125, this.interceptorWithMultiplier(0.5).computeTargetWindow(125L));
+	}
+
+	@Test
+	@DisplayName("target window is monotonically non-decreasing in depth and never exceeds maxCredits")
+	void testMonotonicAndBounded() {
+		final DynamicCreditClientInterceptor interceptor = this.interceptorWithMultiplier(1.0);
+		int previousWindow = 0;
+		for (final long depth : new long[] { 0, 50, 100, 110, 150, 199, 200, 500, 10_000 }) {
+			final int window = interceptor.computeTargetWindow(depth);
+			Assertions.assertTrue(window >= previousWindow, "window must not shrink as depth grows, at depth " + depth);
+			Assertions.assertTrue(window <= MAX_CREDITS, "window must never exceed maxCredits, at depth " + depth);
+			previousWindow = window;
 		}
-	}
-
-	@Test
-	@DisplayName("multiplier=1.0 → linear growth with depth")
-	void testMultiplierOneLinearGrowth() {
-		final DynamicCreditClientInterceptor linear =
-				new DynamicCreditClientInterceptor(null, THRESHOLD, 1.0, MAX_CREDITS, 5000L);
-		// depth=200 → scale=2 → grant=1000
-		Assertions.assertEquals(1000, linear.computeGranted(200L, REQUESTED));
-		// depth=500 → scale=5 → grant=2500
-		Assertions.assertEquals(2500, linear.computeGranted(500L, REQUESTED));
-	}
-
-	@Test
-	@DisplayName("multiplier < 1 and low depth above threshold → grant clamped to requested")
-	void testMultiplierLessThanOneClampedToRequested() {
-		// multiplier=0.5, depth=150: scale = 1.5 × 0.5 = 0.75 → raw = 375 < requested → clamp to 500
-		final DynamicCreditClientInterceptor slow =
-				new DynamicCreditClientInterceptor(null, THRESHOLD, 0.5, MAX_CREDITS, 5000L);
-		Assertions.assertEquals(REQUESTED, slow.computeGranted(150L, REQUESTED));
-	}
-
-	@Test
-	@DisplayName("multiplier < 1 and high depth → grant exceeds requested once scale passes 1")
-	void testMultiplierLessThanOneHighDepthExceedsRequested() {
-		// multiplier=0.5, depth=400: scale = 4 × 0.5 = 2 → grant = 1000 > requested(500)
-		final DynamicCreditClientInterceptor slow =
-				new DynamicCreditClientInterceptor(null, THRESHOLD, 0.5, MAX_CREDITS, 5000L);
-		Assertions.assertEquals(1000, slow.computeGranted(400L, REQUESTED));
 	}
 }

@@ -1,13 +1,13 @@
 package org.coldis.library.test.service.jms;
 
-import java.lang.reflect.Field;
-import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 
+import org.apache.activemq.artemis.api.core.SimpleString;
 import org.apache.activemq.artemis.core.protocol.core.impl.wireformat.SessionConsumerFlowCreditMessage;
+import org.apache.activemq.artemis.core.protocol.core.impl.wireformat.SessionCreateConsumerMessage;
 import org.apache.activemq.artemis.jms.client.ActiveMQConnectionFactory;
 import org.coldis.library.service.jms.DynamicCreditClientInterceptor;
 import org.coldis.library.test.StartTestWithContainerExtension;
@@ -177,31 +177,32 @@ class DynamicCreditClientInterceptorTest extends ContainerTestHelper {
 	/**
 	 * Reproduces the production warning {@code AMQ212051: Invalid concurrent session
 	 * usage}. The interceptor's {@code querySession} is shared across consumer
-	 * threads, and Artemis's {@link org.apache.activemq.artemis.api.core.client.ClientSession}
-	 * is not thread-safe. Without synchronization on the {@code queueQuery} call,
-	 * concurrent FLOW_CREDIT intercepts from different consumers trip the warning.
+	 * threads and Artemis's {@link org.apache.activemq.artemis.api.core.client.ClientSession}
+	 * is not thread-safe, so without synchronizing the {@code queueQuery} call
+	 * concurrent flow-credit intercepts from different consumers trip the warning.
 	 *
-	 * <p>The test pre-seeds the consumer→queue map with many distinct entries so the
-	 * depth cache cannot mask the issue, captures Artemis client logs, fires
-	 * interceptor calls from many threads in lockstep, then asserts no warning was
-	 * logged.
+	 * <p>Registers many consumers through the real {@code intercept} path — each on
+	 * its own session channel and its own queue so every depth read is a cache miss
+	 * that reaches the broker — captures Artemis client logs, fires flow-credit
+	 * intercepts from many threads in lockstep, then asserts no warning was logged.
 	 */
 	@Test
 	@DisplayName("concurrent intercept does not trigger Artemis 'concurrent session usage' warning")
 	void testConcurrentInterceptDoesNotWarnAboutSessionThreadSafety() throws Exception {
 		final int threads = 16;
-		final int queriesPerThread = 5;
+		final int consumersPerThread = 5;
 
-		// Seed consumerQueues with distinct (consumerID, queueName) pairs so every
-		// queueQuery call is a fresh cache miss.
-		final Field consumerQueuesField = DynamicCreditClientInterceptor.class.getDeclaredField("consumerQueues");
-		consumerQueuesField.setAccessible(true);
-		@SuppressWarnings("unchecked")
-		final ConcurrentHashMap<Long, String> consumerQueues =
-				(ConcurrentHashMap<Long, String>) consumerQueuesField.get(this.interceptor);
-		for (int t = 0; t < threads; t++) {
-			for (int q = 0; q < queriesPerThread; q++) {
-				consumerQueues.put((long) (t * 1000 + q), "concurrent-test/" + t + "/" + q);
+		// Register one consumer per (thread, index) via the real create path so both the
+		// queue map and the outstanding map are populated with the correct session-scoped
+		// keys. Each consumer gets its own channel (session) and queue, so the flow-credit
+		// intercepts below reach a fresh queueQuery (cache miss) on the shared session.
+		for (int threadIndex = 0; threadIndex < threads; threadIndex++) {
+			for (int consumerIndex = 0; consumerIndex < consumersPerThread; consumerIndex++) {
+				final long channelId = threadIndex * 1000L + consumerIndex;
+				final SessionCreateConsumerMessage createConsumer = new SessionCreateConsumerMessage(
+						0L, SimpleString.of("concurrent-test/" + threadIndex + "/" + consumerIndex), null, 0, false, true);
+				createConsumer.setChannelID(channelId);
+				this.interceptor.intercept(createConsumer, null);
 			}
 		}
 
@@ -216,20 +217,21 @@ class DynamicCreditClientInterceptorTest extends ContainerTestHelper {
 			final CountDownLatch done = new CountDownLatch(threads);
 			final ExecutorService pool = Executors.newFixedThreadPool(threads);
 			try {
-				for (int t = 0; t < threads; t++) {
-					final int tid = t;
+				for (int threadIndex = 0; threadIndex < threads; threadIndex++) {
+					final int currentThreadIndex = threadIndex;
 					pool.submit(() -> {
 						try {
 							start.await();
-							for (int q = 0; q < queriesPerThread; q++) {
-								final long consumerId = tid * 1000L + q;
+							for (int consumerIndex = 0; consumerIndex < consumersPerThread; consumerIndex++) {
+								final long channelId = currentThreadIndex * 1000L + consumerIndex;
 								final SessionConsumerFlowCreditMessage credit =
-										new SessionConsumerFlowCreditMessage(consumerId, 1024);
+										new SessionConsumerFlowCreditMessage(0L, 1024);
+								credit.setChannelID(channelId);
 								this.interceptor.intercept(credit, null);
 							}
 						}
-						catch (final Throwable e) {
-							throw new RuntimeException(e);
+						catch (final Throwable throwable) {
+							throw new RuntimeException(throwable);
 						}
 						finally {
 							done.countDown();
@@ -245,10 +247,10 @@ class DynamicCreditClientInterceptorTest extends ContainerTestHelper {
 			}
 
 			final boolean foundConcurrentWarning = appender.list.stream()
-					.anyMatch(e -> {
-						final String msg = e.getFormattedMessage();
-						return (msg != null)
-								&& (msg.contains("AMQ212051") || msg.contains("concurrent session usage"));
+					.anyMatch(loggingEvent -> {
+						final String message = loggingEvent.getFormattedMessage();
+						return (message != null)
+								&& (message.contains("AMQ212051") || message.contains("concurrent session usage"));
 					});
 			Assertions.assertFalse(foundConcurrentWarning,
 					"Artemis logged a concurrent session usage warning — the interceptor's "
