@@ -273,9 +273,54 @@ public class DynamicCreditClientInterceptor implements Interceptor {
 	}
 
 	/**
-	 * Adjusts one consumer's flow-credit packet in place: reduces the consumer's
-	 * outstanding count by the freed bytes, then tops it up to {@code maxCredits}
-	 * when the queue is deep enough to warrant scaling.
+	 * Applies the depth-proportional grant to one positive flow-credit request,
+	 * updating the consumer's outstanding window and rewriting the packet when the
+	 * grant differs from the request.
+	 */
+	private void scaleFlowCredit(
+			final SessionConsumerFlowCreditMessage flowCreditMessage,
+			final String queueName,
+			final AtomicInteger outstandingCredits,
+			final int requestedCredits) {
+		// Compute the final grant atomically: account for freed bytes, then raise the
+		// consumer's outstanding window toward the depth-proportional target. Never
+		// grant less than requested (that would throttle below the baseline) and never
+		// let outstanding fall short of the target the queue depth warrants.
+		final int grantedCredits;
+		synchronized (outstandingCredits) {
+			final int currentOutstanding = outstandingCredits.get();
+			// Consumer freed `requestedCredits` bytes — reduce outstanding accordingly.
+			final int outstandingAfterFreed = Math.max(0, currentOutstanding - requestedCredits);
+			final int passthroughOutstanding = outstandingAfterFreed + requestedCredits;
+			final int depthTargetWindow = this.computeTargetWindow(this.getPendingDepth(queueName));
+			final int targetOutstanding = Math.max(passthroughOutstanding, depthTargetWindow);
+			grantedCredits = targetOutstanding - outstandingAfterFreed;
+			outstandingCredits.set(targetOutstanding);
+		}
+
+		if (grantedCredits != requestedCredits) {
+			try {
+				DynamicCreditClientInterceptor.CREDITS_FIELD.setInt(flowCreditMessage, grantedCredits);
+				this.creditPacketsScaled.incrementAndGet();
+				LOGGER.debug("DynamicCredit — queue={} requested={} granted={} outstanding={}", queueName, requestedCredits,
+						grantedCredits, outstandingCredits.get());
+				this.logScalingActivity(queueName, requestedCredits, grantedCredits);
+			}
+			catch (final IllegalAccessException illegalAccessException) {
+				// Roll back the outstanding adjustment so the accounting stays consistent.
+				synchronized (outstandingCredits) {
+					outstandingCredits.addAndGet(requestedCredits - grantedCredits);
+				}
+				LOGGER.warn("DynamicCredit — could not modify credits field, skipping", illegalAccessException);
+			}
+		}
+	}
+
+	/**
+	 * Handles one consumer's flow-credit packet: protocol control packets (credits
+	 * {@code <= 0}) pass through untouched while the tracked window is zeroed to
+	 * mirror the broker-side reset; positive refills go through the
+	 * depth-proportional grant.
 	 */
 	private void handleFlowCredit(
 			final SessionConsumerFlowCreditMessage flowCreditMessage,
@@ -284,40 +329,21 @@ public class DynamicCreditClientInterceptor implements Interceptor {
 		final String queueName = this.consumerQueues.get(consumerKey);
 		final AtomicInteger outstandingCredits = (queueName != null) ? this.consumerOutstanding.get(consumerKey) : null;
 		if ((queueName != null) && (outstandingCredits != null)) {
-
 			final int requestedCredits = flowCreditMessage.getCredits();
-
-			// Compute the final grant atomically: account for freed bytes, then raise the
-			// consumer's outstanding window toward the depth-proportional target. Never
-			// grant less than requested (that would throttle below the baseline) and never
-			// let outstanding fall short of the target the queue depth warrants.
-			final int grantedCredits;
-			synchronized (outstandingCredits) {
-				final int currentOutstanding = outstandingCredits.get();
-				// Consumer freed `requestedCredits` bytes — reduce outstanding accordingly.
-				final int outstandingAfterFreed = Math.max(0, currentOutstanding - requestedCredits);
-				final int passthroughOutstanding = outstandingAfterFreed + requestedCredits;
-				final int depthTargetWindow = this.computeTargetWindow(this.getPendingDepth(queueName));
-				final int targetOutstanding = Math.max(passthroughOutstanding, depthTargetWindow);
-				grantedCredits = targetOutstanding - outstandingAfterFreed;
-				outstandingCredits.set(targetOutstanding);
+			// Non-positive credits are protocol control packets, not byte refills: 0 resets
+			// the server-side window (the slow-consumer reset sent after a timed-out empty
+			// poll) and -1 disables flow control entirely. They must pass through untouched —
+			// rewriting a reset into a grant would strand messages in idle consumers'
+			// buffers. Mirror the reset locally so the next real request re-inflates the
+			// window instead of assuming it is still full (a desynced tracker permanently
+			// collapses the consumer to one message in flight).
+			if (requestedCredits <= 0) {
+				synchronized (outstandingCredits) {
+					outstandingCredits.set(0);
+				}
 			}
-
-			if (grantedCredits != requestedCredits) {
-				try {
-					DynamicCreditClientInterceptor.CREDITS_FIELD.setInt(flowCreditMessage, grantedCredits);
-					this.creditPacketsScaled.incrementAndGet();
-					LOGGER.debug("DynamicCredit — queue={} requested={} granted={} outstanding={}", queueName, requestedCredits,
-							grantedCredits, outstandingCredits.get());
-					this.logScalingActivity(queueName, requestedCredits, grantedCredits);
-				}
-				catch (final IllegalAccessException illegalAccessException) {
-					// Roll back the outstanding adjustment so the accounting stays consistent.
-					synchronized (outstandingCredits) {
-						outstandingCredits.addAndGet(requestedCredits - grantedCredits);
-					}
-					LOGGER.warn("DynamicCredit — could not modify credits field, skipping", illegalAccessException);
-				}
+			else {
+				this.scaleFlowCredit(flowCreditMessage, queueName, outstandingCredits, requestedCredits);
 			}
 		}
 	}
@@ -336,9 +362,9 @@ public class DynamicCreditClientInterceptor implements Interceptor {
 				if (queueName != null) {
 					final String consumerKey = DynamicCreditClientInterceptor.buildConsumerKey(connectionId, channelId, createConsumerMessage.getID());
 					this.consumerQueues.put(consumerKey, queueName.toString());
-					// putIfAbsent: a duplicate create for the same consumer must not reset an
-					// already-tracked outstanding window.
-					this.consumerOutstanding.putIfAbsent(consumerKey, new AtomicInteger(0));
+					// A create on an already-tracked key is a failover recreate: the server-side
+					// consumer is brand new (zero credits), so the tracked window restarts too.
+					this.consumerOutstanding.put(consumerKey, new AtomicInteger(0));
 					this.consumersRegistered.incrementAndGet();
 				}
 			}

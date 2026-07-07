@@ -118,7 +118,23 @@ return min(maxCredits, ceil(maxCredits * fraction))         # grows with depth, 
 
 The window (not the raw request) is scaled deliberately: in slow-consumer mode the
 client often sends the sentinel credit `1`, which — if scaled directly — would
-produce a meaningless grant. Scaling toward a target *window* sidesteps that.
+produce a meaningless grant.
+
+### Protocol control packets (reset / disable)
+
+Not every flow-credit packet is a byte refill. In slow-consumer mode a
+`receive(timeout)` that times out on an empty queue makes the client send a
+**credit-`0` reset** (`resetIfSlowConsumer`), and the broker zeroes the consumer's
+window (`availableCredits.set(0)`); credit `-1` disables flow control entirely.
+The interceptor passes both through **untouched** (rewriting a reset into a grant
+would strand messages in idle consumers' buffers) and zeroes its tracked window to
+mirror the broker. Without that mirroring the tracker believes the window is still
+full and never scales again — the consumer permanently collapses to ~1 message in
+flight after a single empty poll.
+
+A `CREATE_CONSUMER` on an already-tracked key (a failover recreate) also restarts
+the tracked window, since the recreated server-side consumer starts with zero
+credits. Scaling toward a target *window* sidesteps that.
 
 ### Queue depth signal
 
@@ -181,6 +197,6 @@ If scaling never seems to engage, check: the INFO line never appears →
 | Test | What it covers |
 | --- | --- |
 | `DynamicCreditClientInterceptorUnitTest` | `computeTargetWindow` pure function: pass-through below threshold, proportional ramp, cap, multiplier effect, monotonicity. |
-| `DynamicCreditClientInterceptorScalingTest` | Broker-free: grant grows with depth, caps at `maxCredits`, passes through below threshold (stubs `getPendingDepth`). |
+| `DynamicCreditClientInterceptorScalingTest` | Broker-free: grant grows with depth, caps at `maxCredits`, passes through below threshold; reset (`0`) and disable (`-1`) packets pass through untouched, the window re-inflates after a reset, and a failover recreate restarts the window (stubs `getPendingDepth`). |
 | `DynamicCreditClientInterceptorSessionScopingTest` | Broker-free: two sessions' consumer `0` are tracked independently; a new consumer does not reset a sibling's window. |
-| `DynamicCreditClientInterceptorTest` | Container-based: deep queue scales, shallow queue passes through, untracked consumers are ignored, and concurrent intercepts don't trip Artemis' `AMQ212051` (shared query session is synchronized). |
+| `DynamicCreditClientInterceptorTest` | Container-based: deep queue scales, shallow queue passes through, untracked consumers are ignored, concurrent intercepts don't trip Artemis' `AMQ212051` (shared query session is synchronized), and scaling recovers after a real slow-consumer reset (a timed-out empty poll on the same consumer). |

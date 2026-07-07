@@ -45,37 +45,38 @@ import org.junit.jupiter.api.Test;
 @DisplayName("DynamicCreditClientInterceptor — session-scoped consumer tracking")
 class DynamicCreditClientInterceptorSessionScopingTest {
 
-	private static final long THRESHOLD = 100L;
+	private static final long DEPTH_THRESHOLD = 100L;
 	private static final double MULTIPLIER = 2.0;
 	private static final int MAX_CREDITS = 10 * 1024 * 1024;
+	private static final long CACHE_TTL_MILLIS = 5000L;
 
 	private DynamicCreditClientInterceptor interceptor;
 
 	@BeforeEach
 	void setUp() {
-		this.interceptor = new DynamicCreditClientInterceptor(null, THRESHOLD, MULTIPLIER, MAX_CREDITS, 5000L);
+		this.interceptor = new DynamicCreditClientInterceptor(null, DEPTH_THRESHOLD, MULTIPLIER, MAX_CREDITS, CACHE_TTL_MILLIS);
 	}
 
 	/** Simulates a session creating a consumer: create-consumer packet on the session's channel. */
-	private void createConsumer(final long consumerId, final long channelId, final String queue) throws Exception {
-		final SessionCreateConsumerMessage create =
-				new SessionCreateConsumerMessage(consumerId, SimpleString.of(queue), null, 0, false, true);
-		create.setChannelID(channelId);
-		this.interceptor.intercept(create, null);
+	private void createConsumer(final long consumerId, final long channelId, final String queueName) throws Exception {
+		final SessionCreateConsumerMessage createConsumerMessage =
+				new SessionCreateConsumerMessage(consumerId, SimpleString.of(queueName), null, 0, false, true);
+		createConsumerMessage.setChannelID(channelId);
+		this.interceptor.intercept(createConsumerMessage, null);
 	}
 
 	/** Simulates a flow-credit request from a consumer on its session's channel. */
-	private void sendCredit(final long consumerId, final long channelId, final int credits) throws Exception {
-		final SessionConsumerFlowCreditMessage credit = new SessionConsumerFlowCreditMessage(consumerId, credits);
-		credit.setChannelID(channelId);
-		this.interceptor.intercept(credit, null);
+	private void sendCreditPacket(final long consumerId, final long channelId, final int requestedCredits) throws Exception {
+		final SessionConsumerFlowCreditMessage flowCreditMessage = new SessionConsumerFlowCreditMessage(consumerId, requestedCredits);
+		flowCreditMessage.setChannelID(channelId);
+		this.interceptor.intercept(flowCreditMessage, null);
 	}
 
 	@SuppressWarnings("unchecked")
-	private ConcurrentHashMap<Object, AtomicInteger> outstanding() throws Exception {
-		final Field field = DynamicCreditClientInterceptor.class.getDeclaredField("consumerOutstanding");
-		field.setAccessible(true);
-		return (ConcurrentHashMap<Object, AtomicInteger>) field.get(this.interceptor);
+	private ConcurrentHashMap<Object, AtomicInteger> trackedOutstandingCredits() throws Exception {
+		final Field consumerOutstandingField = DynamicCreditClientInterceptor.class.getDeclaredField("consumerOutstanding");
+		consumerOutstandingField.setAccessible(true);
+		return (ConcurrentHashMap<Object, AtomicInteger>) consumerOutstandingField.get(this.interceptor);
 	}
 
 	@Test
@@ -83,7 +84,7 @@ class DynamicCreditClientInterceptorSessionScopingTest {
 	void testDistinctSessionsSameConsumerIdNotCollapsed() throws Exception {
 		this.createConsumer(0L, 100L, "orders");
 		this.createConsumer(0L, 200L, "orders");
-		Assertions.assertEquals(2, this.outstanding().size(),
+		Assertions.assertEquals(2, this.trackedOutstandingCredits().size(),
 				"Each session's consumer must own its outstanding-credit window; keying by bare "
 						+ "consumer id collapses both sessions' consumer 0 into a single shared window.");
 	}
@@ -92,10 +93,10 @@ class DynamicCreditClientInterceptorSessionScopingTest {
 	@DisplayName("a new session's consumer 0 must not reset an existing consumer 0's window")
 	void testNewConsumerDoesNotResetSiblingOutstanding() throws Exception {
 		this.createConsumer(0L, 100L, "orders");
-		this.sendCredit(0L, 100L, 1000);
+		this.sendCreditPacket(0L, 100L, 1000);
 		this.createConsumer(0L, 200L, "orders");
-		final boolean firstWindowSurvived = this.outstanding().values().stream()
-				.anyMatch(counter -> counter.get() == 1000);
+		final boolean firstWindowSurvived = this.trackedOutstandingCredits().values().stream()
+				.anyMatch(outstandingCounter -> outstandingCounter.get() == 1000);
 		Assertions.assertTrue(firstWindowSurvived,
 				"Creating a second session's consumer 0 overwrote the shared outstanding counter, "
 						+ "resetting the first consumer's window back to 0.");
