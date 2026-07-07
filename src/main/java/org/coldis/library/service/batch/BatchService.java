@@ -46,7 +46,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
  * Batch helper.
  */
 @RestController
-@RequestMapping(path = "service-batch")
+@RequestMapping(path = "batch")
 @ConditionalOnProperty(
 		name = "org.coldis.configuration.service.batch-enabled",
 		matchIfMissing = false
