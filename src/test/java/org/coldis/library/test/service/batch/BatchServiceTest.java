@@ -15,6 +15,7 @@ import org.coldis.library.persistence.LockBehavior;
 import org.coldis.library.persistence.keyvalue.KeyValueServiceComponent;
 import org.coldis.library.service.batch.BatchExecutor;
 import org.coldis.library.service.batch.BatchService;
+import org.coldis.library.service.batch.BatchServiceComponent;
 import org.coldis.library.test.StartTestWithContainerExtension;
 import org.coldis.library.test.TestHelper;
 import org.coldis.library.test.TestWithContainer;
@@ -53,6 +54,12 @@ public class BatchServiceTest extends ContainerTestHelper {
 	 */
 	@Autowired
 	private BatchService batchService;
+
+	/**
+	 * Batch service component.
+	 */
+	@Autowired
+	private BatchServiceComponent batchServiceComponent;
 
 	/**
 	 * Cleans after each test.
@@ -96,7 +103,7 @@ public class BatchServiceTest extends ContainerTestHelper {
 			final Long processedNow,
 			final Long processedTotal) throws BusinessException, Exception {
 
-		final String batchKey = this.batchService.getKey(testBatchExecutor.getKeySuffix());
+		final String batchKey = this.batchServiceComponent.getKey(testBatchExecutor.getKeySuffix());
 
 		// Initial record.
 		BatchExecutor<BatchObject> batchRecord = null;
@@ -166,7 +173,7 @@ public class BatchServiceTest extends ContainerTestHelper {
 		final BatchExecutor<BatchObject> testBatchExecutor = BatchExecutor.withFixedRate(BatchObject.class, "testBatchInTime", 10L,
 				Duration.ofMillis(100), Duration.ofMinutes(1), "batchTestService", null, null);
 		testBatchExecutor.setCleansWithin(Duration.ofMinutes(15));
-		final String batchKey = this.batchService.getKey(testBatchExecutor.getKeySuffix());
+		final String batchKey = this.batchServiceComponent.getKey(testBatchExecutor.getKeySuffix());
 
 		// Record should not exist.
 		try {
@@ -214,7 +221,7 @@ public class BatchServiceTest extends ContainerTestHelper {
 		final BatchExecutor<BatchObject> testBatchExecutor = BatchExecutor.withFixedRate(BatchObject.class, "testBatchNotInTime", 10L,
 				Duration.ofMillis(100), Duration.ofMillis(500), "batchTestService", null, null);
 		testBatchExecutor.setCleansWithin(Duration.ofMinutes(15));
-		final String batchKey = this.batchService.getKey(testBatchExecutor.getKeySuffix());
+		final String batchKey = this.batchServiceComponent.getKey(testBatchExecutor.getKeySuffix());
 
 		// Record should not exist.
 		try {
@@ -281,7 +288,7 @@ public class BatchServiceTest extends ContainerTestHelper {
 		final BatchExecutor<BatchObject> testBatchExecutor = BatchExecutor.withFixedRate(BatchObject.class, "testBatchCancel", 10L,
 				Duration.ofMillis(100), Duration.ofMinutes(1), "batchTestService", null, null);
 		testBatchExecutor.setCleansWithin(Duration.ofMinutes(15));
-		final String batchKey = this.batchService.getKey(testBatchExecutor.getKeySuffix());
+		final String batchKey = this.batchServiceComponent.getKey(testBatchExecutor.getKeySuffix());
 
 		// Record should not exist.
 		try {
@@ -389,7 +396,7 @@ public class BatchServiceTest extends ContainerTestHelper {
 		final BatchExecutor<BatchObject> testBatchExecutor = BatchExecutor.withAdaptiveRate(BatchObject.class, "testBatchCancel", 10L,
 				Duration.ofSeconds(20), Duration.ofMillis(100), "batchTestService", null, null);
 		testBatchExecutor.setExpectedCount(100L);
-		final String batchKey = this.batchService.getKey(testBatchExecutor.getKeySuffix());
+		final String batchKey = this.batchServiceComponent.getKey(testBatchExecutor.getKeySuffix());
 		this.batchService.start(testBatchExecutor, false, false);
 
 		// Waits until batch is finished.

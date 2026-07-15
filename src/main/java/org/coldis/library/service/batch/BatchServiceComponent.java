@@ -1,0 +1,535 @@
+package org.coldis.library.service.batch;
+
+import java.time.LocalDateTime;
+import java.time.temporal.ChronoUnit;
+import java.util.List;
+import java.util.Map;
+import java.util.Objects;
+import java.util.Properties;
+
+import org.apache.commons.lang3.StringUtils;
+import org.apache.commons.lang3.exception.ExceptionUtils;
+import org.coldis.library.exception.BusinessException;
+import org.coldis.library.helper.DateTimeHelper;
+import org.coldis.library.model.RetriableIn;
+import org.coldis.library.model.Typable;
+import org.coldis.library.persistence.LockBehavior;
+import org.coldis.library.persistence.keyvalue.KeyValue;
+import org.coldis.library.persistence.keyvalue.KeyValueServiceComponent;
+import org.coldis.library.serialization.ObjectMapperHelper;
+import org.coldis.library.service.jms.JmsMessage;
+import org.coldis.library.service.jms.JmsTemplateHelper;
+import org.coldis.library.service.slack.SlackIntegration;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.beans.BeanUtils;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
+import org.springframework.jms.annotation.JmsListener;
+import org.springframework.jms.core.JmsTemplate;
+import org.springframework.scheduling.annotation.Scheduled;
+import org.springframework.stereotype.Component;
+import org.springframework.transaction.annotation.Propagation;
+import org.springframework.transaction.annotation.Transactional;
+import org.springframework.util.PropertyPlaceholderHelper;
+
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.ObjectMapper;
+
+/**
+ * Batch service component.
+ */
+@Component
+@ConditionalOnProperty(
+		name = "org.coldis.configuration.service.batch-enabled",
+		matchIfMissing = false
+)
+public class BatchServiceComponent {
+
+	/**
+	 * Logger.
+	 */
+	private static final Logger LOGGER = LoggerFactory.getLogger(BatchServiceComponent.class);
+
+	/**
+	 * Batch key prefix.
+	 */
+	public static final String BATCH_KEY_PREFIX = "batch-record-";
+
+	/**
+	 * Delete queue.
+	 */
+	private static final String DELETE_QUEUE = "batch/delete";
+
+	/**
+	 * Batch record execute queue.
+	 */
+	private static final String RESUME_QUEUE = "batch/resume";
+
+	/**
+	 * Placeholder resolver.
+	 */
+	private static final PropertyPlaceholderHelper PLACEHOLDER_HELPER = new PropertyPlaceholderHelper("${", "}");
+
+	/**
+	 * Object mapper.
+	 */
+	@Autowired
+	private ObjectMapper objectMapper;
+
+	/**
+	 * JMS template.
+	 */
+	@Autowired(required = false)
+	private JmsTemplate jmsTemplate;
+
+	/**
+	 * JMS template helper.
+	 */
+	@Autowired(required = false)
+	private JmsTemplateHelper jmsTemplateHelper;
+
+	/**
+	 * Key batchExecutorValue service.
+	 */
+	@Autowired(required = false)
+	private KeyValueServiceComponent keyValueService;
+
+	/**
+	 * Slack integration.
+	 */
+	@Autowired
+	private SlackIntegration slackIntegration;
+
+	/**
+	 * Gets the batch key.
+	 *
+	 * @param  keySuffix Batch key suffix.
+	 * @return           Batch key.
+	 */
+	public String getKey(
+			final String keySuffix) {
+		return BatchServiceComponent.BATCH_KEY_PREFIX + keySuffix;
+	}
+
+	/**
+	 * @param executor Executor.
+	 * @param action   Action.*@throws BusinessException Exception.
+	 **/
+	@Transactional(
+			propagation = Propagation.NOT_SUPPORTED,
+			readOnly = true
+	)
+	private <Type> void log(
+			final BatchExecutor<Type> executor,
+			final BatchAction action) throws BusinessException {
+		try {
+			// Gets the template and Slack channel.
+			final String template = executor.getMessagesTemplates().get(action);
+			final String slackChannel = executor.getSlackChannels().get(action);
+			// If the template is given.
+			if (StringUtils.isNotBlank(template)) {
+				// Gets the message properties.
+				final String key = this.getKey(executor.getKeySuffix());
+				final Type lastProcessed = executor.getLastProcessed();
+				final Long duration = (executor.getLastStartedAt().until(DateTimeHelper.getCurrentLocalDateTime(), ChronoUnit.MINUTES));
+				final Long batchDuration = executor.getLastBatchProcessingTime().toSeconds();
+				final Properties messageProperties = new Properties();
+				messageProperties.put("key", key);
+				messageProperties.put("lastProcessed", Objects.toString(lastProcessed));
+				messageProperties.put("duration", duration.toString());
+				messageProperties.put("batchDuration", batchDuration.toString());
+				// Gets the message from the template.
+				final String message = BatchServiceComponent.PLACEHOLDER_HELPER.replacePlaceholders(template, messageProperties);
+				// If there is a message.
+				if (StringUtils.isNotBlank(message)) {
+					BatchServiceComponent.LOGGER.info(message);
+					// If there is a channel to use, sends the message.
+					if (StringUtils.isNotBlank(slackChannel)) {
+						this.slackIntegration.send(slackChannel, message);
+					}
+				}
+			}
+		}
+		// Ignores errors.
+		catch (final Throwable exception) {
+			BatchServiceComponent.LOGGER.error("Batch action could not be logged: " + exception.getLocalizedMessage());
+			BatchServiceComponent.LOGGER.debug("Batch action could not be logged.", exception);
+		}
+
+	}
+
+	/**
+	 * Processes a partial batch.
+	 *
+	 * @param  executor          Executor.
+	 * @return                   The last processed id.
+	 * @throws BusinessException If the batch could not be processed.
+	 */
+	@Transactional(
+			propagation = Propagation.REQUIRES_NEW,
+			timeoutString = "${org.coldis.configuration.service.batch-transaction-timeout:${org.coldis.library.service.transaction.longest-timeout}}"
+	)
+	protected <Type> Type executeBatch(
+			final BatchExecutor<Type> batchExecutorValue) throws BusinessException {
+
+		// Last processed.
+		Type actualLastProcessed = batchExecutorValue.getLastProcessed();
+
+		// Throws an exception if the batch has expired.
+		if (batchExecutorValue.isExpired()) {
+			throw new BatchExpiredException();
+		}
+
+		// For each item in the next batch.
+		this.log(batchExecutorValue, BatchAction.GET);
+		final List<Type> nextBatchToProcess = batchExecutorValue.get();
+		for (final Type next : nextBatchToProcess) {
+			batchExecutorValue.execute(next);
+			this.log(batchExecutorValue, BatchAction.EXECUTE);
+			actualLastProcessed = next;
+			batchExecutorValue.setLastProcessedCount(batchExecutorValue.getLastProcessedCount() + 1);
+		}
+
+		// Returns the last processed. id.
+		return actualLastProcessed;
+	}
+
+	/**
+	 * Queues a batch resume.
+	 *
+	 * @param  keySuffix         Key suffix.
+	 * @param  scheduledFor      When the resume should be delivered.
+	 * @param  afterCommit       If the message should only be sent after commit.
+	 * @throws BusinessException If the batch fails.
+	 */
+	public <Type> void queueResumeAsync(
+			final String keySuffix,
+			final LocalDateTime scheduledFor,
+			final boolean afterCommit) throws BusinessException {
+		// Null scheduledFor means "deliver immediately" — leave scheduledAt unset so no
+		// HDR_SCHEDULED_DELIVERY_TIME is added. This avoids wall-clock vs DateTimeHelper
+		// mismatches (e.g. tests that advance the simulated clock would otherwise schedule
+		// delivery far in the wall-clock future).
+		final JmsMessage<String> jmsMessage = new JmsMessage<String>()
+				.withDestination(BatchServiceComponent.RESUME_QUEUE)
+				.withLastValueKey(keySuffix)
+				.withMessage(keySuffix)
+				.withAfterCommit(afterCommit);
+		if (scheduledFor != null) {
+			jmsMessage.withScheduledAt(scheduledFor);
+		}
+		this.jmsTemplateHelper.send(this.jmsTemplate, jmsMessage);
+	}
+
+	/**
+	 * Queues a batch resume.
+	 *
+	 * @param  keySuffix         Key suffix.
+	 * @param  scheduledFor      When the resume should be delivered.
+	 * @throws BusinessException If the batch fails.
+	 */
+	public <Type> void queueResumeAsync(
+			final String keySuffix,
+			final LocalDateTime scheduledFor) throws BusinessException {
+		this.queueResumeAsync(keySuffix, scheduledFor, false);
+	}
+
+	/**
+	 * Resumes a batch.
+	 *
+	 * @param  keySuffix         Key suffix.
+	 * @throws BusinessException If the batch fails.
+	 */
+	@Transactional(
+			propagation = Propagation.REQUIRED,
+			noRollbackFor = Throwable.class,
+			timeoutString = "${org.coldis.configuration.service.batch-transaction-timeout:${org.coldis.library.service.transaction.longest-timeout}}"
+	)
+	public <Type> void resume(
+			final String keySuffix) throws BusinessException {
+		// Synchronizes the batch (preventing to happen in parallel).
+		final String key = this.getKey(keySuffix);
+		final KeyValue<Typable> batchExecutor = this.keyValueService.findById(key, LockBehavior.LOCK_SKIP, true);
+		if (batchExecutor != null) {
+			@SuppressWarnings("unchecked")
+			final BatchExecutor<Type> batchExecutorValue = (BatchExecutor<Type>) batchExecutor.getValue();
+
+			// Deletes the batch if empty.
+			if (batchExecutorValue == null) {
+				this.keyValueService.delete(key);
+			}
+			// Resumes the batch if not empty and not finished.
+			else if ((batchExecutorValue.getLastFinishedAt() == null)
+					|| !batchExecutorValue.getLastFinishedAt().isAfter(batchExecutorValue.getLastStartedAt())) {
+				// Drops if expired or cancelled.
+				if (batchExecutorValue.isExpired()) {
+					BatchServiceComponent.LOGGER.debug("Dropping expired resume for batch '{}'.", key);
+				}
+				// Drops the resume if it arrived before the next scheduled run.
+				else if ((batchExecutorValue.getNextBatchStartingAt() != null)
+						&& batchExecutorValue.getNextBatchStartingAt().isAfter(DateTimeHelper.getCurrentLocalDateTime())) {
+					BatchServiceComponent.LOGGER.debug("Dropping early resume for batch '{}', next run at {}.", key, batchExecutorValue.getNextBatchStartingAt());
+				}
+				else {
+				try {
+					// Gets the next id to be processed.
+					Type previousLastProcessed = null;
+					Type currentLastProcessed = batchExecutorValue.getLastProcessed();
+
+					// Starts or resumes the batch.
+					if (currentLastProcessed == null) {
+						batchExecutorValue.start();
+						this.log(batchExecutorValue, BatchAction.START);
+					}
+					else {
+						batchExecutorValue.resume();
+					}
+
+					// Runs the batch until the next id does not change.
+					final LocalDateTime batchStartedAt = DateTimeHelper.getCurrentLocalDateTime();
+					batchExecutorValue.setLastBatchStartedAt(batchStartedAt);
+					final Type nextLastProcessed = this.executeBatch(batchExecutorValue);
+					final LocalDateTime batchFinishedAt = DateTimeHelper.getCurrentLocalDateTime();
+					batchExecutorValue.setLastBatchFinishedAt(batchFinishedAt);
+					batchExecutorValue.setLastProcessed(nextLastProcessed);
+					previousLastProcessed = currentLastProcessed;
+					currentLastProcessed = nextLastProcessed;
+
+					// If there is no new data, finishes the batch.
+					batchExecutorValue.setLastBatchError(null);
+					if (Objects.equals(previousLastProcessed, currentLastProcessed)) {
+						batchExecutorValue.finish();
+						batchExecutorValue.setLastFinishedAt(DateTimeHelper.getCurrentLocalDateTime());
+					}
+					else {
+						this.queueResumeAsync(keySuffix, batchExecutorValue.getNextBatchStartingAt(), true);
+					}
+
+					// Saves the executor.
+					this.keyValueService.getRepository().save(batchExecutor);
+
+				}
+				// If there is an error in the batch, retry.
+				catch (final Throwable throwable) {
+					BatchServiceComponent.LOGGER.error("Error processing batch '" + key + "': " + throwable.getLocalizedMessage());
+					BatchServiceComponent.LOGGER.debug("Error processing batch '" + key + "'.", throwable);
+					batchExecutorValue.setLastBatchFinishedAt(DateTimeHelper.getCurrentLocalDateTime());
+					batchExecutorValue.setLastBatchError(throwable.getLocalizedMessage());
+					if (!(throwable instanceof final RetriableIn retriableException) || (retriableException.getRetryIn() != null)) {
+						this.queueResumeAsync(keySuffix, DateTimeHelper.getCurrentLocalDateTime().plus(batchExecutorValue.getActualDelayBetweenRuns()));
+					}
+					throw throwable;
+				}
+				// Emit per-page template message exactly once, regardless of outcome,
+				// so the duration is always logged. FINISH on the terminal success
+				// path (lastFinishedAt was set above); RESUME otherwise.
+				finally {
+					this.log(batchExecutorValue,
+							batchExecutorValue.isFinished() ? BatchAction.FINISH : BatchAction.RESUME);
+				}
+				}
+			}
+		}
+		else {
+			BatchServiceComponent.LOGGER.debug("Dropping concurrent resume for batch '{}'.", key);
+		}
+
+	}
+
+	/**
+	 * Processes a complete batch.
+	 *
+	 * @param  keySuffix         Key suffix.
+	 * @throws BusinessException If the batch fails.
+	 */
+	@JmsListener(
+			destination = BatchServiceComponent.RESUME_QUEUE,
+			concurrency = "${org.coldis.configuration.service.batch-concurrency:1-10}",
+			containerFactory = "${org.coldis.library.service.batch.container-factory:jmsListenerContainerFactory}"
+	)
+	@Transactional(
+			propagation = Propagation.REQUIRED,
+			timeoutString = "${org.coldis.configuration.service.batch-transaction-timeout:${org.coldis.library.service.transaction.longest-timeout}}"
+	)
+	public <Type> void resumeAsync(
+			final String keySuffix) throws BusinessException {
+		this.resume(keySuffix);
+	}
+
+	/**
+	 * Starts a batch.
+	 *
+	 * @param  executor               Executor.
+	 * @param  restart                If the batch should be restarted.
+	 * @param  useLastCountAsExpected If the last count should be used as expected.
+	 * @throws BusinessException      If the batch fails.
+	 */
+	@Transactional(
+			propagation = Propagation.REQUIRED,
+			noRollbackFor = Throwable.class,
+			timeoutString = "${org.coldis.configuration.service.batch-transaction-timeout:${org.coldis.library.service.transaction.longest-timeout}}"
+	)
+	public <Type> void start(
+			final BatchExecutor<Type> executor,
+			final Boolean restart,
+			final Boolean useLastCountAsExpected) throws BusinessException {
+
+		// Gets (and locks) the executor.
+		final String key = this.getKey(executor.getKeySuffix());
+		final KeyValue<Typable> batchExecutor = this.keyValueService.lock(key, LockBehavior.WAIT_AND_LOCK);
+
+		// If there is no previous record for the batch, saves the given one.
+		if (batchExecutor.getValue() == null) {
+			batchExecutor.setValue(new BatchExecutor<>());
+		}
+		// Updates fields.
+		BeanUtils.copyProperties(executor, batchExecutor.getValue(), "lastStartedAt", "lastFinishedAt", "lastTotalProcessingTime", "lastCancelledAt",
+				"lastProcessed", "lastBatchStartedAt", "lastBatchFinishedAt", "lastProcessedCount");
+		BatchServiceComponent.LOGGER.debug("Starting batch for: " + ObjectMapperHelper.serialize(this.objectMapper, batchExecutor, null, false));
+
+		// If the executor should be restarted, resets it.
+		@SuppressWarnings("unchecked")
+		final BatchExecutor<Type> batchExecutorValue = (BatchExecutor<Type>) batchExecutor.getValue();
+		if (restart || batchExecutorValue.isExpired() || batchExecutorValue.isFinished()) {
+			batchExecutorValue.reset(useLastCountAsExpected);
+		}
+
+		// Saves and resumes the batch.
+		this.keyValueService.getRepository().save(batchExecutor);
+		this.queueResumeAsync(batchExecutorValue.getKeySuffix(), DateTimeHelper.getCurrentLocalDateTime());
+	}
+
+	/**
+	 * Cancels a batch.
+	 *
+	 * @param  keySuffix         Key suffix.
+	 * @throws BusinessException If the batch fails.
+	 */
+	@Transactional(
+			propagation = Propagation.REQUIRED,
+			noRollbackFor = Throwable.class,
+			timeoutString = "${org.coldis.configuration.service.batch-transaction-timeout:${org.coldis.library.service.transaction.longest-timeout}}"
+	)
+	public <Type> void cancel(
+			final String keySuffix) throws BusinessException {
+		final String key = this.getKey(keySuffix);
+		final KeyValue<Typable> batchExecutor = this.keyValueService.findById(key, LockBehavior.WAIT_AND_LOCK, false);
+		@SuppressWarnings("unchecked")
+		final BatchExecutor<Type> batchExecutorValue = (BatchExecutor<Type>) batchExecutor.getValue();
+		batchExecutorValue.setLastCancelledAt(DateTimeHelper.getCurrentLocalDateTime());
+		this.keyValueService.getRepository().save(batchExecutor);
+	}
+
+	/**
+	 * Deletes a batch record.
+	 *
+	 * @param key Key.
+	 */
+	public void queueDeleteAsync(
+			final String key,
+			final Boolean onlyIfShouldBeCleaned) {
+		this.jmsTemplateHelper.send(this.jmsTemplate, new JmsMessage<>().withDestination(BatchServiceComponent.DELETE_QUEUE).withLastValueKey(key)
+				.withMessage(Map.of("key", key, "onlyIfShouldBeCleaned", onlyIfShouldBeCleaned)));
+	}
+
+	/**
+	 * Deletes a key entry.
+	 *
+	 * @param  message           The message with the key.
+	 * @throws BusinessException If the batch cannot be found.
+	 */
+	@JmsListener(
+			destination = BatchServiceComponent.DELETE_QUEUE,
+			concurrency = "${org.coldis.configuration.service.batch-delete-concurrency:1-3}",
+			containerFactory = "${org.coldis.library.service.batch.container-factory:jmsListenerContainerFactory}"
+	)
+	@Transactional(
+			propagation = Propagation.REQUIRED,
+			timeoutString = "${org.coldis.configuration.service.batch-transaction-timeout:${org.coldis.library.service.transaction.longest-timeout}}"
+	)
+	private void deleteAsync(
+			final Map<String, Object> message) throws BusinessException {
+		final String key = (String) message.get("key");
+		final Boolean onlyIfShouldBeCleaned = (Boolean) message.get("onlyIfShouldBeCleaned");
+		if (this.keyValueService.getRepository().existsById(key)) {
+			try {
+				final KeyValue<Typable> batchExecutor = this.keyValueService.findById(key, LockBehavior.WAIT_AND_LOCK, false);
+				final BatchExecutor<?> batchExecutorValue = (BatchExecutor<?>) batchExecutor.getValue();
+				if (!onlyIfShouldBeCleaned || batchExecutorValue.shouldBeCleaned()) {
+					this.keyValueService.delete(key);
+				}
+			}
+			catch (final Exception exception) {
+				if (ExceptionUtils.indexOfType(exception, JsonProcessingException.class) >= 0) {
+					this.keyValueService.delete(key);
+				}
+				else {
+					throw exception;
+				}
+			}
+		}
+	}
+
+	/**
+	 * Cleans old batches.
+	 *
+	 * @param  sync              If the deletion should be synchronous.
+	 * @throws BusinessException If the batches cannot be cleaned.
+	 */
+	@Transactional(
+			propagation = Propagation.NOT_SUPPORTED,
+			readOnly = true
+	)
+	public void cleanAll(
+			final Boolean sync) throws BusinessException {
+		final List<KeyValue<Typable>> batchExecutors = this.keyValueService.findByKeyStart(BatchServiceComponent.BATCH_KEY_PREFIX);
+		for (final KeyValue<Typable> batchExecutor : batchExecutors) {
+			if (sync) {
+				this.deleteAsync(Map.of("key", batchExecutor.getKey(), "onlyIfShouldBeCleaned", false));
+			}
+			else {
+				this.queueDeleteAsync(batchExecutor.getKey(), false);
+			}
+		}
+	}
+
+	/**
+	 * Checks all batches (cleans old ones and rescues overdue ones).
+	 *
+	 * @throws BusinessException If the batches cannot be checked.
+	 */
+	@Scheduled(cron = "0 */5 * * * *")
+	@Transactional(
+			propagation = Propagation.NOT_SUPPORTED,
+			readOnly = true
+	)
+	public void checkAll() throws BusinessException {
+		final List<KeyValue<Typable>> batchExecutors = this.keyValueService.findByKeyStart(BatchServiceComponent.BATCH_KEY_PREFIX);
+		for (final KeyValue<Typable> batchExecutor : batchExecutors) {
+			try {
+				final BatchExecutor<?> batchExecutorValue = (BatchExecutor<?>) batchExecutor.getValue();
+				if ((batchExecutorValue != null)) {
+					// Deletes old batches.
+					if (batchExecutorValue.shouldBeCleaned()) {
+						this.queueDeleteAsync(batchExecutor.getKey(), true);
+					}
+					// Rescues overdue batches (only if past their scheduled start, to avoid replacing valid pending scheduled messages).
+					else if ((batchExecutorValue.getNextBatchStartingAt() != null)
+							&& !batchExecutorValue.getNextBatchStartingAt().isAfter(DateTimeHelper.getCurrentLocalDateTime())) {
+						this.queueResumeAsync(batchExecutorValue.getKeySuffix(), batchExecutorValue.getNextBatchStartingAt());
+					}
+				}
+			}
+			catch (final Exception exception) {
+				if (ExceptionUtils.indexOfType(exception, JsonProcessingException.class) >= 0) {
+					this.queueDeleteAsync(batchExecutor.getKey(), false);
+				}
+				else {
+					throw exception;
+				}
+			}
+		}
+	}
+
+}
