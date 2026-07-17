@@ -5,6 +5,7 @@ import java.util.Set;
 
 import org.apache.activemq.artemis.jms.client.ActiveMQDestination;
 import org.apache.commons.collections4.EnumerationUtils;
+import org.coldis.library.helper.DateTimeHelper;
 import org.coldis.library.model.RetriableIn;
 import org.coldis.library.thread.ThreadMapContextHolder;
 import org.slf4j.Logger;
@@ -41,12 +42,19 @@ public class ExtendedMessagingMessageListenerAdapter extends MessagingMessageLis
 	private final Collection<Class<?>> nonRetriableExceptions;
 
 	/**
+	 * Stale message filter service (may be null when unavailable).
+	 */
+	private final StaleMessageFilterService staleMessageFilterService;
+
+	/**
 	 * Default constructor.
 	 */
-	public ExtendedMessagingMessageListenerAdapter(final JmsConverterProperties jmsConverterProperties, final Collection<Class<?>> nonRetriableExceptions) {
+	public ExtendedMessagingMessageListenerAdapter(final JmsConverterProperties jmsConverterProperties, final Collection<Class<?>> nonRetriableExceptions,
+			final StaleMessageFilterService staleMessageFilterService) {
 		super();
 		this.jmsConverterProperties = jmsConverterProperties;
 		this.nonRetriableExceptions = (nonRetriableExceptions == null ? Set.of() : Set.copyOf(nonRetriableExceptions));
+		this.staleMessageFilterService = staleMessageFilterService;
 	}
 
 	/**
@@ -69,6 +77,79 @@ public class ExtendedMessagingMessageListenerAdapter extends MessagingMessageLis
 	}
 
 	/**
+	 * Resolves when the message was posted (wall-clock epoch millis): the
+	 * explicit override property, the scheduled delivery time (a delayed message
+	 * only becomes current at its scheduled time) or the JMS timestamp.
+	 *
+	 * @return When the message was posted, or null when unknown (fail-open).
+	 */
+	private Long getStaleFilterPostedAt(
+			final Message message) throws JMSException {
+		Long postedAt = null;
+		if (message.propertyExists(JmsMessage.STALE_FILTER_POSTED_AT_PROPERTY)) {
+			postedAt = message.getLongProperty(JmsMessage.STALE_FILTER_POSTED_AT_PROPERTY);
+		}
+		else if (message.propertyExists(org.apache.activemq.artemis.api.core.Message.HDR_SCHEDULED_DELIVERY_TIME.toString())) {
+			postedAt = message.getLongProperty(org.apache.activemq.artemis.api.core.Message.HDR_SCHEDULED_DELIVERY_TIME.toString());
+		}
+		else if (message.getJMSTimestamp() > 0) {
+			postedAt = message.getJMSTimestamp();
+		}
+		return postedAt;
+	}
+
+	/**
+	 * Checks if the message carries a stale filter key and a same-key message
+	 * started successful processing after this one was posted (in which case the
+	 * processing already reflected the state that originated this message and it
+	 * can be dropped). Fails open on any error.
+	 */
+	private boolean isSupersededByNewerProcessing(
+			final Message message) {
+		boolean superseded = false;
+		if ((this.staleMessageFilterService != null) && this.staleMessageFilterService.isEnabled()) {
+			try {
+				if (message.propertyExists(JmsMessage.STALE_FILTER_KEY_PROPERTY)) {
+					final Long postedAt = this.getStaleFilterPostedAt(message);
+					if (postedAt != null) {
+						final String destination = ((ActiveMQDestination) message.getJMSDestination()).getAddress();
+						superseded = this.staleMessageFilterService.hasNewerProcessing(destination,
+								message.getStringProperty(JmsMessage.STALE_FILTER_KEY_PROPERTY), postedAt);
+					}
+				}
+			}
+			catch (final JMSException exception) {
+				ExtendedMessagingMessageListenerAdapter.LOGGER.debug("Stale message filter check failed (processing the message).", exception);
+			}
+		}
+		return superseded;
+	}
+
+	/**
+	 * Records that a message with a stale filter key started successful
+	 * processing.
+	 *
+	 * @param processingStartTimestamp When the processing started (wall-clock
+	 *                                     epoch millis).
+	 */
+	private void recordStaleFilterProcessing(
+			final Message message,
+			final long processingStartTimestamp) {
+		if ((this.staleMessageFilterService != null) && this.staleMessageFilterService.isEnabled()) {
+			try {
+				if (message.propertyExists(JmsMessage.STALE_FILTER_KEY_PROPERTY)) {
+					final String destination = ((ActiveMQDestination) message.getJMSDestination()).getAddress();
+					this.staleMessageFilterService.recordProcessing(destination, message.getStringProperty(JmsMessage.STALE_FILTER_KEY_PROPERTY),
+							processingStartTimestamp);
+				}
+			}
+			catch (final JMSException exception) {
+				ExtendedMessagingMessageListenerAdapter.LOGGER.debug("Stale message filter processing record failed.", exception);
+			}
+		}
+	}
+
+	/**
 	 * @see org.springframework.jms.listener.adapter.MessagingMessageListenerAdapter#onMessage(jakarta.jms.Message,
 	 *      jakarta.jms.Session)
 	 */
@@ -79,11 +160,23 @@ public class ExtendedMessagingMessageListenerAdapter extends MessagingMessageLis
 		// Tries to process the message.
 		try {
 
-			// Validates async hops.
-			this.validateAsyncHops(message);
+			// Drops (acknowledges without processing) messages superseded by a newer
+			// same-key processing.
+			if (this.isSupersededByNewerProcessing(message)) {
+				ExtendedMessagingMessageListenerAdapter.LOGGER.debug("Dropping stale message superseded by a newer same-key processing.");
+			}
+			else {
 
-			// Processes the message.
-			super.onMessage(message, session);
+				// Validates async hops.
+				this.validateAsyncHops(message);
+
+				// Processes the message. The JMS timestamp is producer wall-clock: the
+				// clock skew margin absorbs small divergences from the local clock.
+				final long processingStartTimestamp = DateTimeHelper.toTimestamp(DateTimeHelper.getCurrentLocalDateTime());
+				super.onMessage(message, session);
+				this.recordStaleFilterProcessing(message, processingStartTimestamp);
+
+			}
 
 		}
 		// Sends messages with async hops exceeded to a new specific queue.

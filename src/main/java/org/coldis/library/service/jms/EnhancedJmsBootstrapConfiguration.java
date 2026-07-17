@@ -4,6 +4,7 @@ import java.util.List;
 
 import org.apache.commons.lang3.ClassUtils;
 import org.springframework.beans.BeansException;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.beans.factory.config.BeanDefinition;
 import org.springframework.beans.factory.support.BeanDefinitionRegistry;
@@ -43,6 +44,7 @@ public class EnhancedJmsBootstrapConfiguration implements BeanDefinitionRegistry
 	@Role(BeanDefinition.ROLE_INFRASTRUCTURE)
 	public JmsListenerAnnotationBeanPostProcessor enhancedJmsListenerAnnotationProcessor(
 			final JmsConverterProperties jmsConverterProperties,
+			final ObjectProvider<StaleMessageFilterService> staleMessageFilterServiceProvider,
 			@Value(value = "#{'${org.coldis.library.service.jms.non-retriable-exceptions:}'.split(',')}")
 			List<String> nonRetriableExceptionsNames) {
 		return new JmsListenerAnnotationBeanPostProcessor() {
@@ -61,7 +63,8 @@ public class EnhancedJmsBootstrapConfiguration implements BeanDefinitionRegistry
 					@Override
 					protected MessagingMessageListenerAdapter createMessageListenerInstance() {
 						List<Class<?>> nonRetriableExceptions = ClassUtils.convertClassNamesToClasses(nonRetriableExceptionsNames);
-						return new ExtendedMessagingMessageListenerAdapter(jmsConverterProperties, nonRetriableExceptions);
+						return new ExtendedMessagingMessageListenerAdapter(jmsConverterProperties, nonRetriableExceptions,
+								staleMessageFilterServiceProvider.getIfAvailable());
 					}
 				};
 			}
