@@ -79,6 +79,25 @@ public class BatchExecutorUnitTest {
 		Assertions.assertEquals(200L, excessiveMarginExecutor.getTargetFinishWithin().toMillis());
 	}
 
+	/** Tests that safety margins keep at most 4 decimal places, whatever the input scale. */
+	@Test
+	@DisplayName("margins keep at most 4 decimal places; extreme scales are bounded without exact arithmetic")
+	public void testSafetyMarginScale() {
+		final BatchExecutor<BatchObject> roundedMarginExecutor = this.createAdaptiveExecutor();
+		roundedMarginExecutor.setSafetyMarginPercentage(new BigDecimal("12.345678"));
+		Assertions.assertEquals(new BigDecimal("12.3457"), roundedMarginExecutor.getSafetyMarginPercentage());
+
+		final BatchExecutor<BatchObject> tinyMarginExecutor = this.createAdaptiveExecutor();
+		tinyMarginExecutor.setSafetyMarginPercentage(new BigDecimal("1E-999999999"));
+		Assertions.assertEquals(0, BigDecimal.ZERO.compareTo(tinyMarginExecutor.getSafetyMarginPercentage()));
+		Assertions.assertEquals(20000L, tinyMarginExecutor.getTargetFinishWithin().toMillis());
+
+		final BatchExecutor<BatchObject> hugeMarginExecutor = this.createAdaptiveExecutor();
+		hugeMarginExecutor.setSafetyMarginPercentage(new BigDecimal("1E+999999999"));
+		Assertions.assertEquals(0, BigDecimal.valueOf(99).compareTo(hugeMarginExecutor.getSafetyMarginPercentage()));
+		Assertions.assertEquals(200L, hugeMarginExecutor.getTargetFinishWithin().toMillis());
+	}
+
 	/** Tests that fixed-rate executors have no adaptive target. */
 	@Test
 	@DisplayName("fixed-rate executors have no adaptive target")

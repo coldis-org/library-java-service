@@ -54,6 +54,11 @@ public class BatchExecutor<Type> implements Typable {
 	public static final BigDecimal MAXIMUM_SAFETY_MARGIN_PERCENTAGE = BigDecimal.valueOf(99);
 
 	/**
+	 * Maximum safety margin percentage scale (decimal places kept).
+	 */
+	public static final int MAXIMUM_SAFETY_MARGIN_SCALE = 4;
+
+	/**
 	 * Object mapper.
 	 */
 	public static final ObjectMapper OBJECT_MAPPER;
@@ -448,14 +453,35 @@ public class BatchExecutor<Type> implements Typable {
 	}
 
 	/**
-	 * Sets the safetyMarginPercentage, bounded to [0, 99] so the stored value is the one pacing uses.
+	 * Bounds a safety margin percentage to [0, 99] with at most {@link #MAXIMUM_SAFETY_MARGIN_SCALE}
+	 * decimal places. Values below the last kept decimal place become zero without being rescaled, so
+	 * an input with a huge scale (such as {@code 1E-999999999}) never reaches exact arithmetic.
+	 *
+	 * @param  safetyMarginPercentage Safety margin percentage.
+	 * @return                        The bounded safety margin percentage.
+	 */
+	private static BigDecimal boundSafetyMarginPercentage(
+			final BigDecimal safetyMarginPercentage) {
+		BigDecimal boundedSafetyMarginPercentage = safetyMarginPercentage.max(BigDecimal.ZERO).min(BatchExecutor.MAXIMUM_SAFETY_MARGIN_PERCENTAGE);
+		// Precision minus scale is the number of integer digits (negative for leading fraction zeros).
+		if ((boundedSafetyMarginPercentage.precision() - boundedSafetyMarginPercentage.scale()) <= -BatchExecutor.MAXIMUM_SAFETY_MARGIN_SCALE) {
+			boundedSafetyMarginPercentage = BigDecimal.ZERO;
+		}
+		else if (boundedSafetyMarginPercentage.scale() > BatchExecutor.MAXIMUM_SAFETY_MARGIN_SCALE) {
+			boundedSafetyMarginPercentage = boundedSafetyMarginPercentage.setScale(BatchExecutor.MAXIMUM_SAFETY_MARGIN_SCALE, RoundingMode.HALF_UP);
+		}
+		return boundedSafetyMarginPercentage;
+	}
+
+	/**
+	 * Sets the safetyMarginPercentage, bounded to [0, 99] with at most 4 decimal places so the stored
+	 * value is the one pacing uses.
 	 *
 	 * @param safetyMarginPercentage New safetyMarginPercentage (0 to disable, null for the default).
 	 */
 	public void setSafetyMarginPercentage(
 			final BigDecimal safetyMarginPercentage) {
-		this.safetyMarginPercentage = (safetyMarginPercentage == null ? null
-				: safetyMarginPercentage.max(BigDecimal.ZERO).min(BatchExecutor.MAXIMUM_SAFETY_MARGIN_PERCENTAGE));
+		this.safetyMarginPercentage = (safetyMarginPercentage == null ? null : BatchExecutor.boundSafetyMarginPercentage(safetyMarginPercentage));
 	}
 
 	/**
@@ -468,8 +494,9 @@ public class BatchExecutor<Type> implements Typable {
 	public Duration getTargetFinishWithin() {
 		Duration targetFinishWithin = null;
 		if (this.getTryToFinishWithin() != null) {
-			final BigDecimal targetShare = BigDecimal.ONE.subtract(this.getSafetyMarginPercentage().divide(BigDecimal.valueOf(100), MathContext.DECIMAL64));
-			targetFinishWithin = Duration.ofMillis(BigDecimal.valueOf(this.getTryToFinishWithin().toMillis()).multiply(targetShare)
+			final BigDecimal targetShare = BigDecimal.ONE
+					.subtract(this.getSafetyMarginPercentage().divide(BigDecimal.valueOf(100), MathContext.DECIMAL64), MathContext.DECIMAL64);
+			targetFinishWithin = Duration.ofMillis(BigDecimal.valueOf(this.getTryToFinishWithin().toMillis()).multiply(targetShare, MathContext.DECIMAL64)
 					.setScale(0, RoundingMode.HALF_UP).longValueExact());
 		}
 		return targetFinishWithin;
