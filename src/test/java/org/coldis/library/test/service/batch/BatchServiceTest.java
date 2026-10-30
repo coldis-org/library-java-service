@@ -416,11 +416,12 @@ public class BatchServiceTest extends ContainerTestHelper {
 		Assertions.assertNotNull(batchRecord.getLastFinishedAt());
 		Assertions.assertTrue(batchRecord.isFinished());
 
-		// Validates the batch was finished close enough to specified time. Tolerance is generous
+		// Validates the batch was finished close enough to the target time (tryToFinishWithin minus
+		// the default 10% safety margin). Tolerance is generous
 		// (1 s) because the assertion runs against wall-clock differences on machines that may be
 		// busy with parallel testcontainers — the original 150 ms bound was flaky in CI/release.
 		final Long absoluteMillisDifferenceFromExpected = Math.abs(
-				batchRecord.getLastStartedAt().until(batchRecord.getLastFinishedAt(), ChronoUnit.MILLIS) - testBatchExecutor.getTryToFinishWithin().toMillis());
+				batchRecord.getLastStartedAt().until(batchRecord.getLastFinishedAt(), ChronoUnit.MILLIS) - testBatchExecutor.getTargetFinishWithin().toMillis());
 		Assertions.assertTrue(absoluteMillisDifferenceFromExpected < 1000,
 				"expected batch finish within 1000 ms of target, drifted by " + absoluteMillisDifferenceFromExpected + " ms");
 

@@ -75,6 +75,12 @@ public class BatchExecutor<Type> implements Typable {
 	private Duration tryToFinishWithin;
 
 	/**
+	 * Safety margin (percentage of {@link #tryToFinishWithin}) by which adaptive pacing aims to finish
+	 * ahead of the target. Defaults to 10% if not set.
+	 */
+	private Double safetyMarginPercentage;
+
+	/**
 	 * Delay to add between runs.
 	 */
 	private Duration delayBetweenRuns;
@@ -415,6 +421,43 @@ public class BatchExecutor<Type> implements Typable {
 	public void setTryToFinishWithin(
 			final Duration tryToFinishWithin) {
 		this.tryToFinishWithin = tryToFinishWithin;
+	}
+
+	/**
+	 * Gets the safetyMarginPercentage.
+	 *
+	 * @return The safetyMarginPercentage.
+	 */
+	@JsonView({ ModelView.Persistent.class, ModelView.Public.class })
+	public Double getSafetyMarginPercentage() {
+		this.safetyMarginPercentage = Objects.requireNonNullElse(this.safetyMarginPercentage, 10D);
+		return this.safetyMarginPercentage;
+	}
+
+	/**
+	 * Sets the safetyMarginPercentage.
+	 *
+	 * @param safetyMarginPercentage New safetyMarginPercentage (0 to disable, must be lower than 100).
+	 */
+	public void setSafetyMarginPercentage(
+			final Double safetyMarginPercentage) {
+		this.safetyMarginPercentage = safetyMarginPercentage;
+	}
+
+	/**
+	 * Gets the target used by adaptive pacing: {@link #tryToFinishWithin} reduced by
+	 * {@link #safetyMarginPercentage}, so the batch runs slightly faster than strictly estimated.
+	 *
+	 * @return The target finish duration (null in fixed-rate mode).
+	 */
+	@JsonView({ ModelView.Persistent.class, ModelView.Public.class })
+	public Duration getTargetFinishWithin() {
+		Duration targetFinishWithin = null;
+		if (this.getTryToFinishWithin() != null) {
+			final double boundedSafetyMarginPercentage = Math.min(99D, Math.max(0D, this.getSafetyMarginPercentage()));
+			targetFinishWithin = Duration.ofMillis(Math.round(this.getTryToFinishWithin().toMillis() * (1D - (boundedSafetyMarginPercentage / 100D))));
+		}
+		return targetFinishWithin;
 	}
 
 	/**
@@ -877,7 +920,7 @@ public class BatchExecutor<Type> implements Typable {
 		Duration actualDelayBetweenRuns = this.getDelayBetweenRuns();
 		if (this.getTryToFinishWithin() != null) {
 			final Duration timeSinceStarted = Duration.between(this.getLastStartedAt(), DateTimeHelper.getCurrentLocalDateTime());
-			final Duration timeUntilFinishTarget = this.getTryToFinishWithin().minus(timeSinceStarted);
+			final Duration timeUntilFinishTarget = this.getTargetFinishWithin().minus(timeSinceStarted);
 			if ((this.getExpectedCount() != null) && (this.getExpectedCount() > 0) && (this.getLastProcessedCount() != null)) {
 				final long expectedLeftCount = this.getExpectedCount() - this.getLastProcessedCount();
 				// Roundup to avoid underestimating batches (truncation inflates delay).
@@ -974,7 +1017,7 @@ public class BatchExecutor<Type> implements Typable {
 		return Objects.hash(this.actionBeanName, this.actionDelegateMethods, this.arguments, this.cleansWithin, this.delayBetweenRuns, this.minDelayBetweenRuns, this.expectedCount,
 				this.finishWithin, this.itemTypeName, this.keySuffix, this.lastBatchFinishedAt, this.lastBatchStartedAt, this.lastCancelledAt,
 				this.lastFinishedAt, this.lastProcessed, this.lastProcessedCount, this.lastStartedAt, this.lastTotalProcessingTime, this.messagesTemplates,
-				this.size, this.slackChannels, this.tryToFinishWithin);
+				this.safetyMarginPercentage, this.size, this.slackChannels, this.tryToFinishWithin);
 	}
 
 	/**
@@ -999,7 +1042,8 @@ public class BatchExecutor<Type> implements Typable {
 				&& Objects.equals(this.lastFinishedAt, other.lastFinishedAt) && Objects.equals(this.lastProcessed, other.lastProcessed)
 				&& Objects.equals(this.lastProcessedCount, other.lastProcessedCount) && Objects.equals(this.lastStartedAt, other.lastStartedAt)
 				&& Objects.equals(this.lastTotalProcessingTime, other.lastTotalProcessingTime)
-				&& Objects.equals(this.messagesTemplates, other.messagesTemplates) && Objects.equals(this.size, other.size)
+				&& Objects.equals(this.messagesTemplates, other.messagesTemplates) && Objects.equals(this.safetyMarginPercentage, other.safetyMarginPercentage)
+				&& Objects.equals(this.size, other.size)
 				&& Objects.equals(this.slackChannels, other.slackChannels) && Objects.equals(this.tryToFinishWithin, other.tryToFinishWithin);
 	}
 
