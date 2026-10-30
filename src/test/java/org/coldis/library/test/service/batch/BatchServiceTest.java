@@ -24,6 +24,7 @@ import org.coldis.library.test.service.ContainerTestHelper;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -431,6 +432,7 @@ public class BatchServiceTest extends ContainerTestHelper {
 	/** Tests that a custom safety margin is persisted and drives the batch pacing. */
 	@Test
 	@SuppressWarnings("unchecked")
+	@DisplayName("custom 25% safety margin is persisted and the batch finishes ~15 s into a 20 s target")
 	public void testBatchWithExpectedSizeAndCustomSafetyMargin() throws Exception {
 
 		// Starts the batch aiming to finish 25% ahead of the 20 seconds target.
