@@ -16,8 +16,12 @@ import org.apache.activemq.artemis.jms.client.ActiveMQConnectionFactory;
 import org.apache.activemq.artemis.spi.core.protocol.RemotingConnection;
 import org.coldis.library.helper.ReflectionHelper;
 import org.coldis.library.service.jms.MeteredJmsPoolConnectionFactory;
+import org.coldis.library.test.StartTestWithContainerExtension;
+import org.coldis.library.test.TestWithContainer;
+import org.coldis.library.test.service.ContainerTestHelper;
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
 import org.messaginghub.pooled.jms.JmsPoolConnection;
 import org.springframework.boot.autoconfigure.jms.JmsPoolConnectionFactoryProperties;
 
@@ -46,8 +50,15 @@ import jakarta.jms.Session;
  *
  * The default broker URL query disables topology based selection for that reason. The first test
  * guards the query; the second documents why it is needed, so the flag is not dropped as noise.
+ *
+ * The test runs its own embedded brokers and does not use the shared containers, but it holds them
+ * anyway: it runs for longer than the containers' stop delay, and with no class referencing them the
+ * containers of its fork would stop, leaving the next classes with a cached Spring context that
+ * points at the old container ports.
  */
-public class ArtemisBrokerAddressChangeTest {
+@TestWithContainer(reuse = true)
+@ExtendWith(StartTestWithContainerExtension.class)
+public class ArtemisBrokerAddressChangeTest extends ContainerTestHelper {
 
 	/** Pooled connections opened against the first broker. */
 	private static final int CONNECTIONS = 4;
