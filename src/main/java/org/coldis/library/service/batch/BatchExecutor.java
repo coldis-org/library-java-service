@@ -1,5 +1,8 @@
 package org.coldis.library.service.batch;
 
+import java.math.BigDecimal;
+import java.math.MathContext;
+import java.math.RoundingMode;
 import java.time.Duration;
 import java.time.LocalDateTime;
 import java.util.HashMap;
@@ -41,6 +44,16 @@ public class BatchExecutor<Type> implements Typable {
 	public static final String TYPE_NAME = "org.coldis.library.service.batch.BatchExecutor";
 
 	/**
+	 * Default safety margin percentage.
+	 */
+	public static final BigDecimal DEFAULT_SAFETY_MARGIN_PERCENTAGE = BigDecimal.TEN;
+
+	/**
+	 * Maximum safety margin percentage (100% would leave no time to finish).
+	 */
+	public static final BigDecimal MAXIMUM_SAFETY_MARGIN_PERCENTAGE = BigDecimal.valueOf(99);
+
+	/**
 	 * Object mapper.
 	 */
 	public static final ObjectMapper OBJECT_MAPPER;
@@ -76,9 +89,9 @@ public class BatchExecutor<Type> implements Typable {
 
 	/**
 	 * Safety margin (percentage of {@link #tryToFinishWithin}) by which adaptive pacing aims to finish
-	 * ahead of the target. Defaults to 10% if not set.
+	 * ahead of the target. Defaults to 10% if not set, bounded to [0, 99].
 	 */
-	private Double safetyMarginPercentage;
+	private BigDecimal safetyMarginPercentage;
 
 	/**
 	 * Delay to add between runs.
@@ -429,19 +442,20 @@ public class BatchExecutor<Type> implements Typable {
 	 * @return The safetyMarginPercentage.
 	 */
 	@JsonView({ ModelView.Persistent.class, ModelView.Public.class })
-	public Double getSafetyMarginPercentage() {
-		this.safetyMarginPercentage = Objects.requireNonNullElse(this.safetyMarginPercentage, 10D);
+	public BigDecimal getSafetyMarginPercentage() {
+		this.safetyMarginPercentage = Objects.requireNonNullElse(this.safetyMarginPercentage, BatchExecutor.DEFAULT_SAFETY_MARGIN_PERCENTAGE);
 		return this.safetyMarginPercentage;
 	}
 
 	/**
-	 * Sets the safetyMarginPercentage.
+	 * Sets the safetyMarginPercentage, bounded to [0, 99] so the stored value is the one pacing uses.
 	 *
-	 * @param safetyMarginPercentage New safetyMarginPercentage (0 to disable, must be lower than 100).
+	 * @param safetyMarginPercentage New safetyMarginPercentage (0 to disable, null for the default).
 	 */
 	public void setSafetyMarginPercentage(
-			final Double safetyMarginPercentage) {
-		this.safetyMarginPercentage = safetyMarginPercentage;
+			final BigDecimal safetyMarginPercentage) {
+		this.safetyMarginPercentage = (safetyMarginPercentage == null ? null
+				: safetyMarginPercentage.max(BigDecimal.ZERO).min(BatchExecutor.MAXIMUM_SAFETY_MARGIN_PERCENTAGE));
 	}
 
 	/**
@@ -454,8 +468,9 @@ public class BatchExecutor<Type> implements Typable {
 	public Duration getTargetFinishWithin() {
 		Duration targetFinishWithin = null;
 		if (this.getTryToFinishWithin() != null) {
-			final double boundedSafetyMarginPercentage = Math.min(99D, Math.max(0D, this.getSafetyMarginPercentage()));
-			targetFinishWithin = Duration.ofMillis(Math.round(this.getTryToFinishWithin().toMillis() * (1D - (boundedSafetyMarginPercentage / 100D))));
+			final BigDecimal targetShare = BigDecimal.ONE.subtract(this.getSafetyMarginPercentage().divide(BigDecimal.valueOf(100), MathContext.DECIMAL64));
+			targetFinishWithin = Duration.ofMillis(BigDecimal.valueOf(this.getTryToFinishWithin().toMillis()).multiply(targetShare)
+					.setScale(0, RoundingMode.HALF_UP).longValueExact());
 		}
 		return targetFinishWithin;
 	}

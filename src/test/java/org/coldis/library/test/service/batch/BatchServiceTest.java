@@ -421,7 +421,7 @@ public class BatchServiceTest extends ContainerTestHelper {
 		// (1 s) because the assertion runs against wall-clock differences on machines that may be
 		// busy with parallel testcontainers — the original 150 ms bound was flaky in CI/release.
 		final Long absoluteMillisDifferenceFromExpected = Math.abs(
-				batchRecord.getLastStartedAt().until(batchRecord.getLastFinishedAt(), ChronoUnit.MILLIS) - testBatchExecutor.getTargetFinishWithin().toMillis());
+				batchRecord.getLastStartedAt().until(batchRecord.getLastFinishedAt(), ChronoUnit.MILLIS) - ((testBatchExecutor.getTryToFinishWithin().toMillis() * 9L) / 10L));
 		Assertions.assertTrue(absoluteMillisDifferenceFromExpected < 1000,
 				"expected batch finish within 1000 ms of target, drifted by " + absoluteMillisDifferenceFromExpected + " ms");
 
