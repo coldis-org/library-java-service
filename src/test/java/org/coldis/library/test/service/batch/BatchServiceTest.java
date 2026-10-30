@@ -1,5 +1,6 @@
 package org.coldis.library.test.service.batch;
 
+import java.math.BigDecimal;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.LocalDateTime;
@@ -422,6 +423,42 @@ public class BatchServiceTest extends ContainerTestHelper {
 		// busy with parallel testcontainers — the original 150 ms bound was flaky in CI/release.
 		final Long absoluteMillisDifferenceFromExpected = Math.abs(
 				batchRecord.getLastStartedAt().until(batchRecord.getLastFinishedAt(), ChronoUnit.MILLIS) - ((testBatchExecutor.getTryToFinishWithin().toMillis() * 9L) / 10L));
+		Assertions.assertTrue(absoluteMillisDifferenceFromExpected < 1000,
+				"expected batch finish within 1000 ms of target, drifted by " + absoluteMillisDifferenceFromExpected + " ms");
+
+	}
+
+	/** Tests that a custom safety margin is persisted and drives the batch pacing. */
+	@Test
+	@SuppressWarnings("unchecked")
+	public void testBatchWithExpectedSizeAndCustomSafetyMargin() throws Exception {
+
+		// Starts the batch aiming to finish 25% ahead of the 20 seconds target.
+		final BatchExecutor<BatchObject> testBatchExecutor = BatchExecutor.withAdaptiveRate(BatchObject.class, "testBatchCustomSafetyMargin", 10L,
+				Duration.ofSeconds(20), Duration.ofMillis(100), "batchTestService", null, null);
+		testBatchExecutor.setExpectedCount(100L);
+		testBatchExecutor.setSafetyMarginPercentage(BigDecimal.valueOf(25));
+		final String batchKey = this.batchServiceComponent.getKey(testBatchExecutor.getKeySuffix());
+		this.batchService.start(testBatchExecutor, false, false);
+
+		// Waits until batch is finished.
+		TestHelper.waitUntilValid(() -> {
+			try {
+				return (BatchExecutor<BatchObject>) this.keyValueService.findById(batchKey, LockBehavior.NO_LOCK, false).getValue();
+			}
+			catch (final BusinessException exception) {
+				return null;
+			}
+		}, record -> (record != null) && (record.getLastFinishedAt() != null),
+				((Long) testBatchExecutor.getTryToFinishWithin().plusSeconds(1L).toMillis()).intValue(), TestHelper.VERY_SHORT_WAIT);
+		final BatchExecutor<BatchObject> batchRecord = (BatchExecutor<BatchObject>) this.keyValueService.findById(batchKey, LockBehavior.NO_LOCK, false)
+				.getValue();
+		Assertions.assertTrue(batchRecord.isFinished());
+		Assertions.assertEquals(0, BigDecimal.valueOf(25).compareTo(batchRecord.getSafetyMarginPercentage()));
+
+		// Validates the batch was finished close enough to 15 seconds (20 seconds minus 25%).
+		final Long absoluteMillisDifferenceFromExpected = Math
+				.abs(batchRecord.getLastStartedAt().until(batchRecord.getLastFinishedAt(), ChronoUnit.MILLIS) - 15000L);
 		Assertions.assertTrue(absoluteMillisDifferenceFromExpected < 1000,
 				"expected batch finish within 1000 ms of target, drifted by " + absoluteMillisDifferenceFromExpected + " ms");
 
