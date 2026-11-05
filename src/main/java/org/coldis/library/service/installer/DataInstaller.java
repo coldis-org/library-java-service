@@ -1,8 +1,11 @@
 package org.coldis.library.service.installer;
 
 import java.nio.charset.Charset;
+import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collection;
 import java.util.Comparator;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ArrayBlockingQueue;
@@ -69,6 +72,18 @@ public class DataInstaller implements ApplicationListener<ApplicationReadyEvent>
 	 * Resource pattern.
 	 */
 	private static final String PROPERTY_PATTERN = "\\$\\{property:([^\\}]*)\\}";
+
+	/**
+	 * Mask that replaces credential values in logged data objects.
+	 */
+	public static final String CREDENTIAL_MASK = "******";
+
+	/**
+	 * Pattern (case-insensitive, matched anywhere in the key) for data object keys
+	 * whose values are credentials and must never be logged.
+	 */
+	private static final Pattern CREDENTIAL_KEY_PATTERN = Pattern.compile(
+			"password|secret|token|credential|api[-_]?key|private[-_]?key|authorization", Pattern.CASE_INSENSITIVE);
 
 	/**
 	 * Rule thread pool.
@@ -235,6 +250,59 @@ public class DataInstaller implements ApplicationListener<ApplicationReadyEvent>
 	}
 
 	/**
+	 * Masks credentials in a data object, recursively. Every value (including
+	 * nested maps and lists) whose key looks like a credential (see
+	 * {@link #CREDENTIAL_KEY_PATTERN}) is replaced by {@link #CREDENTIAL_MASK}.
+	 * Other values are kept, so the log still tells which object it is. The
+	 * original object is not changed.
+	 *
+	 * @param  value Value (map, collection, array or plain value).
+	 * @return       A copy of the value with credentials masked.
+	 */
+	private static Object maskCredentials(
+			final Object value) {
+		Object maskedValue = value;
+		// If the value is a map, masks credential keys and goes into the other values.
+		if (value instanceof Map) {
+			final Map<Object, Object> maskedMap = new LinkedHashMap<>();
+			for (final Map.Entry<?, ?> entry : ((Map<?, ?>) value).entrySet()) {
+				final boolean credentialKey = (entry.getKey() != null) && DataInstaller.CREDENTIAL_KEY_PATTERN.matcher(entry.getKey().toString()).find();
+				maskedMap.put(entry.getKey(), credentialKey ? (entry.getValue() == null ? null : DataInstaller.CREDENTIAL_MASK)
+						: DataInstaller.maskCredentials(entry.getValue()));
+			}
+			maskedValue = maskedMap;
+		}
+		// If the value is a collection, masks each item.
+		else if (value instanceof Collection) {
+			final List<Object> maskedList = new ArrayList<>();
+			for (final Object item : (Collection<?>) value) {
+				maskedList.add(DataInstaller.maskCredentials(item));
+			}
+			maskedValue = maskedList;
+		}
+		// If the value is an object array, masks each item.
+		else if (value instanceof Object[]) {
+			final List<Object> maskedList = new ArrayList<>();
+			for (final Object item : (Object[]) value) {
+				maskedList.add(DataInstaller.maskCredentials(item));
+			}
+			maskedValue = maskedList;
+		}
+		return maskedValue;
+	}
+
+	/**
+	 * Serializes a data object for logging, with its credentials masked.
+	 *
+	 * @param  dataObject Data object.
+	 * @return            The serialized data object, safe to log.
+	 */
+	private String serializeForLog(
+			final Map<String, Object> dataObject) {
+		return ObjectMapperHelper.serialize(this.objectMapper, DataInstaller.maskCredentials(dataObject), ModelView.Public.class, true);
+	}
+
+	/**
 	 * Install data set.
 	 *
 	 * @param dataSetName     Data set name.
@@ -269,9 +337,7 @@ public class DataInstaller implements ApplicationListener<ApplicationReadyEvent>
 				// If the object does not exist.
 				catch (final Exception exception) {
 					// Logs it.
-					DataInstaller.LOGGER.debug(
-							"Object '" + ObjectMapperHelper.serialize(this.objectMapper, dataObject, ModelView.Public.class, true) + "' does not exist.",
-							exception);
+					DataInstaller.LOGGER.debug("Object '" + this.serializeForLog(dataObject) + "' does not exist.", exception);
 				}
 				// If the object does not exist.
 				if (existentDataObject == null) {
@@ -279,15 +345,13 @@ public class DataInstaller implements ApplicationListener<ApplicationReadyEvent>
 					try {
 						serviceClient.executeOperation(dataSetMetadata.getServiceOperationUrl(), HttpMethod.POST, null, dataObject, null,
 								new ParameterizedTypeReference<Void>() {});
-						DataInstaller.LOGGER
-								.debug("Object '" + ObjectMapperHelper.serialize(this.objectMapper, dataObject, ModelView.Public.class, true) + "' created.");
+						DataInstaller.LOGGER.debug("Object '" + this.serializeForLog(dataObject) + "' created.");
 						createdObjects++;
 					}
 					// If the object cannot be created.
 					catch (final Exception exception) {
 						// Logs it.
-						DataInstaller.LOGGER.error("Object '" + ObjectMapperHelper.serialize(this.objectMapper, dataObject, ModelView.Public.class, true)
-								+ "' could not be created.", exception);
+						DataInstaller.LOGGER.error("Object '" + this.serializeForLog(dataObject) + "' could not be created.", exception);
 						failedObjects++;
 					}
 				}
@@ -301,15 +365,13 @@ public class DataInstaller implements ApplicationListener<ApplicationReadyEvent>
 									this.getSearchOperationUrl(dataSetMetadata.getServiceOperationUrl(), dataSetMetadata.getIdPropertiesStrategy(),
 											dataSetMetadata.getIdProperties(), existentDataObject),
 									HttpMethod.PUT, null, dataObject, null, new ParameterizedTypeReference<Void>() {});
-							DataInstaller.LOGGER.debug(
-									"Object '" + ObjectMapperHelper.serialize(this.objectMapper, dataObject, ModelView.Public.class, true) + "' updated.");
+							DataInstaller.LOGGER.debug("Object '" + this.serializeForLog(dataObject) + "' updated.");
 							updatedObjects++;
 						}
 						// If the object cannot be updated.
 						catch (final Exception exception) {
 							// Logs it.
-							DataInstaller.LOGGER.error("Object '" + ObjectMapperHelper.serialize(this.objectMapper, dataObject, ModelView.Public.class, true)
-									+ "' could not be created.", exception);
+							DataInstaller.LOGGER.error("Object '" + this.serializeForLog(dataObject) + "' could not be updated.", exception);
 							failedObjects++;
 						}
 					}

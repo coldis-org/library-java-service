@@ -1,6 +1,7 @@
 package org.coldis.library.test.service.installer;
 
 import java.time.LocalDateTime;
+import java.util.List;
 import java.util.Objects;
 
 import org.apache.commons.lang3.ArrayUtils;
@@ -14,12 +15,19 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.context.SpringBootTest.WebEnvironment;
 import org.springframework.test.annotation.DirtiesContext;
 import org.springframework.transaction.annotation.Transactional;
 import org.testcontainers.containers.GenericContainer;
+
+import ch.qos.logback.classic.Level;
+import ch.qos.logback.classic.Logger;
+import ch.qos.logback.classic.spi.ILoggingEvent;
+import ch.qos.logback.classic.spi.IThrowableProxy;
+import ch.qos.logback.core.read.ListAppender;
 
 /**
  * Data installer test.
@@ -45,6 +53,17 @@ public class DataInstallerTest extends ContainerTestHelper {
 	 * Test data.
 	 */
 	public static final DataInstallerTestEntity[] ALL_DATA = ArrayUtils.addAll(DataInstallerTest.NON_UPDATABLE_DATA, DataInstallerTest.UPDATABLE_DATA);
+
+	/**
+	 * Credential values in the failing data set, which must never be logged.
+	 */
+	private static final List<String> CREDENTIAL_VALUES = List.of("plain-password-value", "header-token-value", "nested-secret-value",
+			"listed-api-key-value");
+
+	/**
+	 * Non-credential values in the failing data set, which must stay in the log.
+	 */
+	private static final List<String> KEPT_VALUES = List.of("kept-name", "kept-label", "kept-provider");
 
 	/**
 	 * Test repository.
@@ -158,6 +177,68 @@ public class DataInstallerTest extends ContainerTestHelper {
 			// Makes sure the created and updated date are different.
 			Assertions.assertTrue(persistedEntity.getCreatedAt().isBefore(timeOfInstallation));
 			Assertions.assertTrue(persistedEntity.getUpdatedAt().isBefore(timeOfInstallation));
+		}
+	}
+
+	/**
+	 * Gets the text a logging event prints: its message and the messages of its
+	 * exception chain.
+	 *
+	 * @param  event Logging event.
+	 * @return       The printed text.
+	 */
+	private String getPrintedText(
+			final ILoggingEvent event) {
+		final StringBuilder printedText = new StringBuilder(event.getFormattedMessage());
+		IThrowableProxy throwable = event.getThrowableProxy();
+		while (throwable != null) {
+			printedText.append(" ").append(throwable.getMessage());
+			throwable = throwable.getCause();
+		}
+		return printedText.toString();
+	}
+
+	/**
+	 * Tests that a failed installation logs the data object with its credentials
+	 * masked, including nested maps and lists.
+	 *
+	 * @throws Exception If the test fails.
+	 */
+	@Test
+	public void testFailedInstallationMasksCredentials() throws Exception {
+		// Captures the installer logs, debug included.
+		final Logger installerLogger = (Logger) LoggerFactory.getLogger(DataInstaller.class);
+		final Level originalLevel = installerLogger.getLevel();
+		final ListAppender<ILoggingEvent> appender = new ListAppender<>();
+		appender.start();
+		installerLogger.addAppender(appender);
+		installerLogger.setLevel(Level.DEBUG);
+		try {
+			// Installs the data set whose operation does not exist.
+			this.dataInstaller.install("data-set-3-credentials.json");
+			// The creation failure is logged with the object, credentials masked.
+			final List<ILoggingEvent> objectEvents = appender.list.stream()
+					.filter(event -> event.getFormattedMessage().startsWith("Object '")).toList();
+			Assertions.assertTrue(objectEvents.stream()
+					.anyMatch(event -> Level.ERROR.equals(event.getLevel()) && event.getFormattedMessage().endsWith("' could not be created.")));
+			Assertions.assertTrue(objectEvents.stream().anyMatch(event -> Level.DEBUG.equals(event.getLevel())));
+			for (final ILoggingEvent event : objectEvents) {
+				Assertions.assertTrue(event.getFormattedMessage().contains(DataInstaller.CREDENTIAL_MASK));
+				for (final String keptValue : DataInstallerTest.KEPT_VALUES) {
+					Assertions.assertTrue(event.getFormattedMessage().contains(keptValue), keptValue);
+				}
+			}
+			// No credential is printed anywhere, exceptions included.
+			for (final ILoggingEvent event : appender.list) {
+				final String printedText = this.getPrintedText(event);
+				for (final String credentialValue : DataInstallerTest.CREDENTIAL_VALUES) {
+					Assertions.assertFalse(printedText.contains(credentialValue), printedText);
+				}
+			}
+		}
+		finally {
+			installerLogger.setLevel(originalLevel);
+			installerLogger.detachAppender(appender);
 		}
 	}
 }
