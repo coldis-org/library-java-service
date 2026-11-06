@@ -4,15 +4,18 @@ import org.apache.fory.Fory;
 import org.apache.fory.config.CompatibleMode;
 import org.apache.fory.config.Language;
 import org.junit.jupiter.api.Assertions;
+import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
 /**
  * Serialization test.
  */
+@DisplayName("JMS DTO serialization")
 public class SerializationTest {
 
 	/** Tests the DTO serialization. */
 	@Test
+	@DisplayName("DTOs serialize and deserialize")
 	public void testDtoSerialization() throws Exception {
 		final DtoTestObject testObject = new DtoTestObject(1L, "2", "3", 4, new int[] { 5 }, 6);
 

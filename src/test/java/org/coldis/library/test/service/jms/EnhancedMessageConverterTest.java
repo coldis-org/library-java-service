@@ -13,18 +13,18 @@ import org.coldis.library.test.TestHelper;
 import org.coldis.library.test.TestWithContainer;
 import org.coldis.library.test.service.ContainerTestHelper;
 import org.coldis.library.thread.ThreadMapContextHolder;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.context.SpringBootTest.WebEnvironment;
-import org.springframework.jms.annotation.JmsListener;
 import org.springframework.jms.core.JmsTemplate;
-import org.springframework.test.annotation.DirtiesContext;
-import org.testcontainers.containers.GenericContainer;
+import org.springframework.jms.support.converter.MessageConversionException;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 
@@ -36,6 +36,7 @@ import jakarta.jms.Message;
 @TestWithContainer(reuse = true)
 @ExtendWith(StartTestWithContainerExtension.class)
 @SpringBootTest(webEnvironment = WebEnvironment.RANDOM_PORT)
+@DisplayName("Enhanced JMS message converter")
 public class EnhancedMessageConverterTest extends ContainerTestHelper {
 
 	/**
@@ -43,21 +44,6 @@ public class EnhancedMessageConverterTest extends ContainerTestHelper {
 	 */
 	private static final List<DtoTestObject> TEST_DATA = List.of(new DtoTestObject(1L, "2", "3", 4, new int[] { 5, 6 }, 7),
 			new DtoTestObject(2L, "3", "5", 5, new int[] { 6, 7 }, 8), new DtoTestObject(3L, "4", "5", 6, new int[] { 7, 8 }, 9));
-
-	/**
-	 * Async hops.
-	 */
-	public static Long asyncHops = 0L;
-
-	/**
-	 * Async hops message id.
-	 */
-	private Long asyncHopsMessageId;
-
-	/**
-	 * Current test message.
-	 */
-	private static Object currentTestMessage;
 
 	/**
 	 * JMS converter properties.
@@ -122,12 +108,11 @@ public class EnhancedMessageConverterTest extends ContainerTestHelper {
 	 * Sets up tests.
 	 */
 	@BeforeEach
-	public void setUp() {
+	public void beforeEach() {
 		this.originalMessageConverter = this.jmsTemplate.getMessageConverter();
 		this.originalMaximumAsyncHops = this.jmsConverterProperties.getMaximumAsyncHops();
 		this.originalTypePrecedence = this.jmsConverterProperties.getOriginalTypePrecedence();
-		EnhancedMessageConverterTest.currentTestMessage = null;
-		EnhancedMessageConverterTest.asyncHops = 0L;
+		EnhancedMessageConverterTestListener.resetCurrentTestMessage();
 		this.jmsTemplate.setMessageConverter(this.enhancedJmsMessageConverter);
 		this.enhancedJmsMessageConverter.clearPreferredClassesCache();
 		this.jmsConverterProperties.setMaximumAsyncHops(103L);
@@ -135,61 +120,11 @@ public class EnhancedMessageConverterTest extends ContainerTestHelper {
 	}
 
 	/** Resets shared singletons after each test. */
-	@org.junit.jupiter.api.AfterEach
-	public void tearDown() {
+	@AfterEach
+	public void afterEach() {
 		this.jmsTemplate.setMessageConverter(this.originalMessageConverter);
 		this.jmsConverterProperties.setMaximumAsyncHops(this.originalMaximumAsyncHops);
 		this.jmsConverterProperties.setOriginalTypePrecedence(this.originalTypePrecedence);
-	}
-
-	/**
-	 * Consumes a JMS test message.
-	 *
-	 * @param  message              Message.
-	 * @throws InterruptedException If the test fails.
-	 */
-	@JmsListener(
-			destination = "message/original",
-			concurrency = "100"
-	)
-	public void consumeOriginalMessage(
-			final DtoTestObject message) throws InterruptedException {
-		EnhancedMessageConverterTest.currentTestMessage = message;
-	}
-
-	/**
-	 * Consumes a JMS test message.
-	 *
-	 * @param  message              Message.
-	 * @throws InterruptedException If the test fails.
-	 */
-	@JmsListener(
-			destination = "message/dto",
-			concurrency = "100"
-	)
-	public void consumeDtoMessage(
-			final DtoTestObjectDto message) throws InterruptedException {
-		EnhancedMessageConverterTest.currentTestMessage = message;
-	}
-
-	/**
-	 * Consumes a JMS test message.
-	 *
-	 * @param  message              Message.
-	 * @throws InterruptedException If the test fails.
-	 */
-	@JmsListener(
-			containerFactory = "jmsListenerTopicContainerFactory",
-			destination = "message/loop",
-			subscription = "message/loop/test",
-			concurrency = "100"
-	)
-	public void consumeMessageLoop(
-			final DtoTestObject message) throws InterruptedException {
-		if (Objects.equals(this.asyncHopsMessageId, message.getId())) {
-			EnhancedMessageConverterTest.asyncHops++;
-		}
-		this.jmsTopicTemplate.convertAndSend("message/loop", message);
 	}
 
 	/**
@@ -198,15 +133,19 @@ public class EnhancedMessageConverterTest extends ContainerTestHelper {
 	 * @throws Exception If the test fails.
 	 */
 	@Test
+	@DisplayName("A message looping between listeners stops at exactly the maximum async hops")
 	public void testAsyncLoops() throws Exception {
-		for (int i = 0; i < 17; i++) {
-			EnhancedMessageConverterTest.asyncHops = 0L;
-			this.asyncHopsMessageId = RandomHelper.getPositiveRandomLong(Long.MAX_VALUE);
-			final DtoTestObject testMessage = new DtoTestObject(this.asyncHopsMessageId, "2", "3", 4, new int[] { 5, 6 }, 7);
-			this.jmsTopicTemplate.convertAndSend("message/loop", testMessage);
-			TestHelper.waitUntilValid(() -> EnhancedMessageConverterTest.asyncHops, asyncHops -> asyncHops > this.jmsConverterProperties.getMaximumAsyncHops(),
-					TestHelper.REGULAR_WAIT, TestHelper.SHORT_WAIT);
-			Assertions.assertEquals(this.jmsConverterProperties.getMaximumAsyncHops(), EnhancedMessageConverterTest.asyncHops);
+		final Long maximumAsyncHops = this.jmsConverterProperties.getMaximumAsyncHops();
+		for (int loopIteration = 0; loopIteration < 5; loopIteration++) {
+			final Long loopMessageIdentifier = RandomHelper.getPositiveRandomLong(Long.MAX_VALUE);
+			EnhancedMessageConverterTestListener.resetAsyncHops(loopMessageIdentifier);
+			this.jmsTopicTemplate.convertAndSend(EnhancedMessageConverterTestListener.LOOP_TOPIC,
+					new DtoTestObject(loopMessageIdentifier, "2", "3", 4, new int[] { 5, 6 }, 7));
+			Assertions.assertTrue(TestHelper.waitUntilValid(EnhancedMessageConverterTestListener::getAsyncHops, asyncHops -> asyncHops >= maximumAsyncHops,
+					TestHelper.LONG_WAIT, TestHelper.SHORT_WAIT));
+			Assertions.assertFalse(TestHelper.waitUntilValid(EnhancedMessageConverterTestListener::getAsyncHops, asyncHops -> asyncHops > maximumAsyncHops,
+					TestHelper.REGULAR_WAIT, TestHelper.SHORT_WAIT));
+			Assertions.assertEquals(maximumAsyncHops, EnhancedMessageConverterTestListener.getAsyncHops());
 		}
 	}
 
@@ -216,63 +155,64 @@ public class EnhancedMessageConverterTest extends ContainerTestHelper {
 	 * @throws Exception If the test fails.
 	 */
 	@Test
+	@DisplayName("Configured session attributes travel as message headers and reach the consumer thread")
 	public void testSendSessionAttributes() throws Exception {
 
 		// For each test data.
 		for (final DtoTestObject testData : EnhancedMessageConverterTest.TEST_DATA) {
 			// Generates random attributes.
-			final Long attr1 = RandomHelper.getPositiveRandomLong(Long.MAX_VALUE);
-			final Long attr2 = RandomHelper.getPositiveRandomLong(Long.MAX_VALUE);
-			final Long attr3 = RandomHelper.getPositiveRandomLong(Long.MAX_VALUE);
-			final Long attr4 = RandomHelper.getPositiveRandomLong(Long.MAX_VALUE);
-			final Long attr5 = RandomHelper.getPositiveRandomLong(Long.MAX_VALUE);
-			final Long attr6 = RandomHelper.getPositiveRandomLong(Long.MAX_VALUE);
-			final Long attrN = RandomHelper.getPositiveRandomLong(Long.MAX_VALUE);
+			final Long attributeValue1 = RandomHelper.getPositiveRandomLong(Long.MAX_VALUE);
+			final Long attributeValue2 = RandomHelper.getPositiveRandomLong(Long.MAX_VALUE);
+			final Long attributeValue3 = RandomHelper.getPositiveRandomLong(Long.MAX_VALUE);
+			final Long attributeValue4 = RandomHelper.getPositiveRandomLong(Long.MAX_VALUE);
+			final Long attributeValue5 = RandomHelper.getPositiveRandomLong(Long.MAX_VALUE);
+			final Long attributeValue6 = RandomHelper.getPositiveRandomLong(Long.MAX_VALUE);
+			final Long attributeValueN = RandomHelper.getPositiveRandomLong(Long.MAX_VALUE);
 
-			this.testServiceClient.sendMessage("message/thread", ObjectMapperHelper.convert(this.objectMapper, testData, DtoTestObjectDto.class, true), attr1,
-					attr2, attr3, attr4, attr5, attr6, attrN);
+			this.testServiceClient.sendMessage("message/thread", ObjectMapperHelper.convert(this.objectMapper, testData, DtoTestObjectDto.class, true), attributeValue1,
+					attributeValue2, attributeValue3, attributeValue4, attributeValue5, attributeValue6, attributeValueN);
 			ThreadMapContextHolder.clear();
 			final Message receivedMessage = this.jmsTemplate.receive("message/thread");
 			final Object receivedMessageObject = this.jmsTemplate.getMessageConverter().fromMessage(receivedMessage);
 
 			// Validates properties.
-			Assertions.assertEquals(Objects.toString(attr1),
+			Assertions.assertEquals(Objects.toString(attributeValue1),
 					Objects.toString(receivedMessage.getObjectProperty(EnhancedJmsMessageConverter.SESSION_ATTRIBUTE_PREFIX + "testJmsAttr1")));
-			Assertions.assertEquals(Objects.toString(attr2),
+			Assertions.assertEquals(Objects.toString(attributeValue2),
 					Objects.toString(receivedMessage.getObjectProperty(EnhancedJmsMessageConverter.SESSION_ATTRIBUTE_PREFIX + "testJmsAttr2")));
-			Assertions.assertEquals(Objects.toString(attr3),
+			Assertions.assertEquals(Objects.toString(attributeValue3),
 					Objects.toString(receivedMessage.getObjectProperty(EnhancedJmsMessageConverter.SESSION_ATTRIBUTE_PREFIX + "testJmsAttr3")));
-			Assertions.assertEquals(Objects.toString(attr4),
+			Assertions.assertEquals(Objects.toString(attributeValue4),
 					Objects.toString(receivedMessage.getObjectProperty(EnhancedJmsMessageConverter.SESSION_ATTRIBUTE_PREFIX + "testJmsAttr4")));
-			// Assertions.assertEquals(Objects.toString(attr5),Objects.toString(
+			// Assertions.assertEquals(Objects.toString(attributeValue5),Objects.toString(
 			// receivedMessage.getObjectProperty(EnhancedJmsMessageConverter.SESSION_ATTRIBUTE_PREFIX
 			// + "testJmsAttr5")));
-			Assertions.assertEquals(Objects.toString(attr6),
+			Assertions.assertEquals(Objects.toString(attributeValue6),
 					Objects.toString(receivedMessage.getObjectProperty(EnhancedJmsMessageConverter.SESSION_ATTRIBUTE_PREFIX + "testJmsAttr6")));
 			Assertions.assertNull(receivedMessage.getObjectProperty("testJmsAttrN"));
 			Assertions.assertNull(receivedMessage.getObjectProperty("sessionAttrN"));
 
 			// Validates thread attributes.
-			Assertions.assertEquals(Objects.toString(attr1), Objects.toString(ThreadMapContextHolder.getAttribute("testJmsAttr1")));
-			Assertions.assertEquals(Objects.toString(attr2), Objects.toString(ThreadMapContextHolder.getAttribute("testJmsAttr2")));
-			Assertions.assertEquals(Objects.toString(attr3), Objects.toString(ThreadMapContextHolder.getAttribute("testJmsAttr3")));
-			Assertions.assertEquals(Objects.toString(attr4), Objects.toString(ThreadMapContextHolder.getAttribute("testJmsAttr4")));
-			// Assertions.assertEquals(Objects.toString(attr5),
+			Assertions.assertEquals(Objects.toString(attributeValue1), Objects.toString(ThreadMapContextHolder.getAttribute("testJmsAttr1")));
+			Assertions.assertEquals(Objects.toString(attributeValue2), Objects.toString(ThreadMapContextHolder.getAttribute("testJmsAttr2")));
+			Assertions.assertEquals(Objects.toString(attributeValue3), Objects.toString(ThreadMapContextHolder.getAttribute("testJmsAttr3")));
+			Assertions.assertEquals(Objects.toString(attributeValue4), Objects.toString(ThreadMapContextHolder.getAttribute("testJmsAttr4")));
+			// Assertions.assertEquals(Objects.toString(attributeValue5),
 			// Objects.toString(ThreadMapContextHolder.getAttribute("testJmsAttr5")));
-			Assertions.assertEquals(Objects.toString(attr6), Objects.toString(ThreadMapContextHolder.getAttribute("testJmsAttr6")));
+			Assertions.assertEquals(Objects.toString(attributeValue6), Objects.toString(ThreadMapContextHolder.getAttribute("testJmsAttr6")));
 			Assertions.assertEquals("message/thread",
 					Objects.toString(ThreadMapContextHolder.getAttribute(EnhancedJmsMessageConverter.ORIGIN_DESTINATION_ATTRIBUTE)));
 			Assertions.assertNull(ThreadMapContextHolder.getAttribute("testJmsAttrN"));
 			Assertions.assertNull(ThreadMapContextHolder.getAttribute("sessionAttrN"));
 
 			// Validates multi-layer attributes.
-			Assertions.assertEquals(Objects.toString(attr1), Objects.toString(MultiLayerSessionHelper.getAttribute("testJmsAttr1")));
-			Assertions.assertEquals(Objects.toString(attr2), Objects.toString(MultiLayerSessionHelper.getAttribute("testJmsAttr2")));
-			Assertions.assertEquals(Objects.toString(attr3), Objects.toString(MultiLayerSessionHelper.getAttribute("testJmsAttr3")));
-			Assertions.assertEquals(Objects.toString(attr4), Objects.toString(MultiLayerSessionHelper.getAttribute("testJmsAttr4")));
-			// Assertions.assertEquals(Objects.toString(attr5),Objects.toString(
+			Assertions.assertEquals(Objects.toString(attributeValue1), Objects.toString(MultiLayerSessionHelper.getAttribute("testJmsAttr1")));
+			Assertions.assertEquals(Objects.toString(attributeValue2), Objects.toString(MultiLayerSessionHelper.getAttribute("testJmsAttr2")));
+			Assertions.assertEquals(Objects.toString(attributeValue3), Objects.toString(MultiLayerSessionHelper.getAttribute("testJmsAttr3")));
+			Assertions.assertEquals(Objects.toString(attributeValue4), Objects.toString(MultiLayerSessionHelper.getAttribute("testJmsAttr4")));
+			// Assertions.assertEquals(Objects.toString(attributeValue5),Objects.toString(
 			// this.multiLayerSessionHelper.getAttribute("testJmsAttr5")));
-			Assertions.assertEquals(Objects.toString(attr6), Objects.toString(MultiLayerSessionHelper.getAttribute("testJmsAttr6")));
+			Assertions.assertEquals(Objects.toString(attributeValue6), Objects.toString(MultiLayerSessionHelper.getAttribute("testJmsAttr6")));
 			Assertions.assertEquals("message/thread",
 					Objects.toString(MultiLayerSessionHelper.getAttribute(EnhancedJmsMessageConverter.ORIGIN_DESTINATION_ATTRIBUTE)));
 			Assertions.assertNull(MultiLayerSessionHelper.getAttribute("testJmsAttrN"));
@@ -287,13 +227,14 @@ public class EnhancedMessageConverterTest extends ContainerTestHelper {
 	 * @throws Exception If the test fails.
 	 */
 	@Test
+	@DisplayName("A model sent as JSON is received as the model")
 	public void testSendObjectReceiveObject() throws Exception {
 		// For each test data.
 		for (final DtoTestObject testData : EnhancedMessageConverterTest.TEST_DATA) {
 			// Sends the test data as a JMS message.
 			this.jmsTemplate.convertAndSend("message/original", testData);
 			// Asserts that the message is correctly converted.
-			Assertions.assertTrue(TestHelper.waitUntilValid(() -> EnhancedMessageConverterTest.currentTestMessage,
+			Assertions.assertTrue(TestHelper.waitUntilValid(EnhancedMessageConverterTestListener::getCurrentTestMessage,
 					message -> (message != null) && message.equals(testData), TestHelper.LONG_WAIT, TestHelper.SHORT_WAIT));
 		}
 
@@ -305,6 +246,7 @@ public class EnhancedMessageConverterTest extends ContainerTestHelper {
 	 * @throws Exception If the test fails.
 	 */
 	@Test
+	@DisplayName("A model sent optimized-serialized is received as the model")
 	public void testSendOptimizedObjectReceiveObject() throws Exception {
 		this.jmsTemplate.setMessageConverter(this.internalEnhancedJmsMessageConverter);
 		// For each test data.
@@ -312,7 +254,7 @@ public class EnhancedMessageConverterTest extends ContainerTestHelper {
 			// Sends the test data as a JMS message.
 			this.jmsTemplate.convertAndSend("message/original", testData);
 			// Asserts that the message is correctly converted.
-			Assertions.assertTrue(TestHelper.waitUntilValid(() -> EnhancedMessageConverterTest.currentTestMessage,
+			Assertions.assertTrue(TestHelper.waitUntilValid(EnhancedMessageConverterTestListener::getCurrentTestMessage,
 					message -> (message != null) && message.equals(testData), TestHelper.LONG_WAIT, TestHelper.SHORT_WAIT));
 		}
 
@@ -324,12 +266,13 @@ public class EnhancedMessageConverterTest extends ContainerTestHelper {
 	 * @throws Exception If the test fails.
 	 */
 	@Test
+	@DisplayName("A DTO sent as JSON is received as the model")
 	public void testSendDtoReceiveObject() throws Exception {
 		// For each test data.
 		for (final DtoTestObject testData : EnhancedMessageConverterTest.TEST_DATA) {
 			this.jmsTemplate.convertAndSend("message/original", ObjectMapperHelper.convert(this.objectMapper, testData, DtoTestObjectDto.class, true));
 			// Asserts that the message is correctly converted.
-			Assertions.assertTrue(TestHelper.waitUntilValid(() -> EnhancedMessageConverterTest.currentTestMessage,
+			Assertions.assertTrue(TestHelper.waitUntilValid(EnhancedMessageConverterTestListener::getCurrentTestMessage,
 					message -> (message != null) && message.equals(testData), TestHelper.LONG_WAIT, TestHelper.SHORT_WAIT));
 		}
 	}
@@ -340,6 +283,7 @@ public class EnhancedMessageConverterTest extends ContainerTestHelper {
 	 * @throws Exception If the test fails.
 	 */
 	@Test
+	@DisplayName("A model sent as JSON is received as the DTO when the DTO takes precedence")
 	public void testSendObjectReceiveDto() throws Exception {
 		this.jmsConverterProperties.setOriginalTypePrecedence(false);
 		// For each test data.
@@ -347,7 +291,7 @@ public class EnhancedMessageConverterTest extends ContainerTestHelper {
 			// Sends the test data as a JMS message.
 			this.jmsTemplate.convertAndSend("message/dto", testData);
 			// Asserts that the message is correctly converted.
-			Assertions.assertTrue(TestHelper.waitUntilValid(() -> EnhancedMessageConverterTest.currentTestMessage,
+			Assertions.assertTrue(TestHelper.waitUntilValid(EnhancedMessageConverterTestListener::getCurrentTestMessage,
 					message -> (message != null) && message.equals(ObjectMapperHelper.convert(this.objectMapper, testData, DtoTestObjectDto.class, true)),
 					TestHelper.LONG_WAIT, TestHelper.SHORT_WAIT));
 		}
@@ -360,13 +304,14 @@ public class EnhancedMessageConverterTest extends ContainerTestHelper {
 	 * @throws Exception If the test fails.
 	 */
 	@Test
+	@DisplayName("A DTO sent as JSON is received as the DTO when the DTO takes precedence")
 	public void testSendDtoReceiveDto() throws Exception {
 		this.jmsConverterProperties.setOriginalTypePrecedence(false);
 		// For each test data.
 		for (final DtoTestObject testData : EnhancedMessageConverterTest.TEST_DATA) {
 			this.jmsTemplate.convertAndSend("message/dto", ObjectMapperHelper.convert(this.objectMapper, testData, DtoTestObjectDto.class, true));
 			// Asserts that the message is correctly converted.
-			Assertions.assertTrue(TestHelper.waitUntilValid(() -> EnhancedMessageConverterTest.currentTestMessage,
+			Assertions.assertTrue(TestHelper.waitUntilValid(EnhancedMessageConverterTestListener::getCurrentTestMessage,
 					message -> (message != null) && message.equals(ObjectMapperHelper.convert(this.objectMapper, testData, DtoTestObjectDto.class, true)),
 					TestHelper.LONG_WAIT, TestHelper.SHORT_WAIT));
 		}
@@ -380,18 +325,19 @@ public class EnhancedMessageConverterTest extends ContainerTestHelper {
 	 * coexist with new Fory-encoded ones on the same destination.
 	 */
 	@Test
+	@DisplayName("JSON and optimized messages on the same queue are both decoded")
 	public void testReceiveMixedEncodingsOnSameQueue() throws Exception {
 		for (final DtoTestObject testData : EnhancedMessageConverterTest.TEST_DATA) {
-			EnhancedMessageConverterTest.currentTestMessage = null;
+			EnhancedMessageConverterTestListener.resetCurrentTestMessage();
 			this.jmsTemplate.setMessageConverter(this.enhancedJmsMessageConverter);
 			this.jmsTemplate.convertAndSend("message/original", testData);
-			Assertions.assertTrue(TestHelper.waitUntilValid(() -> EnhancedMessageConverterTest.currentTestMessage,
+			Assertions.assertTrue(TestHelper.waitUntilValid(EnhancedMessageConverterTestListener::getCurrentTestMessage,
 					message -> (message != null) && message.equals(testData), TestHelper.LONG_WAIT, TestHelper.SHORT_WAIT));
 
-			EnhancedMessageConverterTest.currentTestMessage = null;
+			EnhancedMessageConverterTestListener.resetCurrentTestMessage();
 			this.jmsTemplate.setMessageConverter(this.internalEnhancedJmsMessageConverter);
 			this.jmsTemplate.convertAndSend("message/original", testData);
-			Assertions.assertTrue(TestHelper.waitUntilValid(() -> EnhancedMessageConverterTest.currentTestMessage,
+			Assertions.assertTrue(TestHelper.waitUntilValid(EnhancedMessageConverterTestListener::getCurrentTestMessage,
 					message -> (message != null) && message.equals(testData), TestHelper.LONG_WAIT, TestHelper.SHORT_WAIT));
 		}
 	}
@@ -402,6 +348,7 @@ public class EnhancedMessageConverterTest extends ContainerTestHelper {
 	 * @throws Exception If the test fails.
 	 */
 	@Test
+	@DisplayName("A DTO sent optimized-serialized is received as the DTO")
 	public void testSendOptimizedDtoReceiveDto() throws Exception {
 		this.jmsConverterProperties.setOriginalTypePrecedence(false);
 		this.jmsTemplate.setMessageConverter(this.internalEnhancedJmsMessageConverter);
@@ -409,7 +356,7 @@ public class EnhancedMessageConverterTest extends ContainerTestHelper {
 		for (final DtoTestObject testData : EnhancedMessageConverterTest.TEST_DATA) {
 			this.jmsTemplate.convertAndSend("message/dto", ObjectMapperHelper.convert(this.objectMapper, testData, DtoTestObjectDto.class, true));
 			// Asserts that the message is correctly converted.
-			Assertions.assertTrue(TestHelper.waitUntilValid(() -> EnhancedMessageConverterTest.currentTestMessage,
+			Assertions.assertTrue(TestHelper.waitUntilValid(EnhancedMessageConverterTestListener::getCurrentTestMessage,
 					message -> (message != null) && message.equals(ObjectMapperHelper.convert(this.objectMapper, testData, DtoTestObjectDto.class, true)),
 					TestHelper.LONG_WAIT, TestHelper.SHORT_WAIT));
 		}
@@ -426,6 +373,7 @@ public class EnhancedMessageConverterTest extends ContainerTestHelper {
 	 * @throws Exception If the test fails.
 	 */
 	@Test
+	@DisplayName("An optimized-serializer consumer decodes JSON from a JSON-only producer")
 	public void testCrossForyConsumerHandlesJsonProducer() throws Exception {
 		final EnhancedJmsMessageConverter jsonOnlyProducer = new EnhancedJmsMessageConverter(this.jmsConverterProperties, this.objectMapper, null, null, false,
 				java.util.Set.of());
@@ -457,6 +405,7 @@ public class EnhancedMessageConverterTest extends ContainerTestHelper {
 	 * @throws Exception If the test fails.
 	 */
 	@Test
+	@DisplayName("A DTO written with the DTO serializer is read back as the model")
 	public void testCrossClassRoundTripWithSwappedSerializers() throws Exception {
 		final EnhancedJmsMessageConverter crossClassConverter = new EnhancedJmsMessageConverter(this.jmsConverterProperties, this.objectMapper,
 				this.dtoOptimizedSerializer, this.modelOptimizedSerializer, true, java.util.Set.of());
@@ -471,6 +420,40 @@ public class EnhancedMessageConverterTest extends ContainerTestHelper {
 					"Expected Model after dto-prio sender + model-prio receiver, got " + received.getClass().getName());
 			Assertions.assertEquals(testData.getId(), ((DtoTestObject) received).getId());
 		}
+	}
+
+	/**
+	 * Tests that a preferred type that is not a DTO type or origin is not used to
+	 * convert the message (the body is left to the simple converter).
+	 *
+	 * @throws Exception If the test fails.
+	 */
+	@Test
+	@DisplayName("A preferred type header naming a non-DTO class is ignored, not instantiated")
+	public void testNonDtoPreferredTypeIsIgnored() throws Exception {
+		this.jmsTemplate.convertAndSend("message/preferred-type-non-dto", "[]", message -> {
+			message.setStringProperty("preferedType", java.util.ArrayList.class.getName());
+			return message;
+		});
+		final Message receivedMessage = this.jmsTemplate.receive("message/preferred-type-non-dto");
+		Assertions.assertEquals("[]", this.enhancedJmsMessageConverter.fromMessage(receivedMessage));
+	}
+
+	/**
+	 * Tests that a body that does not convert to its preferred type fails the
+	 * conversion instead of falling back.
+	 *
+	 * @throws Exception If the test fails.
+	 */
+	@Test
+	@DisplayName("A body that does not convert to its preferred DTO type fails the conversion")
+	public void testInvalidJsonForPreferredTypeFails() throws Exception {
+		this.jmsTemplate.convertAndSend("message/preferred-type-invalid-json", "not json", message -> {
+			message.setStringProperty("preferedType", DtoTestObject.class.getName());
+			return message;
+		});
+		final Message receivedMessage = this.jmsTemplate.receive("message/preferred-type-invalid-json");
+		Assertions.assertThrows(MessageConversionException.class, () -> this.enhancedJmsMessageConverter.fromMessage(receivedMessage));
 	}
 
 }

@@ -86,6 +86,19 @@ class DynamicCreditClientInterceptorScalingTest {
 	}
 
 	@Test
+	@DisplayName("credit packets of a consumer never seen created pass through unscaled, even on a deep queue")
+	void testUntrackedConsumerCreditsPassThrough() throws Exception {
+		final StubbedDepthInterceptor interceptor = new StubbedDepthInterceptor(2.0);
+		interceptor.stubbedDepth = VERY_DEEP_QUEUE_DEPTH;
+		// No create-consumer packet for this channel: the consumer is untracked.
+		final SessionConsumerFlowCreditMessage flowCreditMessage = new SessionConsumerFlowCreditMessage(0L, REQUESTED_CREDITS);
+		flowCreditMessage.setChannelID(99L);
+		Assertions.assertTrue(interceptor.intercept(flowCreditMessage, null), "Untracked credit packets must not be blocked");
+		Assertions.assertEquals(REQUESTED_CREDITS, flowCreditMessage.getCredits(), "Untracked credit packets must keep their credits");
+		Assertions.assertEquals(0, interceptor.getCreditPacketsScaled(), "Untracked credit packets must not be scaled");
+	}
+
+	@Test
 	@DisplayName("granted credits increase with depth while inside the ramp")
 	void testGrantGrowsWithDepth() throws Exception {
 		// multiplier=0.5 → the window ramps to maxCredits at 3× threshold, so the two

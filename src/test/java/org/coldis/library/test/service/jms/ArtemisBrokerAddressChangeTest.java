@@ -20,6 +20,7 @@ import org.coldis.library.test.StartTestWithContainerExtension;
 import org.coldis.library.test.TestWithContainer;
 import org.coldis.library.test.service.ContainerTestHelper;
 import org.junit.jupiter.api.Assertions;
+import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.messaginghub.pooled.jms.JmsPoolConnection;
@@ -58,6 +59,7 @@ import jakarta.jms.Session;
  */
 @TestWithContainer(reuse = true)
 @ExtendWith(StartTestWithContainerExtension.class)
+@DisplayName("Artemis broker address change — pooled connections")
 public class ArtemisBrokerAddressChangeTest extends ContainerTestHelper {
 
 	/** Pooled connections opened against the first broker. */
@@ -85,6 +87,7 @@ public class ArtemisBrokerAddressChangeTest extends ContainerTestHelper {
 	 * With the default query, every pooled connection follows the broker to its new address.
 	 */
 	@Test
+	@DisplayName("With the default URL query, every pooled connection follows the broker to its new address")
 	public void testEveryPooledConnectionFollowsBrokerAddressChange() throws Exception {
 		final int completed = this.reconnectedAfterAddressChange(ArtemisBrokerAddressChangeTest.defaultQuery());
 		Assertions.assertEquals(ArtemisBrokerAddressChangeTest.CONNECTIONS, completed,
@@ -97,6 +100,7 @@ public class ArtemisBrokerAddressChangeTest extends ContainerTestHelper {
 	 * transport configuration, this test fails and the flag can be reconsidered.
 	 */
 	@Test
+	@DisplayName("Characterization of Artemis: with topology selection, only the first pooled connection follows")
 	public void testTopologySelectionLeavesPooledConnectionsOnOldAddress() throws Exception {
 		final String query = ArtemisBrokerAddressChangeTest.defaultQuery().replace("useTopologyForLoadBalancing=false;", "");
 		Assertions.assertFalse(query.contains("useTopologyForLoadBalancing"), "flag must be absent for this scenario");
@@ -127,11 +131,11 @@ public class ArtemisBrokerAddressChangeTest extends ContainerTestHelper {
 		final List<AtomicInteger> received = new ArrayList<>();
 		final AtomicInteger failuresNotified = new AtomicInteger();
 		try {
-			for (int i = 0; i < ArtemisBrokerAddressChangeTest.CONNECTIONS; i++) {
+			for (int connectionIndex = 0; connectionIndex < ArtemisBrokerAddressChangeTest.CONNECTIONS; connectionIndex++) {
 				final Connection connection = pool.createConnection();
 				connection.setExceptionListener(exception -> failuresNotified.incrementAndGet());
 				final Session session = connection.createSession(false, Session.AUTO_ACKNOWLEDGE);
-				final MessageConsumer consumer = session.createConsumer(session.createQueue("address-change-" + i));
+				final MessageConsumer consumer = session.createConsumer(session.createQueue("address-change-" + connectionIndex));
 				final AtomicInteger counter = new AtomicInteger();
 				consumer.setMessageListener(message -> counter.incrementAndGet());
 				connection.start();
@@ -170,15 +174,15 @@ public class ArtemisBrokerAddressChangeTest extends ContainerTestHelper {
 			final long deadline = System.currentTimeMillis() + 15000;
 			int previous = -1;
 			long lastChange = System.currentTimeMillis();
-			while ((System.currentTimeMillis() < deadline) && (failuresNotified.get() < ArtemisBrokerAddressChangeTest.CONNECTIONS)) {
+			boolean stalled = false;
+			while (!stalled && (System.currentTimeMillis() < deadline) && (failuresNotified.get() < ArtemisBrokerAddressChangeTest.CONNECTIONS)) {
 				final int current = failuresNotified.get();
 				if (current != previous) {
 					previous = current;
 					lastChange = System.currentTimeMillis();
 				}
-				else if ((System.currentTimeMillis() - lastChange) > 5000) {
-					break;
-				}
+				// Stops waiting when nothing changed for a while.
+				stalled = ((current == previous) && ((System.currentTimeMillis() - lastChange) > 5000));
 				Thread.sleep(500);
 			}
 			final int notified = failuresNotified.get();
@@ -243,8 +247,8 @@ public class ArtemisBrokerAddressChangeTest extends ContainerTestHelper {
 		try (ActiveMQConnectionFactory producerFactory = new ActiveMQConnectionFactory("tcp://127.0.0.1:" + port + "?" + query);
 				Connection producerConnection = producerFactory.createConnection()) {
 			final Session session = producerConnection.createSession(false, Session.AUTO_ACKNOWLEDGE);
-			for (int i = 0; i < ArtemisBrokerAddressChangeTest.CONNECTIONS; i++) {
-				final MessageProducer producer = session.createProducer(session.createQueue("address-change-" + i));
+			for (int connectionIndex = 0; connectionIndex < ArtemisBrokerAddressChangeTest.CONNECTIONS; connectionIndex++) {
+				final MessageProducer producer = session.createProducer(session.createQueue("address-change-" + connectionIndex));
 				producer.send(session.createTextMessage("probe"));
 			}
 		}

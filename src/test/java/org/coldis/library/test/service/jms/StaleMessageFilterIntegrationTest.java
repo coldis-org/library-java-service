@@ -1,10 +1,9 @@
 package org.coldis.library.test.service.jms;
 
-import java.util.List;
 import java.util.Random;
-import java.util.concurrent.CopyOnWriteArrayList;
 
 import org.coldis.library.helper.DateTimeHelper;
+import org.coldis.library.service.jms.ExtendedMessagingMessageListenerAdapter;
 import org.coldis.library.service.jms.JmsMessage;
 import org.coldis.library.service.jms.JmsTemplateHelper;
 import org.coldis.library.service.jms.StaleMessageFilterProperties;
@@ -15,13 +14,16 @@ import org.coldis.library.test.service.ContainerTestHelper;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.context.SpringBootTest.WebEnvironment;
-import org.springframework.jms.annotation.JmsListener;
 import org.springframework.jms.core.JmsTemplate;
+
+import io.micrometer.core.instrument.Counter;
+import io.micrometer.core.instrument.MeterRegistry;
 
 /**
  * Stale message filter integration test (through the JMS listener adapter).
@@ -29,22 +31,13 @@ import org.springframework.jms.core.JmsTemplate;
 @TestWithContainer(reuse = true)
 @ExtendWith(StartTestWithContainerExtension.class)
 @SpringBootTest(webEnvironment = WebEnvironment.RANDOM_PORT)
+@DisplayName("Stale message filter — through the listener adapter")
 public class StaleMessageFilterIntegrationTest extends ContainerTestHelper {
-
-	/**
-	 * Test queue.
-	 */
-	private static final String TEST_QUEUE = "stale/filter/test";
 
 	/**
 	 * Random.
 	 */
 	private static final Random RANDOM = new Random();
-
-	/**
-	 * Processed messages.
-	 */
-	private static final List<String> PROCESSED_MESSAGES = new CopyOnWriteArrayList<>();
 
 	/**
 	 * JMS template.
@@ -65,11 +58,28 @@ public class StaleMessageFilterIntegrationTest extends ContainerTestHelper {
 	private StaleMessageFilterProperties staleMessageFilterProperties;
 
 	/**
+	 * Meter registry.
+	 */
+	@Autowired
+	private MeterRegistry meterRegistry;
+
+	/**
+	 * Gets the stale filter drop count for the test queue.
+	 *
+	 * @return The drop count.
+	 */
+	private Double getDroppedCount() {
+		final Counter droppedCounter = this.meterRegistry.find(ExtendedMessagingMessageListenerAdapter.STALE_DROPPED_MESSAGES_METRIC)
+				.tag("destination", StaleMessageFilterTestListener.TEST_QUEUE).counter();
+		return (droppedCounter == null ? 0D : droppedCounter.count());
+	}
+
+	/**
 	 * Enables the filter (memory-only) before each test.
 	 */
 	@BeforeEach
-	public void prepare() {
-		StaleMessageFilterIntegrationTest.PROCESSED_MESSAGES.clear();
+	public void beforeEach() {
+		StaleMessageFilterTestListener.reset();
 		this.staleMessageFilterProperties.setEnabled(true);
 		this.staleMessageFilterProperties.setPersistenceEnabled(false);
 	}
@@ -78,20 +88,9 @@ public class StaleMessageFilterIntegrationTest extends ContainerTestHelper {
 	 * Restores the filter configuration after each test.
 	 */
 	@AfterEach
-	public void restore() {
+	public void afterEach() {
 		this.staleMessageFilterProperties.setEnabled(false);
 		this.staleMessageFilterProperties.setPersistenceEnabled(true);
-	}
-
-	/**
-	 * Consumes a test message.
-	 *
-	 * @param message Message.
-	 */
-	@JmsListener(destination = StaleMessageFilterIntegrationTest.TEST_QUEUE)
-	public void consumeMessage(
-			final String message) {
-		StaleMessageFilterIntegrationTest.PROCESSED_MESSAGES.add(message);
 	}
 
 	/**
@@ -101,19 +100,21 @@ public class StaleMessageFilterIntegrationTest extends ContainerTestHelper {
 	 * @throws Exception If the test fails.
 	 */
 	@Test
+	@DisplayName("A message posted before a same-key processing is dropped and counted; a later one is processed")
 	public void testStaleMessagesAreDropped() throws Exception {
+		final Double droppedCountBefore = this.getDroppedCount();
 		final Integer random = StaleMessageFilterIntegrationTest.RANDOM.nextInt();
 		final String messageKey = "staleFilterKey-" + random;
 
 		// Message 1 is processed normally (and records the processing for the key).
-		this.jmsTemplateHelper.send(this.jmsTemplate, new JmsMessage<String>().withDestination(StaleMessageFilterIntegrationTest.TEST_QUEUE)
+		this.jmsTemplateHelper.send(this.jmsTemplate, new JmsMessage<String>().withDestination(StaleMessageFilterTestListener.TEST_QUEUE)
 				.withMessage("message1-" + random).withStaleFilterKey(messageKey));
-		Assertions.assertTrue(TestHelper.waitUntilValid(() -> StaleMessageFilterIntegrationTest.PROCESSED_MESSAGES,
+		Assertions.assertTrue(TestHelper.waitUntilValid(() -> StaleMessageFilterTestListener.getProcessedMessages(),
 				processedMessages -> processedMessages.contains("message1-" + random), TestHelper.LONG_WAIT, TestHelper.SHORT_WAIT));
 
 		// Message 2 carries the same key but was posted (per the override property)
 		// before message 1 was processed: it should be dropped.
-		this.jmsTemplate.convertAndSend(StaleMessageFilterIntegrationTest.TEST_QUEUE, "message2-" + random, jmsMessage -> {
+		this.jmsTemplate.convertAndSend(StaleMessageFilterTestListener.TEST_QUEUE, "message2-" + random, jmsMessage -> {
 			jmsMessage.setStringProperty(JmsMessage.STALE_FILTER_KEY_PROPERTY, messageKey);
 			jmsMessage.setLongProperty(JmsMessage.STALE_FILTER_POSTED_AT_PROPERTY,
 					DateTimeHelper.toTimestamp(DateTimeHelper.getCurrentLocalDateTime()) - 60_000);
@@ -122,14 +123,16 @@ public class StaleMessageFilterIntegrationTest extends ContainerTestHelper {
 
 		// Message 3 carries the same key and was posted after message 1 was
 		// processed: it should be processed.
-		this.jmsTemplateHelper.send(this.jmsTemplate, new JmsMessage<String>().withDestination(StaleMessageFilterIntegrationTest.TEST_QUEUE)
+		this.jmsTemplateHelper.send(this.jmsTemplate, new JmsMessage<String>().withDestination(StaleMessageFilterTestListener.TEST_QUEUE)
 				.withMessage("message3-" + random).withStaleFilterKey(messageKey));
-		Assertions.assertTrue(TestHelper.waitUntilValid(() -> StaleMessageFilterIntegrationTest.PROCESSED_MESSAGES,
+		Assertions.assertTrue(TestHelper.waitUntilValid(() -> StaleMessageFilterTestListener.getProcessedMessages(),
 				processedMessages -> processedMessages.contains("message3-" + random), TestHelper.LONG_WAIT, TestHelper.SHORT_WAIT));
 
-		// Message 2 should have been dropped (never processed).
-		Thread.sleep(1000);
-		Assertions.assertFalse(StaleMessageFilterIntegrationTest.PROCESSED_MESSAGES.contains("message2-" + random));
+		// Message 2 should have been dropped (never processed), and counted.
+		Assertions.assertTrue(TestHelper.waitUntilValid(this::getDroppedCount, droppedCount -> droppedCount > droppedCountBefore, TestHelper.LONG_WAIT,
+				TestHelper.SHORT_WAIT));
+		Assertions.assertEquals(droppedCountBefore + 1, this.getDroppedCount());
+		Assertions.assertFalse(StaleMessageFilterTestListener.getProcessedMessages().contains("message2-" + random));
 	}
 
 	/**
@@ -138,15 +141,16 @@ public class StaleMessageFilterIntegrationTest extends ContainerTestHelper {
 	 * @throws Exception If the test fails.
 	 */
 	@Test
+	@DisplayName("Messages without a stale filter key are never dropped")
 	public void testMessagesWithoutKeyAreNotFiltered() throws Exception {
 		final Integer random = StaleMessageFilterIntegrationTest.RANDOM.nextInt();
 
 		// Both messages should be processed (no key, no filtering).
 		this.jmsTemplateHelper.send(this.jmsTemplate,
-				new JmsMessage<String>().withDestination(StaleMessageFilterIntegrationTest.TEST_QUEUE).withMessage("plainMessage1-" + random));
+				new JmsMessage<String>().withDestination(StaleMessageFilterTestListener.TEST_QUEUE).withMessage("plainMessage1-" + random));
 		this.jmsTemplateHelper.send(this.jmsTemplate,
-				new JmsMessage<String>().withDestination(StaleMessageFilterIntegrationTest.TEST_QUEUE).withMessage("plainMessage2-" + random));
-		Assertions.assertTrue(TestHelper.waitUntilValid(() -> StaleMessageFilterIntegrationTest.PROCESSED_MESSAGES,
+				new JmsMessage<String>().withDestination(StaleMessageFilterTestListener.TEST_QUEUE).withMessage("plainMessage2-" + random));
+		Assertions.assertTrue(TestHelper.waitUntilValid(() -> StaleMessageFilterTestListener.getProcessedMessages(),
 				processedMessages -> processedMessages.contains("plainMessage1-" + random) && processedMessages.contains("plainMessage2-" + random),
 				TestHelper.LONG_WAIT, TestHelper.SHORT_WAIT));
 	}

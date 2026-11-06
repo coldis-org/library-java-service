@@ -20,6 +20,7 @@ import org.springframework.boot.test.context.SpringBootTest.WebEnvironment;
 import jakarta.jms.BytesMessage;
 import jakarta.jms.Connection;
 import jakarta.jms.ConnectionFactory;
+import jakarta.jms.JMSException;
 import jakarta.jms.MapMessage;
 import jakarta.jms.Message;
 import jakarta.jms.MessageEOFException;
@@ -140,6 +141,24 @@ public class JmsMessageHelperTest extends ContainerTestHelper {
 			final Message plainMessage = session.createMessage();
 			this.setTestProperties(plainMessage);
 			this.assertTestProperties(JmsMessageHelper.copy(session, plainMessage));
+		}
+	}
+
+	/**
+	 * Tests that object messages holding classes outside the deserialization
+	 * allow list are not deserialized (here, by the copy).
+	 *
+	 * @throws Exception If the test fails.
+	 */
+	@Test
+	@DisplayName("Object message bodies outside the deserialization allow list are refused")
+	public void testDeserializationAllowList() throws Exception {
+		try (Connection connection = this.openConnection(); Session session = connection.createSession(false, Session.AUTO_ACKNOWLEDGE)) {
+			final ObjectMessage allowedMessage = session.createObjectMessage(new ArrayList<>(List.of("allowed")));
+			Assertions.assertEquals(List.of("allowed"), ((ObjectMessage) JmsMessageHelper.copy(session, allowedMessage)).getObject());
+
+			final ObjectMessage refusedMessage = session.createObjectMessage(new java.net.URI("https://example.com"));
+			Assertions.assertThrows(JMSException.class, () -> JmsMessageHelper.copy(session, refusedMessage));
 		}
 	}
 
