@@ -21,6 +21,9 @@ public class AsyncHopsExceededRetryTestListener {
 	/** Original topic. */
 	public static final String ORIGINAL_TOPIC = "async-hops/retry/topic";
 
+	/** Original topic consumed by a non-durable, non-shared subscription. */
+	public static final String NON_DURABLE_TOPIC = "async-hops/retry/topic/non-durable";
+
 	/** Queue listener name. */
 	public static final String QUEUE_LISTENER = "queue";
 
@@ -120,6 +123,21 @@ public class AsyncHopsExceededRetryTestListener {
 	public void consumeTopicSecondSubscription(
 			final DtoTestObject message) {
 		this.countProcessed(AsyncHopsExceededRetryTestListener.SECOND_SUBSCRIPTION_LISTENER, message);
+	}
+
+	/**
+	 * Consumes the non-durable topic test message (only exceeded messages are sent
+	 * to it, so nothing is processed).
+	 *
+	 * @param message Message.
+	 */
+	@JmsListener(
+			containerFactory = "jmsListenerNonDurableTopicContainerFactory",
+			destination = AsyncHopsExceededRetryTestListener.NON_DURABLE_TOPIC
+	)
+	public void consumeNonDurableTopic(
+			final DtoTestObject message) {
+		this.countProcessed("non-durable", message);
 	}
 
 }

@@ -79,9 +79,11 @@ public class ExtendedMessagingMessageListenerAdapter extends MessagingMessageLis
 	}
 
 	/**
-	 * Resolves the broker queue the listener consumes from: the queue the
-	 * container listens to (or, without it, the message destination), or the
-	 * subscription queue for durable or shared topic subscriptions. The
+	 * Resolves the broker queue the listener consumes from, from the container
+	 * when available: the queue a point-to-point container listens to (also a
+	 * fully qualified queue on a multicast address), or the subscription queue of
+	 * a durable or shared subscription. Without a container (or its destination
+	 * name), falls back to the message destination when it is a queue. The
 	 * subscription queue is named with the container client id: a client id set
 	 * only on the connection factory is not seen here, and the resolved name then
 	 * does not match the broker queue.
@@ -93,17 +95,20 @@ public class ExtendedMessagingMessageListenerAdapter extends MessagingMessageLis
 	 */
 	private String getConsumedQueueName(
 			final ActiveMQDestination destination) {
+		final boolean containerAvailable = (this.listenerContainer != null);
 		String queueName = null;
-		if (destination.isQueue()) {
-			final String listenedDestinationName = ((this.listenerContainer != null) && !this.listenerContainer.isPubSubDomain()
-					? this.listenerContainer.getDestinationName()
-					: null);
-			queueName = CompositeAddress.extractQueueName(listenedDestinationName != null ? listenedDestinationName : destination.getName());
+		if (containerAvailable && !this.listenerContainer.isPubSubDomain() && (this.listenerContainer.getDestinationName() != null)) {
+			queueName = CompositeAddress.extractQueueName(this.listenerContainer.getDestinationName());
 		}
-		else if ((this.listenerContainer != null) && (this.listenerContainer.getSubscriptionName() != null)
-				&& (this.listenerContainer.isSubscriptionDurable() || this.listenerContainer.isSubscriptionShared())) {
-			queueName = ActiveMQDestination.createQueueNameForSubscription(this.listenerContainer.isSubscriptionDurable(),
-					this.listenerContainer.getClientId(), this.listenerContainer.getSubscriptionName()).toString();
+		else if (containerAvailable && this.listenerContainer.isPubSubDomain()) {
+			if ((this.listenerContainer.getSubscriptionName() != null)
+					&& (this.listenerContainer.isSubscriptionDurable() || this.listenerContainer.isSubscriptionShared())) {
+				queueName = ActiveMQDestination.createQueueNameForSubscription(this.listenerContainer.isSubscriptionDurable(),
+						this.listenerContainer.getClientId(), this.listenerContainer.getSubscriptionName()).toString();
+			}
+		}
+		else if (destination.isQueue()) {
+			queueName = CompositeAddress.extractQueueName(destination.getName());
 		}
 		return queueName;
 	}

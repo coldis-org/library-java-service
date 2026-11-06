@@ -105,6 +105,9 @@ public class JmsMessageHelperTest extends ContainerTestHelper {
 			copiedBytesMessage.readBytes(copiedBody);
 			Assertions.assertArrayEquals(new byte[] { 1, 2, 3, 4 }, copiedBody);
 			this.assertTestProperties(copiedBytesMessage);
+			final byte[] sourceBodyAfterCopy = new byte[(int) bytesMessage.getBodyLength()];
+			bytesMessage.readBytes(sourceBodyAfterCopy);
+			Assertions.assertArrayEquals(new byte[] { 1, 2, 3, 4 }, sourceBodyAfterCopy);
 
 			final MapMessage mapMessage = session.createMapMessage();
 			mapMessage.setString("first", "one");
@@ -131,6 +134,8 @@ public class JmsMessageHelperTest extends ContainerTestHelper {
 			Assertions.assertEquals(2L, copiedStreamMessage.readLong());
 			Assertions.assertThrows(MessageEOFException.class, copiedStreamMessage::readObject);
 			this.assertTestProperties(copiedStreamMessage);
+			Assertions.assertEquals("first", streamMessage.readString());
+			Assertions.assertEquals(2L, streamMessage.readLong());
 
 			final Message plainMessage = session.createMessage();
 			this.setTestProperties(plainMessage);

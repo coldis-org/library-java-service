@@ -19,6 +19,11 @@ import jakarta.jms.TextMessage;
 public class JmsMessageHelper {
 
 	/**
+	 * Buffer size used to copy bytes message bodies.
+	 */
+	private static final int COPY_BUFFER_SIZE = 8192;
+
+	/**
 	 * Gets a long property, tolerating a missing or null-valued property (the JMS
 	 * long getter fails on a property that exists with a null value). Otherwise
 	 * follows the JMS long conversion: integral numbers and numeric strings.
@@ -95,9 +100,12 @@ public class JmsMessageHelper {
 		final BytesMessage targetBytesMessage = session.createBytesMessage();
 		sourceBytesMessage.reset();
 		try {
-			final byte[] body = new byte[(int) sourceBytesMessage.getBodyLength()];
-			sourceBytesMessage.readBytes(body);
-			targetBytesMessage.writeBytes(body);
+			final byte[] readBuffer = new byte[JmsMessageHelper.COPY_BUFFER_SIZE];
+			int bytesRead = sourceBytesMessage.readBytes(readBuffer);
+			while (bytesRead != -1) {
+				targetBytesMessage.writeBytes(readBuffer, 0, bytesRead);
+				bytesRead = sourceBytesMessage.readBytes(readBuffer);
+			}
 		}
 		// Leaves the source usable for others.
 		finally {

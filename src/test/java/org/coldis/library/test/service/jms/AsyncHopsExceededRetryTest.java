@@ -250,6 +250,40 @@ public class AsyncHopsExceededRetryTest extends ContainerTestHelper {
 	}
 
 	/**
+	 * Tests that an exceeded message of a non-durable, non-shared subscription
+	 * (temporary queue) gets no original queue, even when it inherited one, so the
+	 * broker skips its retry instead of following the inherited value.
+	 *
+	 * @throws Exception If the test fails.
+	 */
+	@Test
+	@DisplayName("An exceeded non-durable subscription message gets no original queue and is not retried")
+	public void testNonDurableSubscriptionHasNoOriginalQueue() throws Exception {
+		final Long testIdentifier = RandomHelper.getPositiveRandomLong(Long.MAX_VALUE);
+		AsyncHopsExceededRetryTestListener.reset(testIdentifier);
+		final Long exceededHop = this.jmsConverterProperties.getMaximumAsyncHops() + 1;
+		this.jmsTopicTemplate.convertAndSend(AsyncHopsExceededRetryTestListener.NON_DURABLE_TOPIC,
+				new DtoTestObject(testIdentifier, "2", "3", 4, new int[] { 5, 6 }, 7), message -> {
+					message.setLongProperty(ExtendedMessagingMessageListenerAdapter.CURRENT_ASYNC_HOP_PARAMETER, exceededHop);
+					message.setLongProperty(AsyncHopsExceededRetryTest.TEST_IDENTIFIER_PROPERTY, testIdentifier);
+					message.setStringProperty(org.apache.activemq.artemis.api.core.Message.HDR_ORIGINAL_QUEUE.toString(),
+							AsyncHopsExceededRetryTestListener.ORIGINAL_QUEUE);
+					return message;
+				});
+		TestHelper.waitUntilValid(() -> this.countInExceededQueue(testIdentifier), count -> count >= 1, TestHelper.REGULAR_WAIT, TestHelper.SHORT_WAIT);
+		Assertions.assertEquals(1, this.countInExceededQueue(testIdentifier));
+		// The retry operation counts matching messages, not moved ones: the message
+		// must stay.
+		this.retryExceededQueue(testIdentifier);
+		Assertions.assertFalse(TestHelper.waitUntilValid(() -> this.countInExceededQueue(testIdentifier), count -> count == 0, TestHelper.REGULAR_WAIT,
+				TestHelper.SHORT_WAIT));
+		final Message exceededMessage = this.takeFromExceededQueue(testIdentifier);
+		Assertions.assertNotNull(exceededMessage);
+		Assertions.assertNull(exceededMessage.getStringProperty(org.apache.activemq.artemis.api.core.Message.HDR_ORIGINAL_QUEUE.toString()));
+		Assertions.assertEquals(0L, AsyncHopsExceededRetryTestListener.getTotalProcessedCount());
+	}
+
+	/**
 	 * Tests retrying topic messages from the exceeded queue: each copy goes back
 	 * only to the subscription it came from.
 	 *
