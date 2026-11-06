@@ -429,7 +429,7 @@ public class EnhancedMessageConverterTest extends ContainerTestHelper {
 	 * @throws Exception If the test fails.
 	 */
 	@Test
-	@DisplayName("A preferred type header naming a non-DTO class is ignored, not instantiated")
+	@DisplayName("A preferred type header naming a non-DTO class is ignored")
 	public void testNonDtoPreferredTypeIsIgnored() throws Exception {
 		this.jmsTemplate.convertAndSend("message/preferred-type-non-dto", "[]", message -> {
 			message.setStringProperty("preferedType", java.util.ArrayList.class.getName());

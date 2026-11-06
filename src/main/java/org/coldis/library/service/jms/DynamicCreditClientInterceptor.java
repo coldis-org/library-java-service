@@ -210,22 +210,29 @@ public class DynamicCreditClientInterceptor implements Interceptor {
 	 * recreated on the next query (a broker restart would otherwise leave a broken
 	 * session cached, and dropping it without closing leaks the factory's
 	 * connection). Close failures are logged: the resources are being discarded.
+	 *
+	 * @param failedSession The session that failed (null when its creation failed).
 	 */
-	private void closeQuerySession() {
+	private void closeQuerySession(
+			final ClientSession failedSession) {
 		synchronized (this.querySessionLock) {
-			if (this.querySession != null) {
-				try {
-					this.querySession.close();
+			// Only the session that failed: another thread may already have replaced it
+			// with a healthy one (null when the session could not be created).
+			if (this.querySession == failedSession) {
+				if (this.querySession != null) {
+					try {
+						this.querySession.close();
+					}
+					catch (final Exception exception) {
+						LOGGER.debug("DynamicCredit — could not close query session: {}", exception.getMessage());
+					}
 				}
-				catch (final Exception exception) {
-					LOGGER.debug("DynamicCredit — could not close query session: {}", exception.getMessage());
+				if (this.querySessionFactory != null) {
+					this.querySessionFactory.close();
 				}
+				this.querySession = null;
+				this.querySessionFactory = null;
 			}
-			if (this.querySessionFactory != null) {
-				this.querySessionFactory.close();
-			}
-			this.querySession = null;
-			this.querySessionFactory = null;
 		}
 	}
 
@@ -251,7 +258,7 @@ public class DynamicCreditClientInterceptor implements Interceptor {
 					}
 					catch (final Exception exception) {
 						LOGGER.warn("DynamicCredit — could not create query session: {}", exception.getMessage());
-						this.closeQuerySession();
+						this.closeQuerySession(null);
 					}
 				}
 			}
@@ -275,8 +282,9 @@ public class DynamicCreditClientInterceptor implements Interceptor {
 			pendingDepth = cachedDepth[0];
 		}
 		else {
+			// Never throws (null when the session cannot be created).
+			final ClientSession session = this.getQuerySession();
 			try {
-				final ClientSession session = this.getQuerySession();
 				if (session != null) {
 					final ClientSession.QueueQuery queueQuery;
 					synchronized (session) {
@@ -292,7 +300,7 @@ public class DynamicCreditClientInterceptor implements Interceptor {
 			}
 			catch (final Exception exception) {
 				LOGGER.warn("DynamicCredit — could not query depth for queue '{}': {}", queueName, exception.getMessage());
-				this.closeQuerySession();
+				this.closeQuerySession(session);
 			}
 		}
 		return pendingDepth;

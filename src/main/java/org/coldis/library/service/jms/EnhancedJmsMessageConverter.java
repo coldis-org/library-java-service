@@ -467,13 +467,14 @@ public class EnhancedJmsMessageConverter extends SimpleMessageConverter {
 			final ClassLoader classLoader = Thread.currentThread().getContextClassLoader();
 			final List<String> availablePreferedClasses = preferedClassesNames.stream()
 					.filter(className -> ClassUtils.isPresent(className, classLoader)).toList();
-			for (final String availablePreferedClass : availablePreferedClasses) {
-				final Class<?> candidateClass = ClassUtils.forName(availablePreferedClass, classLoader);
-				if ((preferedClass == null) && this.isDtoClass(candidateClass)) {
+			// Stops at the first DTO class: later candidates are not loaded.
+			for (int candidateIndex = 0; (preferedClass == null) && (candidateIndex < availablePreferedClasses.size()); candidateIndex++) {
+				final Class<?> candidateClass = ClassUtils.forName(availablePreferedClasses.get(candidateIndex), classLoader);
+				if (this.isDtoClass(candidateClass)) {
 					preferedClass = candidateClass;
 				}
-				else if (!this.isDtoClass(candidateClass)) {
-					EnhancedJmsMessageConverter.LOGGER.warn("Prefered class '{}' is not a DTO type or origin and is not used.", availablePreferedClass);
+				else {
+					EnhancedJmsMessageConverter.LOGGER.warn("Prefered class '{}' is not a DTO type or origin and is not used.", candidateClass.getName());
 				}
 			}
 			if (preferedClass == null) {
@@ -527,7 +528,7 @@ public class EnhancedJmsMessageConverter extends SimpleMessageConverter {
 					object = this.objectMapper.readValue(messageBytes, preferedClass);
 				}
 			}
-			catch (final IOException exception) {
+			catch (final IOException | IllegalArgumentException exception) {
 				throw new MessageConversionException("Object could not be converted from JSON to " + preferedClass.getName() + ".", exception);
 			}
 		}

@@ -25,7 +25,13 @@ import jakarta.jms.MessageProducer;
 import jakarta.jms.Session;
 
 /**
- * Context-aware messaging message listener adapter.
+ * Context-aware messaging message listener adapter: async hops limit (with the
+ * exceeded queue), stale message filter and non-retriable error drops. Created
+ * by the listener endpoint of {@link EnhancedJmsBootstrapConfiguration}, which
+ * also sets the listener container ({@link #setListenerContainer}) and the
+ * meter registry supplier ({@link #setMeterRegistrySupplier}). An adapter built
+ * another way without them works, but exceeded topic messages get no original
+ * queue (not retryable by the broker) and drops are not counted.
  */
 public class ExtendedMessagingMessageListenerAdapter extends MessagingMessageListenerAdapter {
 

@@ -473,6 +473,11 @@ public class JmsConfigurationHelper {
 			JmsConfigurationHelper.LOGGER.debug("Configuring JMS ConnectionFactory - default deserializationAllowList → {}", defaultDeserializationAllowList);
 			connectionFactory.setDeserializationAllowList(defaultDeserializationAllowList);
 		}
+		if (Arrays.stream(StringUtils.defaultString(connectionFactory.getDeserializationAllowList()).split(",")).map(String::trim)
+				.anyMatch("*"::equals)) {
+			JmsConfigurationHelper.LOGGER.warn("Configuring JMS ConnectionFactory - deserializationAllowList allows every class ('*'): "
+					+ "object message bodies of any class are deserialized.");
+		}
 
 		// dynamicCredits — activate when depthThreshold is set
 		final Long dynamicCreditsDepthThreshold = actualProperties.getDynamicCreditsDepthThreshold();
