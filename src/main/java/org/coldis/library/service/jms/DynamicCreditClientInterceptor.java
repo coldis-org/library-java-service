@@ -134,6 +134,7 @@ public class DynamicCreditClientInterceptor implements Interceptor {
 	private final ConcurrentHashMap<String, Long> lastScalingLogAt = new ConcurrentHashMap<>();
 
 	private volatile ClientSession querySession;
+	private volatile ClientSessionFactory querySessionFactory;
 	private final Object querySessionLock = new Object();
 
 	/** Total consumer-create packets seen by this interceptor. */
@@ -205,6 +206,30 @@ public class DynamicCreditClientInterceptor implements Interceptor {
 	}
 
 	/**
+	 * Closes and forgets the query session and its session factory, so they are
+	 * recreated on the next query (a broker restart would otherwise leave a broken
+	 * session cached, and dropping it without closing leaks the factory's
+	 * connection). Close failures are logged: the resources are being discarded.
+	 */
+	private void closeQuerySession() {
+		synchronized (this.querySessionLock) {
+			if (this.querySession != null) {
+				try {
+					this.querySession.close();
+				}
+				catch (final Exception exception) {
+					LOGGER.debug("DynamicCredit — could not close query session: {}", exception.getMessage());
+				}
+			}
+			if (this.querySessionFactory != null) {
+				this.querySessionFactory.close();
+			}
+			this.querySession = null;
+			this.querySessionFactory = null;
+		}
+	}
+
+	/**
 	 * Lazily creates (and caches) the client session used to query queue depth.
 	 * Returns {@code null} when the session cannot be created; callers treat that
 	 * as depth {@code 0}.
@@ -214,8 +239,8 @@ public class DynamicCreditClientInterceptor implements Interceptor {
 			synchronized (this.querySessionLock) {
 				if (this.querySession == null) {
 					try {
-						final ClientSessionFactory clientSessionFactory = this.connectionFactory.getServerLocator().createSessionFactory();
-						this.querySession = clientSessionFactory.createSession(
+						this.querySessionFactory = this.connectionFactory.getServerLocator().createSessionFactory();
+						this.querySession = this.querySessionFactory.createSession(
 								this.connectionFactory.getUser(),
 								this.connectionFactory.getPassword(),
 								false,
@@ -226,12 +251,14 @@ public class DynamicCreditClientInterceptor implements Interceptor {
 					}
 					catch (final Exception exception) {
 						LOGGER.warn("DynamicCredit — could not create query session: {}", exception.getMessage());
+						this.closeQuerySession();
 					}
 				}
 			}
 		}
 		return this.querySession;
 	}
+
 
 	/**
 	 * Returns the queue's message count, used as the scaling signal. Cached for
@@ -265,9 +292,7 @@ public class DynamicCreditClientInterceptor implements Interceptor {
 			}
 			catch (final Exception exception) {
 				LOGGER.warn("DynamicCredit — could not query depth for queue '{}': {}", queueName, exception.getMessage());
-				// Invalidate the session so it is recreated on the next call.
-				// Without this, a broker restart leaves the cached session permanently broken.
-				this.querySession = null;
+				this.closeQuerySession();
 			}
 		}
 		return pendingDepth;

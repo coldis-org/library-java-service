@@ -74,6 +74,13 @@ public class ExtendedArtemisProperties extends ArtemisProperties implements Arte
 	private Integer cacheLevel;
 
 	/**
+	 * Packages/classes allowed for object message deserialization (comma
+	 * separated; "*" allows all). When not set, the library default applies (see
+	 * JmsConfigurationHelper), unless the broker URL already sets one.
+	 */
+	private String deserializationAllowList;
+
+	/**
 	 * Gets the useGlobalPools.
 	 *
 	 * @return The useGlobalPools.
@@ -647,6 +654,25 @@ public class ExtendedArtemisProperties extends ArtemisProperties implements Arte
 
 	public void setDynamicCreditsCacheTtl(final Long dynamicCreditsCacheTtl) {
 		this.dynamicCreditsCacheTtl = dynamicCreditsCacheTtl;
+	}
+
+	/**
+	 * Gets the deserializationAllowList.
+	 *
+	 * @return The deserializationAllowList.
+	 */
+	public String getDeserializationAllowList() {
+		return this.deserializationAllowList;
+	}
+
+	/**
+	 * Sets the deserializationAllowList.
+	 *
+	 * @param deserializationAllowList New deserializationAllowList.
+	 */
+	public void setDeserializationAllowList(
+			final String deserializationAllowList) {
+		this.deserializationAllowList = deserializationAllowList;
 	}
 
 }

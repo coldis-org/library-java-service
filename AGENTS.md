@@ -14,7 +14,7 @@ All under `src/main/java/org/coldis/library/`.
 | Package | Holds |
 |---------|-------|
 | `service/batch` | `BatchService` (endpoints), `BatchServiceComponent`, `BatchExecutor` (persisted as JSONB in the key-value store) |
-| `service/jms` | JMS configuration, dynamic consumer credit, stale-message filtering, see [`doc/dynamic-consumer-credit-scaling.md`](doc/dynamic-consumer-credit-scaling.md) |
+| `service/jms` | JMS configuration, dynamic consumer credit, stale-message filtering, see [`doc/dynamic-consumer-credit-scaling.md`](doc/dynamic-consumer-credit-scaling.md) and [`doc/stale-message-filter.md`](doc/stale-message-filter.md) |
 | `service/statistics` | Statistics events and buffered upserts, see [`doc/statistics.md`](doc/statistics.md) |
 | `service/aspectj`, `transaction` | Aspects and transaction helpers |
 | `service/cache`, `security`, `health`, `controller`, `http`, `localization`, `properties`, `resources`, `serialization`, `installer`, `helper` | Cross-cutting service infrastructure |

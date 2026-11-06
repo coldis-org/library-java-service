@@ -1,7 +1,10 @@
 package org.coldis.library.service.jms;
 
 import java.util.Collection;
+import java.util.Objects;
 import java.util.Set;
+import java.util.function.Supplier;
+import java.util.stream.Collectors;
 
 import org.apache.activemq.artemis.jms.client.ActiveMQDestination;
 import org.apache.activemq.artemis.utils.CompositeAddress;
@@ -14,6 +17,8 @@ import org.springframework.jms.listener.AbstractMessageListenerContainer;
 import org.springframework.jms.listener.adapter.ListenerExecutionFailedException;
 import org.springframework.jms.listener.adapter.MessagingMessageListenerAdapter;
 
+import io.micrometer.core.instrument.Counter;
+import io.micrometer.core.instrument.MeterRegistry;
 import jakarta.jms.JMSException;
 import jakarta.jms.Message;
 import jakarta.jms.MessageProducer;
@@ -31,6 +36,16 @@ public class ExtendedMessagingMessageListenerAdapter extends MessagingMessageLis
 	 * Current async hop parameter.
 	 */
 	public static final String CURRENT_ASYNC_HOP_PARAMETER = "asyncHop";
+
+	/**
+	 * Messages dropped after a non-retriable error (tags: destination, exception).
+	 */
+	public static final String DROPPED_MESSAGES_METRIC = "jms.listener.messages.dropped";
+
+	/**
+	 * Messages dropped by the stale message filter (tag: destination).
+	 */
+	public static final String STALE_DROPPED_MESSAGES_METRIC = "jms.stale.filter.dropped";
 
 	/**
 	 * JMS converter properties.
@@ -53,13 +68,20 @@ public class ExtendedMessagingMessageListenerAdapter extends MessagingMessageLis
 	private AbstractMessageListenerContainer listenerContainer;
 
 	/**
+	 * Meter registry supplier (may be null, or supply null, when unavailable).
+	 * Resolved on use, not when the adapter is created.
+	 */
+	private Supplier<MeterRegistry> meterRegistrySupplier;
+
+	/**
 	 * Default constructor.
 	 */
 	public ExtendedMessagingMessageListenerAdapter(final JmsConverterProperties jmsConverterProperties, final Collection<Class<?>> nonRetriableExceptions,
 			final StaleMessageFilterService staleMessageFilterService) {
 		super();
 		this.jmsConverterProperties = jmsConverterProperties;
-		this.nonRetriableExceptions = (nonRetriableExceptions == null ? Set.of() : Set.copyOf(nonRetriableExceptions));
+		this.nonRetriableExceptions = (nonRetriableExceptions == null ? Set.of()
+				: nonRetriableExceptions.stream().filter(Objects::nonNull).collect(Collectors.toUnmodifiableSet()));
 		this.staleMessageFilterService = staleMessageFilterService;
 	}
 
@@ -76,6 +98,41 @@ public class ExtendedMessagingMessageListenerAdapter extends MessagingMessageLis
 	public void setListenerContainer(
 			final AbstractMessageListenerContainer listenerContainer) {
 		this.listenerContainer = listenerContainer;
+	}
+
+	/**
+	 * Sets the meter registry supplier, used to count dropped messages
+	 * ({@value #DROPPED_MESSAGES_METRIC} and {@value #STALE_DROPPED_MESSAGES_METRIC}).
+	 *
+	 * @param meterRegistrySupplier Meter registry supplier.
+	 */
+	public void setMeterRegistrySupplier(
+			final Supplier<MeterRegistry> meterRegistrySupplier) {
+		this.meterRegistrySupplier = meterRegistrySupplier;
+	}
+
+	/**
+	 * Counts a dropped message, when a meter registry is available.
+	 *
+	 * @param metricName Metric name.
+	 * @param message    Dropped message.
+	 * @param tags       Extra tags (key, value pairs).
+	 */
+	private void countDroppedMessage(
+			final String metricName,
+			final Message message,
+			final String... tags) {
+		final MeterRegistry meterRegistry = (this.meterRegistrySupplier == null ? null : this.meterRegistrySupplier.get());
+		if (meterRegistry != null) {
+			String destination = "unknown";
+			try {
+				destination = Objects.toString(((ActiveMQDestination) message.getJMSDestination()).getAddress(), destination);
+			}
+			catch (final JMSException exception) {
+				ExtendedMessagingMessageListenerAdapter.LOGGER.debug("Dropped message destination could not be read.", exception);
+			}
+			Counter.builder(metricName).tag("destination", destination).tags(tags).register(meterRegistry).increment();
+		}
 	}
 
 	/**
@@ -216,6 +273,7 @@ public class ExtendedMessagingMessageListenerAdapter extends MessagingMessageLis
 			// same-key processing.
 			if (this.isSupersededByNewerProcessing(message)) {
 				ExtendedMessagingMessageListenerAdapter.LOGGER.debug("Dropping stale message superseded by a newer same-key processing.");
+				this.countDroppedMessage(ExtendedMessagingMessageListenerAdapter.STALE_DROPPED_MESSAGES_METRIC, message);
 			}
 			else {
 
@@ -263,7 +321,9 @@ public class ExtendedMessagingMessageListenerAdapter extends MessagingMessageLis
 				}
 			}
 
-			// Logs and drops the message.
+			// Logs, counts and drops the message.
+			this.countDroppedMessage(ExtendedMessagingMessageListenerAdapter.DROPPED_MESSAGES_METRIC, message, "exception",
+					exceptionCause.getClass().getName());
 			ExtendedMessagingMessageListenerAdapter.LOGGER
 					.warn("Dropping message due to non-retriable error '" + exception.getClass() + ": " + exception.getLocalizedMessage()
 							+ "' and nested error '" + exceptionCause.getClass() + ": " + exceptionCause.getLocalizedMessage() + "'.");
