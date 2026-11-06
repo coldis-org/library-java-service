@@ -2,9 +2,7 @@ package org.coldis.library.test.service.jms;
 
 import java.util.Collections;
 import java.util.Enumeration;
-import java.util.Map;
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.atomic.AtomicLong;
+import java.util.function.Supplier;
 
 import org.apache.activemq.artemis.api.core.management.ResourceNames;
 import org.apache.activemq.artemis.api.jms.management.JMSManagementHelper;
@@ -17,7 +15,7 @@ import org.coldis.library.test.TestHelper;
 import org.coldis.library.test.TestWithContainer;
 import org.coldis.library.test.service.ContainerTestHelper;
 import org.junit.jupiter.api.Assertions;
-import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -25,7 +23,6 @@ import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.boot.jms.ConnectionFactoryUnwrapper;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.context.SpringBootTest.WebEnvironment;
-import org.springframework.jms.annotation.JmsListener;
 import org.springframework.jms.core.JmsTemplate;
 
 import jakarta.jms.ConnectionFactory;
@@ -38,30 +35,20 @@ import jakarta.jms.Session;
 
 /**
  * Broker retry (the Artemis console "Retry", i.e. the queue control retry
- * operation) of messages sent to the async hops exceeded queue.
+ * operation) of messages sent to the async hops exceeded queue. Listeners are
+ * in {@link AsyncHopsExceededRetryTestListener}.
  */
 @TestWithContainer(reuse = true)
 @ExtendWith(StartTestWithContainerExtension.class)
 @SpringBootTest(webEnvironment = WebEnvironment.RANDOM_PORT)
+@DisplayName("Async hops exceeded queue — broker retry")
 public class AsyncHopsExceededRetryTest extends ContainerTestHelper {
-
-	/** Original queue. */
-	private static final String ORIGINAL_QUEUE = "async-hops/retry/queue";
-
-	/** Original topic. */
-	private static final String ORIGINAL_TOPIC = "async-hops/retry/topic";
 
 	/** Async hops exceeded queue. */
 	private static final String EXCEEDED_QUEUE = "async-hops/exceeded";
 
 	/** Test message identifier property. */
 	private static final String TEST_IDENTIFIER_PROPERTY = "retryTestIdentifier";
-
-	/** Identifier of the message the listeners should count. */
-	private static final AtomicLong EXPECTED_IDENTIFIER = new AtomicLong();
-
-	/** How many times each listener processed the expected message. */
-	private static final Map<String, AtomicLong> PROCESSED_COUNTS = new ConcurrentHashMap<>();
 
 	/** Connection factory. */
 	@Autowired
@@ -79,80 +66,6 @@ public class AsyncHopsExceededRetryTest extends ContainerTestHelper {
 	/** JMS converter properties. */
 	@Autowired
 	private JmsConverterProperties jmsConverterProperties;
-
-	/**
-	 * Counts a processed message.
-	 *
-	 * @param listenerName Listener name.
-	 * @param message      Message.
-	 */
-	private static void countProcessed(
-			final String listenerName,
-			final DtoTestObject message) {
-		if (AsyncHopsExceededRetryTest.EXPECTED_IDENTIFIER.get() == message.getId()) {
-			AsyncHopsExceededRetryTest.PROCESSED_COUNTS.computeIfAbsent(listenerName, name -> new AtomicLong()).incrementAndGet();
-		}
-	}
-
-	/**
-	 * Gets how many times a listener processed the expected message.
-	 *
-	 * @param  listenerName Listener name.
-	 * @return              Processed count.
-	 */
-	private static Long getProcessedCount(
-			final String listenerName) {
-		return AsyncHopsExceededRetryTest.PROCESSED_COUNTS.getOrDefault(listenerName, new AtomicLong()).get();
-	}
-
-	/**
-	 * Consumes the queue test message.
-	 *
-	 * @param message Message.
-	 */
-	@JmsListener(destination = AsyncHopsExceededRetryTest.ORIGINAL_QUEUE)
-	public void consumeQueue(
-			final DtoTestObject message) {
-		AsyncHopsExceededRetryTest.countProcessed("queue", message);
-	}
-
-	/**
-	 * Consumes the topic test message (first subscription).
-	 *
-	 * @param message Message.
-	 */
-	@JmsListener(
-			containerFactory = "jmsListenerTopicContainerFactory",
-			destination = AsyncHopsExceededRetryTest.ORIGINAL_TOPIC,
-			subscription = "async-hops/retry/topic/first"
-	)
-	public void consumeTopicFirstSubscription(
-			final DtoTestObject message) {
-		AsyncHopsExceededRetryTest.countProcessed("first", message);
-	}
-
-	/**
-	 * Consumes the topic test message (second subscription).
-	 *
-	 * @param message Message.
-	 */
-	@JmsListener(
-			containerFactory = "jmsListenerTopicContainerFactory",
-			destination = AsyncHopsExceededRetryTest.ORIGINAL_TOPIC,
-			subscription = "async-hops/retry/topic/second"
-	)
-	public void consumeTopicSecondSubscription(
-			final DtoTestObject message) {
-		AsyncHopsExceededRetryTest.countProcessed("second", message);
-	}
-
-	/**
-	 * Resets the counters.
-	 */
-	@BeforeEach
-	public void setUp() {
-		AsyncHopsExceededRetryTest.PROCESSED_COUNTS.clear();
-	}
 
 	/**
 	 * Gets the native connection factory.
@@ -208,6 +121,21 @@ public class AsyncHopsExceededRetryTest extends ContainerTestHelper {
 	}
 
 	/**
+	 * Waits until a count reaches the expected value, then checks it does not go
+	 * past it (late duplicates or fan-out).
+	 *
+	 * @param count         Count supplier.
+	 * @param expectedCount Expected count.
+	 */
+	private void assertCountSettles(
+			final Supplier<Long> count,
+			final Long expectedCount) throws Exception {
+		TestHelper.waitUntilValid(count, actualCount -> actualCount >= expectedCount, TestHelper.REGULAR_WAIT, TestHelper.SHORT_WAIT);
+		Assertions.assertEquals(expectedCount, count.get());
+		Assertions.assertFalse(TestHelper.waitUntilValid(count, actualCount -> actualCount > expectedCount, TestHelper.REGULAR_WAIT, TestHelper.SHORT_WAIT));
+	}
+
+	/**
 	 * Sends a message already over the hops limit, waits for it in the exceeded
 	 * queue and retries it.
 	 *
@@ -221,7 +149,7 @@ public class AsyncHopsExceededRetryTest extends ContainerTestHelper {
 			final String destination,
 			final Integer expectedCopiesCount) throws Exception {
 		final Long testIdentifier = RandomHelper.getPositiveRandomLong(Long.MAX_VALUE);
-		AsyncHopsExceededRetryTest.EXPECTED_IDENTIFIER.set(testIdentifier);
+		AsyncHopsExceededRetryTestListener.reset(testIdentifier);
 		final Long exceededHop = this.jmsConverterProperties.getMaximumAsyncHops() + 1;
 
 		// Sends a message already over the hops limit, and waits for it in the
@@ -234,7 +162,7 @@ public class AsyncHopsExceededRetryTest extends ContainerTestHelper {
 		TestHelper.waitUntilValid(() -> this.countInExceededQueue(testIdentifier), count -> count >= expectedCopiesCount, TestHelper.REGULAR_WAIT,
 				TestHelper.SHORT_WAIT);
 		Assertions.assertEquals(expectedCopiesCount, this.countInExceededQueue(testIdentifier));
-		Assertions.assertTrue(AsyncHopsExceededRetryTest.PROCESSED_COUNTS.isEmpty());
+		Assertions.assertEquals(0L, AsyncHopsExceededRetryTestListener.getTotalProcessedCount());
 
 		// Retries it as the console does.
 		Assertions.assertEquals(expectedCopiesCount, this.retryExceededQueue(testIdentifier));
@@ -248,11 +176,10 @@ public class AsyncHopsExceededRetryTest extends ContainerTestHelper {
 	 * @throws Exception If the test fails.
 	 */
 	@Test
+	@DisplayName("Retrying an exceeded queue message returns it to its queue, processed once")
 	public void testRetryQueueMessageFromExceededQueue() throws Exception {
-		this.sendExceededAndRetry(this.jmsTemplate, AsyncHopsExceededRetryTest.ORIGINAL_QUEUE, 1);
-		TestHelper.waitUntilValid(() -> AsyncHopsExceededRetryTest.getProcessedCount("queue"), count -> count > 0, TestHelper.REGULAR_WAIT,
-				TestHelper.SHORT_WAIT);
-		Assertions.assertEquals(1L, AsyncHopsExceededRetryTest.getProcessedCount("queue"));
+		this.sendExceededAndRetry(this.jmsTemplate, AsyncHopsExceededRetryTestListener.ORIGINAL_QUEUE, 1);
+		this.assertCountSettles(() -> AsyncHopsExceededRetryTestListener.getProcessedCount(AsyncHopsExceededRetryTestListener.QUEUE_LISTENER), 1L);
 	}
 
 	/**
@@ -262,17 +189,16 @@ public class AsyncHopsExceededRetryTest extends ContainerTestHelper {
 	 * @throws Exception If the test fails.
 	 */
 	@Test
+	@DisplayName("A message with a null async hop (copied by previous versions) is processed once")
 	public void testNullAsyncHopMessageIsProcessed() throws Exception {
 		final Long testIdentifier = RandomHelper.getPositiveRandomLong(Long.MAX_VALUE);
-		AsyncHopsExceededRetryTest.EXPECTED_IDENTIFIER.set(testIdentifier);
-		this.jmsTemplate.convertAndSend(AsyncHopsExceededRetryTest.ORIGINAL_QUEUE, new DtoTestObject(testIdentifier, "2", "3", 4, new int[] { 5, 6 }, 7),
-				message -> {
+		AsyncHopsExceededRetryTestListener.reset(testIdentifier);
+		this.jmsTemplate.convertAndSend(AsyncHopsExceededRetryTestListener.ORIGINAL_QUEUE,
+				new DtoTestObject(testIdentifier, "2", "3", 4, new int[] { 5, 6 }, 7), message -> {
 					message.setObjectProperty(ExtendedMessagingMessageListenerAdapter.CURRENT_ASYNC_HOP_PARAMETER, null);
 					return message;
 				});
-		TestHelper.waitUntilValid(() -> AsyncHopsExceededRetryTest.getProcessedCount("queue"), count -> count > 0, TestHelper.REGULAR_WAIT,
-				TestHelper.SHORT_WAIT);
-		Assertions.assertEquals(1L, AsyncHopsExceededRetryTest.getProcessedCount("queue"));
+		this.assertCountSettles(() -> AsyncHopsExceededRetryTestListener.getProcessedCount(AsyncHopsExceededRetryTestListener.QUEUE_LISTENER), 1L);
 	}
 
 	/**
@@ -282,12 +208,12 @@ public class AsyncHopsExceededRetryTest extends ContainerTestHelper {
 	 * @throws Exception If the test fails.
 	 */
 	@Test
+	@DisplayName("Retrying exceeded topic messages returns each to its own subscription only")
 	public void testRetryTopicMessageFromExceededQueue() throws Exception {
-		this.sendExceededAndRetry(this.jmsTopicTemplate, AsyncHopsExceededRetryTest.ORIGINAL_TOPIC, 2);
-		TestHelper.waitUntilValid(() -> AsyncHopsExceededRetryTest.getProcessedCount("first") + AsyncHopsExceededRetryTest.getProcessedCount("second"),
-				count -> count >= 2, TestHelper.REGULAR_WAIT, TestHelper.SHORT_WAIT);
-		Assertions.assertEquals(1L, AsyncHopsExceededRetryTest.getProcessedCount("first"));
-		Assertions.assertEquals(1L, AsyncHopsExceededRetryTest.getProcessedCount("second"));
+		this.sendExceededAndRetry(this.jmsTopicTemplate, AsyncHopsExceededRetryTestListener.ORIGINAL_TOPIC, 2);
+		this.assertCountSettles(AsyncHopsExceededRetryTestListener::getTotalProcessedCount, 2L);
+		Assertions.assertEquals(1L, AsyncHopsExceededRetryTestListener.getProcessedCount(AsyncHopsExceededRetryTestListener.FIRST_SUBSCRIPTION_LISTENER));
+		Assertions.assertEquals(1L, AsyncHopsExceededRetryTestListener.getProcessedCount(AsyncHopsExceededRetryTestListener.SECOND_SUBSCRIPTION_LISTENER));
 	}
 
 }

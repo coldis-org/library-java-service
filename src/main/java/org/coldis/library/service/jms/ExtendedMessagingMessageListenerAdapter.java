@@ -64,8 +64,12 @@ public class ExtendedMessagingMessageListenerAdapter extends MessagingMessageLis
 	}
 
 	/**
-	 * Sets the listener container (used to resolve the queue the listener consumes
-	 * from).
+	 * Sets the listener container, used to resolve the queue the listener consumes
+	 * from (the original queue of messages sent to the async hops exceeded queue).
+	 * Set by the listener endpoint of {@link EnhancedJmsBootstrapConfiguration}
+	 * after the adapter is created. When not set, queue listeners fall back to the
+	 * message destination and topic subscriptions get no original queue (their
+	 * exceeded messages cannot be retried by the broker).
 	 *
 	 * @param listenerContainer Listener container.
 	 */
@@ -75,8 +79,12 @@ public class ExtendedMessagingMessageListenerAdapter extends MessagingMessageLis
 	}
 
 	/**
-	 * Resolves the broker queue the listener consumes from: the queue itself, or
-	 * the subscription queue for durable or shared topic subscriptions.
+	 * Resolves the broker queue the listener consumes from: the queue the
+	 * container listens to (or, without it, the message destination), or the
+	 * subscription queue for durable or shared topic subscriptions. The
+	 * subscription queue is named with the container client id: a client id set
+	 * only on the connection factory is not seen here, and the resolved name then
+	 * does not match the broker queue.
 	 *
 	 * @param  destination Message destination.
 	 * @return             The queue name, or null when it cannot be resolved (e.g.
@@ -87,7 +95,10 @@ public class ExtendedMessagingMessageListenerAdapter extends MessagingMessageLis
 			final ActiveMQDestination destination) {
 		String queueName = null;
 		if (destination.isQueue()) {
-			queueName = CompositeAddress.extractQueueName(destination.getName());
+			final String listenedDestinationName = ((this.listenerContainer != null) && !this.listenerContainer.isPubSubDomain()
+					? this.listenerContainer.getDestinationName()
+					: null);
+			queueName = CompositeAddress.extractQueueName(listenedDestinationName != null ? listenedDestinationName : destination.getName());
 		}
 		else if ((this.listenerContainer != null) && (this.listenerContainer.getSubscriptionName() != null)
 				&& (this.listenerContainer.isSubscriptionDurable() || this.listenerContainer.isSubscriptionShared())) {
@@ -108,7 +119,7 @@ public class ExtendedMessagingMessageListenerAdapter extends MessagingMessageLis
 		final Long currentAsyncHop = JmsMessageHelper.getLongProperty(message, ExtendedMessagingMessageListenerAdapter.CURRENT_ASYNC_HOP_PARAMETER, 0L);
 		if ((maximumAsyncHops > 0) && (currentAsyncHop > maximumAsyncHops)) {
 			final String destination = ((ActiveMQDestination) message.getJMSDestination()).getAddress();
-			throw new JmsAsyncHopsExceededException(destination, currentAsyncHop, message.getBody(Object.class));
+			throw new JmsAsyncHopsExceededException(destination, currentAsyncHop);
 		}
 	}
 
@@ -222,24 +233,25 @@ public class ExtendedMessagingMessageListenerAdapter extends MessagingMessageLis
 			final ActiveMQDestination destination = (ActiveMQDestination) message.getJMSDestination();
 			final Message copiedMessage = JmsMessageHelper.copy(session, message);
 			copiedMessage.setStringProperty(org.apache.activemq.artemis.api.core.Message.HDR_ORIGINAL_ADDRESS.toString(), destination.getAddress());
-			final String consumedQueueName = this.getConsumedQueueName(destination);
-			if (consumedQueueName != null) {
-				copiedMessage.setStringProperty(org.apache.activemq.artemis.api.core.Message.HDR_ORIGINAL_QUEUE.toString(), consumedQueueName);
-			}
+			// Always overwritten: an original queue inherited from the consumed message must
+			// not steer the retry (null makes the broker skip it).
+			copiedMessage.setObjectProperty(org.apache.activemq.artemis.api.core.Message.HDR_ORIGINAL_QUEUE.toString(),
+					this.getConsumedQueueName(destination));
 			copiedMessage.setLongProperty(ExtendedMessagingMessageListenerAdapter.CURRENT_ASYNC_HOP_PARAMETER, 0L);
 			try (MessageProducer producer = session.createProducer(session.createQueue("async-hops/exceeded"))) {
 				producer.send(copiedMessage);
 			}
-			ExtendedMessagingMessageListenerAdapter.LOGGER.warn(exception.getLocalizedMessage() + "Sending message to 'async-hops/exceeded' queue.");
+			ExtendedMessagingMessageListenerAdapter.LOGGER.warn("{} Sending message '{}' to 'async-hops/exceeded' queue.", exception.getLocalizedMessage(),
+					message.getJMSMessageID());
 		}
 		// Handles listener execution failed exceptions.
 		catch (final ListenerExecutionFailedException exception) {
 			final Throwable exceptionCause = exception.getCause();
 
-			// If not an non-retrieable exception.
+			// If not a non-retriable exception.
 			if (!this.nonRetriableExceptions.contains(exceptionCause.getClass())) {
-				// If not a retrieable exception or is a retrieable exception without a retry-in
-				// value.
+				// Retries unless the cause is a retriable-aware exception without a retry-in
+				// value (which is dropped below).
 				if (!(exceptionCause instanceof final RetriableIn retriableException) || (retriableException.getRetryIn() != null)) {
 					// Re-throws the exception to trigger a retry.
 					throw exception;
