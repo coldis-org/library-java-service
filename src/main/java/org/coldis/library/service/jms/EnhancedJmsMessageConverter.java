@@ -532,13 +532,9 @@ public class EnhancedJmsMessageConverter extends SimpleMessageConverter {
 	 * @return              Current async hop.
 	 * @throws JMSException If the increment cannot be performed.
 	 */
-	@SuppressWarnings("unchecked")
 	private Long incrementCurrentAsyncHopOnRequest(
 			final Message message) throws JMSException {
-		Long currentAsyncHop = (EnumerationUtils.toList(message.getPropertyNames())
-				.contains(ExtendedMessagingMessageListenerAdapter.CURRENT_ASYNC_HOP_PARAMETER)
-						? message.getLongProperty(ExtendedMessagingMessageListenerAdapter.CURRENT_ASYNC_HOP_PARAMETER)
-						: 0L);
+		Long currentAsyncHop = JmsMessageHelper.getLongProperty(message, ExtendedMessagingMessageListenerAdapter.CURRENT_ASYNC_HOP_PARAMETER, 0L);
 
 		// Resets the hops if queue is ignored.
 		final String destination = Objects.toString(message.getJMSDestination());

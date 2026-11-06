@@ -19,6 +19,34 @@ import jakarta.jms.TextMessage;
 public class JmsMessageHelper {
 
 	/**
+	 * Gets a long property, tolerating a missing or null-valued property (the JMS
+	 * long getter fails on a property that exists with a null value).
+	 *
+	 * @param  message      Message.
+	 * @param  propertyName Property name.
+	 * @param  defaultValue Value when the property is missing or null.
+	 * @return              The property value.
+	 * @throws JMSException If the property cannot be read.
+	 */
+	public static Long getLongProperty(
+			final Message message,
+			final String propertyName,
+			final Long defaultValue) throws JMSException {
+		final Object propertyValue = (message.propertyExists(propertyName) ? message.getObjectProperty(propertyName) : null);
+		final Long longValue;
+		if (propertyValue == null) {
+			longValue = defaultValue;
+		}
+		else if (propertyValue instanceof final Number numberValue) {
+			longValue = numberValue.longValue();
+		}
+		else {
+			longValue = Long.valueOf(propertyValue.toString());
+		}
+		return longValue;
+	}
+
+	/**
 	 * Copies the headers and properties from one message to another.
 	 *
 	 * @param src Source message.

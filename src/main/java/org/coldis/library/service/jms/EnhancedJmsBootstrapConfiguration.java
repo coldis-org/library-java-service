@@ -15,6 +15,8 @@ import org.springframework.context.annotation.Role;
 import org.springframework.jms.annotation.JmsListenerAnnotationBeanPostProcessor;
 import org.springframework.jms.config.JmsListenerConfigUtils;
 import org.springframework.jms.config.MethodJmsListenerEndpoint;
+import org.springframework.jms.listener.AbstractMessageListenerContainer;
+import org.springframework.jms.listener.MessageListenerContainer;
 import org.springframework.jms.listener.adapter.MessagingMessageListenerAdapter;
 
 
@@ -65,6 +67,20 @@ public class EnhancedJmsBootstrapConfiguration implements BeanDefinitionRegistry
 						List<Class<?>> nonRetriableExceptions = ClassUtils.convertClassNamesToClasses(nonRetriableExceptionsNames);
 						return new ExtendedMessagingMessageListenerAdapter(jmsConverterProperties, nonRetriableExceptions,
 								staleMessageFilterServiceProvider.getIfAvailable());
+					}
+
+					/**
+					 * @see org.springframework.jms.config.MethodJmsListenerEndpoint#createMessageListener(org.springframework.jms.listener.MessageListenerContainer)
+					 */
+					@Override
+					protected MessagingMessageListenerAdapter createMessageListener(
+							final MessageListenerContainer container) {
+						final MessagingMessageListenerAdapter messageListener = super.createMessageListener(container);
+						if ((messageListener instanceof final ExtendedMessagingMessageListenerAdapter extendedMessageListener)
+								&& (container instanceof final AbstractMessageListenerContainer listenerContainer)) {
+							extendedMessageListener.setListenerContainer(listenerContainer);
+						}
+						return messageListener;
 					}
 				};
 			}

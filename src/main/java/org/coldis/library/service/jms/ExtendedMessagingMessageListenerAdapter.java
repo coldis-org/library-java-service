@@ -4,12 +4,13 @@ import java.util.Collection;
 import java.util.Set;
 
 import org.apache.activemq.artemis.jms.client.ActiveMQDestination;
-import org.apache.commons.collections4.EnumerationUtils;
+import org.apache.activemq.artemis.utils.CompositeAddress;
 import org.coldis.library.helper.DateTimeHelper;
 import org.coldis.library.model.RetriableIn;
 import org.coldis.library.thread.ThreadMapContextHolder;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.jms.listener.AbstractMessageListenerContainer;
 import org.springframework.jms.listener.adapter.ListenerExecutionFailedException;
 import org.springframework.jms.listener.adapter.MessagingMessageListenerAdapter;
 
@@ -47,6 +48,11 @@ public class ExtendedMessagingMessageListenerAdapter extends MessagingMessageLis
 	private final StaleMessageFilterService staleMessageFilterService;
 
 	/**
+	 * Listener container (may be null when unavailable).
+	 */
+	private AbstractMessageListenerContainer listenerContainer;
+
+	/**
 	 * Default constructor.
 	 */
 	public ExtendedMessagingMessageListenerAdapter(final JmsConverterProperties jmsConverterProperties, final Collection<Class<?>> nonRetriableExceptions,
@@ -58,6 +64,40 @@ public class ExtendedMessagingMessageListenerAdapter extends MessagingMessageLis
 	}
 
 	/**
+	 * Sets the listener container (used to resolve the queue the listener consumes
+	 * from).
+	 *
+	 * @param listenerContainer Listener container.
+	 */
+	public void setListenerContainer(
+			final AbstractMessageListenerContainer listenerContainer) {
+		this.listenerContainer = listenerContainer;
+	}
+
+	/**
+	 * Resolves the broker queue the listener consumes from: the queue itself, or
+	 * the subscription queue for durable or shared topic subscriptions.
+	 *
+	 * @param  destination Message destination.
+	 * @return             The queue name, or null when it cannot be resolved (e.g.
+	 *                     a non-durable non-shared subscription, whose queue is
+	 *                     temporary).
+	 */
+	private String getConsumedQueueName(
+			final ActiveMQDestination destination) {
+		String queueName = null;
+		if (destination.isQueue()) {
+			queueName = CompositeAddress.extractQueueName(destination.getName());
+		}
+		else if ((this.listenerContainer != null) && (this.listenerContainer.getSubscriptionName() != null)
+				&& (this.listenerContainer.isSubscriptionDurable() || this.listenerContainer.isSubscriptionShared())) {
+			queueName = ActiveMQDestination.createQueueNameForSubscription(this.listenerContainer.isSubscriptionDurable(),
+					this.listenerContainer.getClientId(), this.listenerContainer.getSubscriptionName()).toString();
+		}
+		return queueName;
+	}
+
+	/**
 	 * Validates if the maximum number of async hops was exceeded.
 	 *
 	 * @throws JMSException If there is any problem accessing the message.
@@ -65,11 +105,7 @@ public class ExtendedMessagingMessageListenerAdapter extends MessagingMessageLis
 	private void validateAsyncHops(
 			final Message message) throws JMSException {
 		final Long maximumAsyncHops = this.jmsConverterProperties.getMaximumAsyncHops();
-		@SuppressWarnings("unchecked")
-		final Long currentAsyncHop = (EnumerationUtils.toList(message.getPropertyNames())
-				.contains(ExtendedMessagingMessageListenerAdapter.CURRENT_ASYNC_HOP_PARAMETER)
-						? message.getLongProperty(ExtendedMessagingMessageListenerAdapter.CURRENT_ASYNC_HOP_PARAMETER)
-						: 0L);
+		final Long currentAsyncHop = JmsMessageHelper.getLongProperty(message, ExtendedMessagingMessageListenerAdapter.CURRENT_ASYNC_HOP_PARAMETER, 0L);
 		if ((maximumAsyncHops > 0) && (currentAsyncHop > maximumAsyncHops)) {
 			final String destination = ((ActiveMQDestination) message.getJMSDestination()).getAddress();
 			throw new JmsAsyncHopsExceededException(destination, currentAsyncHop, message.getBody(Object.class));
@@ -180,11 +216,17 @@ public class ExtendedMessagingMessageListenerAdapter extends MessagingMessageLis
 
 		}
 		// Sends messages with async hops exceeded to a new specific queue.
+		// The original address and queue are what the broker retry operation (e.g. the
+		// console "Retry") uses to move the message back; the hops restart on retry.
 		catch (final JmsAsyncHopsExceededException exception) {
-			final String destination = ((ActiveMQDestination) message.getJMSDestination()).getAddress();
+			final ActiveMQDestination destination = (ActiveMQDestination) message.getJMSDestination();
 			final Message copiedMessage = JmsMessageHelper.copy(session, message);
-			copiedMessage.setStringProperty(org.apache.activemq.artemis.api.core.Message.HDR_ORIGINAL_ADDRESS.toString(), destination);
-			copiedMessage.setObjectProperty(ExtendedMessagingMessageListenerAdapter.CURRENT_ASYNC_HOP_PARAMETER, null);
+			copiedMessage.setStringProperty(org.apache.activemq.artemis.api.core.Message.HDR_ORIGINAL_ADDRESS.toString(), destination.getAddress());
+			final String consumedQueueName = this.getConsumedQueueName(destination);
+			if (consumedQueueName != null) {
+				copiedMessage.setStringProperty(org.apache.activemq.artemis.api.core.Message.HDR_ORIGINAL_QUEUE.toString(), consumedQueueName);
+			}
+			copiedMessage.setLongProperty(ExtendedMessagingMessageListenerAdapter.CURRENT_ASYNC_HOP_PARAMETER, 0L);
 			try (MessageProducer producer = session.createProducer(session.createQueue("async-hops/exceeded"))) {
 				producer.send(copiedMessage);
 			}
