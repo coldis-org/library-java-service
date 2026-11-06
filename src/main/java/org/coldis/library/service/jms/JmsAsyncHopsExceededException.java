@@ -62,15 +62,15 @@ public class JmsAsyncHopsExceededException extends IntegrationException {
 	}
 
 	/**
-	 * Sets the payload (not used in the exception text).
+	 * Does nothing: kept for compatibility.
 	 *
-	 * @param      payload The payload.
+	 * @param      payload Ignored.
 	 * @deprecated         The payload is no longer part of the exception.
 	 */
 	@Deprecated
 	public void setPayload(
 			final Object payload) {
-		this.getInternalMessage().getParameters()[2] = payload;
+		// The payload is not kept (it may hold sensitive data).
 	}
 
 	/**

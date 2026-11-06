@@ -27,11 +27,13 @@ import org.springframework.jms.core.JmsTemplate;
 
 import jakarta.jms.ConnectionFactory;
 import jakarta.jms.Message;
+import jakarta.jms.MessageConsumer;
 import jakarta.jms.QueueBrowser;
 import jakarta.jms.QueueConnection;
 import jakarta.jms.QueueRequestor;
 import jakarta.jms.QueueSession;
 import jakarta.jms.Session;
+import jakarta.jms.TextMessage;
 
 /**
  * Broker retry (the Artemis console "Retry", i.e. the queue control retry
@@ -95,6 +97,23 @@ public class AsyncHopsExceededRetryTest extends ContainerTestHelper {
 		}
 		catch (final Exception exception) {
 			throw new IllegalStateException(exception);
+		}
+	}
+
+	/**
+	 * Takes (consumes) the test message from the exceeded queue.
+	 *
+	 * @param  testIdentifier Test identifier.
+	 * @return                The taken message, or null when there is none.
+	 */
+	private Message takeFromExceededQueue(
+			final Long testIdentifier) throws Exception {
+		try (QueueConnection connection = this.getNativeConnectionFactory().createQueueConnection();
+				QueueSession session = connection.createQueueSession(false, Session.AUTO_ACKNOWLEDGE);
+				MessageConsumer consumer = session.createConsumer(session.createQueue(AsyncHopsExceededRetryTest.EXCEEDED_QUEUE),
+						AsyncHopsExceededRetryTest.TEST_IDENTIFIER_PROPERTY + " = " + testIdentifier)) {
+			connection.start();
+			return consumer.receive(TestHelper.REGULAR_WAIT);
 		}
 	}
 
@@ -199,6 +218,35 @@ public class AsyncHopsExceededRetryTest extends ContainerTestHelper {
 					return message;
 				});
 		this.assertCountSettles(() -> AsyncHopsExceededRetryTestListener.getProcessedCount(AsyncHopsExceededRetryTestListener.QUEUE_LISTENER), 1L);
+	}
+
+	/**
+	 * Tests that a text payload with format characters reaches the exceeded queue
+	 * (the exception text used to be formatted over the payload, and a '%' threw,
+	 * rolling the copy back), and that an inherited original queue is overwritten
+	 * with the consumed queue.
+	 *
+	 * @throws Exception If the test fails.
+	 */
+	@Test
+	@DisplayName("An exceeded text message with '%' and a stale original queue reaches the exceeded queue, re-pointed")
+	public void testFormatCharactersAndStaleOriginalQueue() throws Exception {
+		final Long testIdentifier = RandomHelper.getPositiveRandomLong(Long.MAX_VALUE);
+		AsyncHopsExceededRetryTestListener.reset(testIdentifier);
+		final Long exceededHop = this.jmsConverterProperties.getMaximumAsyncHops() + 1;
+		this.jmsTemplate.convertAndSend(AsyncHopsExceededRetryTestListener.ORIGINAL_QUEUE, "100% sure: %s %d %n", message -> {
+			message.setLongProperty(ExtendedMessagingMessageListenerAdapter.CURRENT_ASYNC_HOP_PARAMETER, exceededHop);
+			message.setLongProperty(AsyncHopsExceededRetryTest.TEST_IDENTIFIER_PROPERTY, testIdentifier);
+			message.setStringProperty(org.apache.activemq.artemis.api.core.Message.HDR_ORIGINAL_QUEUE.toString(), "stale/original/queue");
+			return message;
+		});
+		TestHelper.waitUntilValid(() -> this.countInExceededQueue(testIdentifier), count -> count >= 1, TestHelper.REGULAR_WAIT, TestHelper.SHORT_WAIT);
+		final Message exceededMessage = this.takeFromExceededQueue(testIdentifier);
+		Assertions.assertNotNull(exceededMessage);
+		Assertions.assertEquals("100% sure: %s %d %n", ((TextMessage) exceededMessage).getText());
+		Assertions.assertEquals(AsyncHopsExceededRetryTestListener.ORIGINAL_QUEUE,
+				exceededMessage.getStringProperty(org.apache.activemq.artemis.api.core.Message.HDR_ORIGINAL_QUEUE.toString()));
+		Assertions.assertEquals(0L, exceededMessage.getLongProperty(ExtendedMessagingMessageListenerAdapter.CURRENT_ASYNC_HOP_PARAMETER));
 	}
 
 	/**

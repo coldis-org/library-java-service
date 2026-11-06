@@ -48,7 +48,9 @@ public class JmsMessageHelper {
 				longValue = Long.valueOf(stringValue);
 			}
 			catch (final NumberFormatException exception) {
-				throw new MessageFormatException("Property '" + propertyName + "' is not a long: " + stringValue);
+				final MessageFormatException formatException = new MessageFormatException("Property '" + propertyName + "' is not a long: " + stringValue);
+				formatException.initCause(exception);
+				throw formatException;
 			}
 		}
 		else {
