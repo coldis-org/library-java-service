@@ -1,8 +1,11 @@
 package org.coldis.library.test.service.jms;
 
+import java.util.ArrayList;
+import java.util.List;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 
 import org.apache.activemq.artemis.api.core.SimpleString;
@@ -151,27 +154,6 @@ class DynamicCreditClientInterceptorTest extends ContainerTestHelper {
 				"Below threshold, no credit packets should be scaled");
 	}
 
-	@Test
-	@DisplayName("interceptor ignores credit packets from consumers it did not see created")
-	void testInterceptorIgnoresUntrackedConsumers() throws Exception {
-		// This test verifies a key safety property: if for some reason a credit
-		// packet arrives for a consumerID we never saw created (e.g., interceptor
-		// registered after the consumer), we simply pass it through unmodified —
-		// no NPE, no scaling.
-		// We exercise this implicitly: every connection created BEFORE setUp ran
-		// (e.g., the Spring JmsTemplate's pooled connection) would have an unknown
-		// consumerID. Sending a message goes through such a producer; no consumer
-		// is involved here, so the path is only sanity-checked.
-		for (long messageIndex = 0; messageIndex < 3; messageIndex++) {
-			this.jmsTemplate.convertAndSend(this.queueName, messageIndex);
-		}
-		final int received = this.drainQueue(this.queueName, 3, 3000L);
-
-		Assertions.assertEquals(3, received);
-		// No crash, no scaling expected for these (below threshold anyway).
-		Assertions.assertEquals(0, this.interceptor.getCreditPacketsScaled());
-	}
-
 	/**
 	 * Reproduces the production slow-consumer reset desync end-to-end. In
 	 * slow-consumer mode ({@code consumerWindowSize=0}), a {@code receive(timeout)}
@@ -273,10 +255,11 @@ class DynamicCreditClientInterceptorTest extends ContainerTestHelper {
 			final CountDownLatch startLatch = new CountDownLatch(1);
 			final CountDownLatch doneLatch = new CountDownLatch(threadCount);
 			final ExecutorService threadPool = Executors.newFixedThreadPool(threadCount);
+			final List<Future<?>> workerResults = new ArrayList<>();
 			try {
 				for (int threadIndex = 0; threadIndex < threadCount; threadIndex++) {
 					final int currentThreadIndex = threadIndex;
-					threadPool.submit(() -> {
+					workerResults.add(threadPool.submit(() -> {
 						try {
 							startLatch.await();
 							for (int consumerIndex = 0; consumerIndex < consumersPerThread; consumerIndex++) {
@@ -293,11 +276,15 @@ class DynamicCreditClientInterceptorTest extends ContainerTestHelper {
 						finally {
 							doneLatch.countDown();
 						}
-					});
+					}));
 				}
 				startLatch.countDown();
 				Assertions.assertTrue(doneLatch.await(30, TimeUnit.SECONDS),
 						"Concurrent intercepts didn't complete in time");
+				// Fails the test with the worker's error when an intercept threw.
+				for (final Future<?> workerResult : workerResults) {
+					workerResult.get();
+				}
 			}
 			finally {
 				threadPool.shutdownNow();

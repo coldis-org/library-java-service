@@ -1,12 +1,16 @@
 package org.coldis.library.service.jms;
 
 import java.time.Duration;
+import java.util.Arrays;
+import java.util.List;
+import java.util.StringJoiner;
 import java.util.concurrent.Executor;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.ScheduledExecutorService;
 
 import org.apache.activemq.artemis.api.core.client.ActiveMQClient;
 import org.apache.activemq.artemis.jms.client.ActiveMQConnectionFactory;
+import org.apache.commons.lang3.StringUtils;
 import org.apache.commons.lang3.builder.EqualsBuilder;
 import org.coldis.library.helper.ObjectHelper;
 import org.coldis.library.thread.DynamicThreadPoolFactory;
@@ -44,6 +48,11 @@ public class JmsConfigurationHelper {
 	 */
 	private static final Logger LOGGER = LoggerFactory.getLogger(JmsConfigurationHelper.class);
 
+	/**
+	 * JDK packages allowed by default for object message deserialization.
+	 */
+	private static final List<String> DEFAULT_DESERIALIZATION_ALLOWED_JAVA_PACKAGES = List.of("java.lang", "java.util", "java.time", "java.math");
+
 	/** JMS global thread pool. */
 	private ExecutorService globalThreadPool;
 
@@ -79,6 +88,10 @@ public class JmsConfigurationHelper {
 	/** Meter registry. */
 	@Autowired(required = false)
 	private MeterRegistry meterRegistry;
+
+	/** Application base packages (comma separated). */
+	@Value("${org.coldis.configuration.base-package:}")
+	private String basePackages;
 
 	/**
 	 * Gets the JMS listener executor.
@@ -125,7 +138,7 @@ public class JmsConfigurationHelper {
 			final Integer scheduledCorePoolSize,
 			@Value("${org.coldis.library.service.jms.global.scheduled.executor.core-size-cpu-multiplier:1}")
 			final Double scheduledCorePoolSizeCpuMultiplier,
-			@Value("${org.coldis.library.service.jms.global.executor.name:jms-global-flow-control-thread}")
+			@Value("${org.coldis.library.service.jms.global.flow-control.executor.name:${org.coldis.library.service.jms.global.executor.name:jms-global-flow-control-thread}}")
 			final String flowControlName,
 			@Value("${org.coldis.library.service.jms.global.flow-control.executor.priority:5}")
 			final Integer flowControlPriority,
@@ -271,6 +284,20 @@ public class JmsConfigurationHelper {
 				targetValue) -> true);
 
 		return mergedProperties;
+	}
+
+	/**
+	 * Gets the default allow list for object message deserialization: the coldis
+	 * and application base packages, plus common JDK value packages.
+	 *
+	 * @return The default allow list (comma separated).
+	 */
+	private String getDefaultDeserializationAllowList() {
+		final StringJoiner allowList = new StringJoiner(",");
+		allowList.add("org.coldis");
+		Arrays.stream(StringUtils.defaultString(this.basePackages).split(",")).map(String::trim).filter(StringUtils::isNotBlank).forEach(allowList::add);
+		JmsConfigurationHelper.DEFAULT_DESERIALIZATION_ALLOWED_JAVA_PACKAGES.forEach(allowList::add);
+		return allowList.toString();
 	}
 
 	/**
@@ -432,6 +459,24 @@ public class JmsConfigurationHelper {
 		if (retryIntervalMultiplier != null) {
 			JmsConfigurationHelper.LOGGER.debug("Configuring JMS ConnectionFactory - overriding retryIntervalMultiplier → {}", retryIntervalMultiplier);
 			connectionFactory.setRetryIntervalMultiplier(retryIntervalMultiplier);
+		}
+
+		// deserializationAllowList: an explicit property wins; otherwise the library
+		// default applies unless the broker URL already set one.
+		final String deserializationAllowList = actualProperties.getDeserializationAllowList();
+		if (deserializationAllowList != null) {
+			JmsConfigurationHelper.LOGGER.debug("Configuring JMS ConnectionFactory - overriding deserializationAllowList → {}", deserializationAllowList);
+			connectionFactory.setDeserializationAllowList(deserializationAllowList);
+		}
+		else if (connectionFactory.getDeserializationAllowList() == null) {
+			final String defaultDeserializationAllowList = this.getDefaultDeserializationAllowList();
+			JmsConfigurationHelper.LOGGER.debug("Configuring JMS ConnectionFactory - default deserializationAllowList → {}", defaultDeserializationAllowList);
+			connectionFactory.setDeserializationAllowList(defaultDeserializationAllowList);
+		}
+		if (Arrays.stream(StringUtils.defaultString(connectionFactory.getDeserializationAllowList()).split(",")).map(String::trim)
+				.anyMatch("*"::equals)) {
+			JmsConfigurationHelper.LOGGER.warn("Configuring JMS ConnectionFactory - deserializationAllowList allows every class ('*'): "
+					+ "object message bodies of any class are deserialized.");
 		}
 
 		// dynamicCredits — activate when depthThreshold is set

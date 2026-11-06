@@ -1,5 +1,6 @@
 package org.coldis.library.service.jms;
 
+import java.io.IOException;
 import java.util.Arrays;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
@@ -98,6 +99,9 @@ public class EnhancedJmsMessageConverter extends SimpleMessageConverter {
 
 	/** Alternative class names (or parts). */
 	private SequencedMap<String, String> alternativeClassNames;
+
+	/** Maximum number of cached preferred classes header values. */
+	private static final int PREFERRED_CLASSES_CACHE_MAXIMUM_SIZE = 1024;
 
 	private final Map<String, Class<?>> preferredClassesCache = MapUtils.synchronizedMap(new HashMap<>());
 
@@ -420,16 +424,28 @@ public class EnhancedJmsMessageConverter extends SimpleMessageConverter {
 	}
 
 	/**
+	 * Checks if a class is a DTO type or origin.
+	 *
+	 * @param  candidateClass Class.
+	 * @return                If the class is annotated as a DTO type or origin.
+	 */
+	private boolean isDtoClass(
+			final Class<?> candidateClass) {
+		return (candidateClass.getAnnotationsByType(DtoType.class).length > 0) || candidateClass.isAnnotationPresent(DtoOrigin.class);
+	}
+
+	/**
 	 * Gets the preferred class from the message.
 	 *
-	 * @param  message                Message.
-	 * @return                        Preferred class.
-	 * @throws JMSException           If the preferred class cannot be obtained.
-	 * @throws ClassNotFoundException If the preferred class cannot be found.
+	 * @param  preferedClassesNamesAttribute Preferred classes header value.
+	 * @return                               Preferred class (a DTO type or
+	 *                                           origin), or null.
+	 * @throws ClassNotFoundException        If the preferred class cannot be
+	 *                                           found.
 	 * @throws LinkageError           If the preferred class cannot be loaded.
 	 */
 	private Class<?> getPreferedClassFromMessage(
-			final String preferedClassesNamesAttribute) throws JMSException, ClassNotFoundException, LinkageError {
+			final String preferedClassesNamesAttribute) throws ClassNotFoundException, LinkageError {
 		Class<?> preferedClass = null;
 
 		// Checks if the preferred class was already cached.
@@ -445,34 +461,64 @@ public class EnhancedJmsMessageConverter extends SimpleMessageConverter {
 			preferedClassesNames = preferedClassesNames.stream().flatMap(className -> this.getAlternativeClassNames().entrySet().stream()
 					.map(alternative -> className.replace(alternative.getKey(), alternative.getValue()))).distinct().toList();
 
-			// Checks for available classes, and get the first available.
+			// Gets the first available class that is a DTO type or origin (the only
+			// classes this converter names in the header). Classes are loaded without
+			// being initialized, so a rejected class runs no code.
+			final ClassLoader classLoader = Thread.currentThread().getContextClassLoader();
 			final List<String> availablePreferedClasses = preferedClassesNames.stream()
-					.filter(className -> ClassUtils.isPresent(className, Thread.currentThread().getContextClassLoader())).toList();
-			preferedClass = (CollectionUtils.isEmpty(availablePreferedClasses) ? null
-					: ClassUtils.forName(availablePreferedClasses.getFirst(), Thread.currentThread().getContextClassLoader()));
+					.filter(className -> ClassUtils.isPresent(className, classLoader)).toList();
+			// Stops at the first DTO class: later candidates are not loaded.
+			for (int candidateIndex = 0; (preferedClass == null) && (candidateIndex < availablePreferedClasses.size()); candidateIndex++) {
+				final Class<?> candidateClass = ClassUtils.forName(availablePreferedClasses.get(candidateIndex), classLoader);
+				if (this.isDtoClass(candidateClass)) {
+					preferedClass = candidateClass;
+				}
+				else {
+					EnhancedJmsMessageConverter.LOGGER.warn("Prefered class '{}' is not a DTO type or origin and is not used.", candidateClass.getName());
+				}
+			}
 			if (preferedClass == null) {
 				EnhancedJmsMessageConverter.LOGGER.error("Prefered class could not be loaded from name: {}", preferedClassesNames);
 			}
-			// Caches the preferred class.
-			this.preferredClassesCache.put(preferedClassesNamesAttribute, preferedClass);
+
+			// Caches the preferred class (bounded: header values come from producers).
+			if (this.preferredClassesCache.size() < EnhancedJmsMessageConverter.PREFERRED_CLASSES_CACHE_MAXIMUM_SIZE) {
+				this.preferredClassesCache.put(preferedClassesNamesAttribute, preferedClass);
+			}
 		}
 
 		return preferedClass;
 	}
 
 	/**
-	 * Converts the message to JSON.
+	 * Converts the message to JSON. A message whose preferred class cannot be
+	 * resolved is left for the simple converter (its body untouched); a body that
+	 * does not convert to the resolved class fails the conversion.
 	 *
-	 * @param  message Message.
-	 * @return         Object.
+	 * @param  message                    Message.
+	 * @return                            Object, or null when no preferred class
+	 *                                        resolves.
+	 * @throws JMSException               If the message cannot be read.
+	 * @throws MessageConversionException If the body does not convert to the
+	 *                                        preferred class.
 	 */
 	private Object fromJsonMessage(
-			final Message message) throws LinkageError {
+			final Message message) throws JMSException, MessageConversionException {
 		Object object = null;
+
+		// Resolves the preferred class.
+		Class<?> preferedClass = null;
 		try {
-			// Converts the message to the preferred class if available.
-			final Class<?> preferedClass = this.getPreferedClassFromMessage(message.getStringProperty(EnhancedJmsMessageConverter.PREFERED_TYPE_PARAMETER));
-			if (preferedClass != null) {
+			preferedClass = this.getPreferedClassFromMessage(message.getStringProperty(EnhancedJmsMessageConverter.PREFERED_TYPE_PARAMETER));
+		}
+		catch (final ClassNotFoundException | LinkageError exception) {
+			EnhancedJmsMessageConverter.LOGGER.error("Prefered class could not be loaded: {}", exception.getLocalizedMessage());
+			EnhancedJmsMessageConverter.LOGGER.debug("Prefered class could not be loaded.", exception);
+		}
+
+		// Converts the message to the preferred class if available.
+		if (preferedClass != null) {
+			try {
 				if (message instanceof final TextMessage textMessage) {
 					object = this.objectMapper.readValue(textMessage.getText(), preferedClass);
 				}
@@ -482,11 +528,9 @@ public class EnhancedJmsMessageConverter extends SimpleMessageConverter {
 					object = this.objectMapper.readValue(messageBytes, preferedClass);
 				}
 			}
-		}
-		// Logs errors.
-		catch (final Exception exception) {
-			EnhancedJmsMessageConverter.LOGGER.error("Object could not be converted from JSON: {}", exception.getLocalizedMessage());
-			EnhancedJmsMessageConverter.LOGGER.debug("Object could not be converted from JSON.", exception);
+			catch (final IOException | IllegalArgumentException exception) {
+				throw new MessageConversionException("Object could not be converted from JSON to " + preferedClass.getName() + ".", exception);
+			}
 		}
 		return object;
 	}
@@ -532,13 +576,9 @@ public class EnhancedJmsMessageConverter extends SimpleMessageConverter {
 	 * @return              Current async hop.
 	 * @throws JMSException If the increment cannot be performed.
 	 */
-	@SuppressWarnings("unchecked")
 	private Long incrementCurrentAsyncHopOnRequest(
 			final Message message) throws JMSException {
-		Long currentAsyncHop = (EnumerationUtils.toList(message.getPropertyNames())
-				.contains(ExtendedMessagingMessageListenerAdapter.CURRENT_ASYNC_HOP_PARAMETER)
-						? message.getLongProperty(ExtendedMessagingMessageListenerAdapter.CURRENT_ASYNC_HOP_PARAMETER)
-						: 0L);
+		Long currentAsyncHop = JmsMessageHelper.getLongProperty(message, ExtendedMessagingMessageListenerAdapter.CURRENT_ASYNC_HOP_PARAMETER, 0L);
 
 		// Resets the hops if queue is ignored.
 		final String destination = Objects.toString(message.getJMSDestination());

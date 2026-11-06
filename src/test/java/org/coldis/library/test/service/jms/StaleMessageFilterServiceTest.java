@@ -12,6 +12,7 @@ import org.coldis.library.test.StartTestWithContainerExtension;
 import org.coldis.library.test.TestWithContainer;
 import org.coldis.library.test.service.ContainerTestHelper;
 import org.junit.jupiter.api.Assertions;
+import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.springframework.beans.factory.ObjectProvider;
@@ -25,6 +26,7 @@ import org.springframework.boot.test.context.SpringBootTest.WebEnvironment;
 @TestWithContainer(reuse = true)
 @ExtendWith(StartTestWithContainerExtension.class)
 @SpringBootTest(webEnvironment = WebEnvironment.RANDOM_PORT)
+@DisplayName("Stale message filter service")
 public class StaleMessageFilterServiceTest extends ContainerTestHelper {
 
 	/**
@@ -74,6 +76,7 @@ public class StaleMessageFilterServiceTest extends ContainerTestHelper {
 	 * Tests the drop decision semantics (in-memory only).
 	 */
 	@Test
+	@DisplayName("Drops a keyed message only when a same-key processing started after it was posted")
 	public void testDropDecision() {
 		final StaleMessageFilterService service = new StaleMessageFilterService(this.createProperties(false), null);
 		final long now = DateTimeHelper.toTimestamp(DateTimeHelper.getCurrentLocalDateTime());
@@ -103,6 +106,7 @@ public class StaleMessageFilterServiceTest extends ContainerTestHelper {
 	 * Tests that the filter no-ops when disabled.
 	 */
 	@Test
+	@DisplayName("A disabled filter never drops messages")
 	public void testDisabled() {
 		final StaleMessageFilterProperties properties = this.createProperties(false);
 		properties.setEnabled(false);
@@ -118,6 +122,7 @@ public class StaleMessageFilterServiceTest extends ContainerTestHelper {
 	 * Tests that processing records older than the window are swept from the map.
 	 */
 	@Test
+	@DisplayName("Processing records older than the window are swept")
 	public void testWindowSweep() {
 		final StaleMessageFilterProperties properties = this.createProperties(false);
 		properties.setWindow(Duration.ofSeconds(30));
@@ -138,6 +143,7 @@ public class StaleMessageFilterServiceTest extends ContainerTestHelper {
 	 * Tests that instances share processing records through the database.
 	 */
 	@Test
+	@DisplayName("Instances share processing records through the database")
 	public void testSynchronization() {
 		final StaleMessageFilterProperties properties = this.createProperties(true);
 		final StaleMessageFilterService instanceA = new StaleMessageFilterService(properties, this.createDataSourceProvider());

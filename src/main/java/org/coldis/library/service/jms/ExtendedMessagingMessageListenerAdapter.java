@@ -1,25 +1,37 @@
 package org.coldis.library.service.jms;
 
 import java.util.Collection;
+import java.util.Objects;
 import java.util.Set;
+import java.util.function.Supplier;
+import java.util.stream.Collectors;
 
 import org.apache.activemq.artemis.jms.client.ActiveMQDestination;
-import org.apache.commons.collections4.EnumerationUtils;
+import org.apache.activemq.artemis.utils.CompositeAddress;
 import org.coldis.library.helper.DateTimeHelper;
 import org.coldis.library.model.RetriableIn;
 import org.coldis.library.thread.ThreadMapContextHolder;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.jms.listener.AbstractMessageListenerContainer;
 import org.springframework.jms.listener.adapter.ListenerExecutionFailedException;
 import org.springframework.jms.listener.adapter.MessagingMessageListenerAdapter;
 
+import io.micrometer.core.instrument.Counter;
+import io.micrometer.core.instrument.MeterRegistry;
 import jakarta.jms.JMSException;
 import jakarta.jms.Message;
 import jakarta.jms.MessageProducer;
 import jakarta.jms.Session;
 
 /**
- * Context-aware messaging message listener adapter.
+ * Context-aware messaging message listener adapter: async hops limit (with the
+ * exceeded queue), stale message filter and non-retriable error drops. Created
+ * by the listener endpoint of {@link EnhancedJmsBootstrapConfiguration}, which
+ * also sets the listener container ({@link #setListenerContainer}) and the
+ * meter registry supplier ({@link #setMeterRegistrySupplier}). An adapter built
+ * another way without them works, but exceeded topic messages get no original
+ * queue (not retryable by the broker) and drops are not counted.
  */
 public class ExtendedMessagingMessageListenerAdapter extends MessagingMessageListenerAdapter {
 
@@ -30,6 +42,16 @@ public class ExtendedMessagingMessageListenerAdapter extends MessagingMessageLis
 	 * Current async hop parameter.
 	 */
 	public static final String CURRENT_ASYNC_HOP_PARAMETER = "asyncHop";
+
+	/**
+	 * Messages dropped after a non-retriable error (tags: destination, exception).
+	 */
+	public static final String DROPPED_MESSAGES_METRIC = "jms.listener.messages.dropped";
+
+	/**
+	 * Messages dropped by the stale message filter (tag: destination).
+	 */
+	public static final String STALE_DROPPED_MESSAGES_METRIC = "jms.stale.filter.dropped";
 
 	/**
 	 * JMS converter properties.
@@ -47,14 +69,111 @@ public class ExtendedMessagingMessageListenerAdapter extends MessagingMessageLis
 	private final StaleMessageFilterService staleMessageFilterService;
 
 	/**
+	 * Listener container (may be null when unavailable).
+	 */
+	private AbstractMessageListenerContainer listenerContainer;
+
+	/**
+	 * Meter registry supplier (may be null, or supply null, when unavailable).
+	 * Resolved on use, not when the adapter is created.
+	 */
+	private Supplier<MeterRegistry> meterRegistrySupplier;
+
+	/**
 	 * Default constructor.
 	 */
 	public ExtendedMessagingMessageListenerAdapter(final JmsConverterProperties jmsConverterProperties, final Collection<Class<?>> nonRetriableExceptions,
 			final StaleMessageFilterService staleMessageFilterService) {
 		super();
 		this.jmsConverterProperties = jmsConverterProperties;
-		this.nonRetriableExceptions = (nonRetriableExceptions == null ? Set.of() : Set.copyOf(nonRetriableExceptions));
+		this.nonRetriableExceptions = (nonRetriableExceptions == null ? Set.of()
+				: nonRetriableExceptions.stream().filter(Objects::nonNull).collect(Collectors.toUnmodifiableSet()));
 		this.staleMessageFilterService = staleMessageFilterService;
+	}
+
+	/**
+	 * Sets the listener container, used to resolve the queue the listener consumes
+	 * from (the original queue of messages sent to the async hops exceeded queue).
+	 * Set by the listener endpoint of {@link EnhancedJmsBootstrapConfiguration}
+	 * after the adapter is created. When not set, queue listeners fall back to the
+	 * message destination and topic subscriptions get no original queue (their
+	 * exceeded messages cannot be retried by the broker).
+	 *
+	 * @param listenerContainer Listener container.
+	 */
+	public void setListenerContainer(
+			final AbstractMessageListenerContainer listenerContainer) {
+		this.listenerContainer = listenerContainer;
+	}
+
+	/**
+	 * Sets the meter registry supplier, used to count dropped messages
+	 * ({@value #DROPPED_MESSAGES_METRIC} and {@value #STALE_DROPPED_MESSAGES_METRIC}).
+	 *
+	 * @param meterRegistrySupplier Meter registry supplier.
+	 */
+	public void setMeterRegistrySupplier(
+			final Supplier<MeterRegistry> meterRegistrySupplier) {
+		this.meterRegistrySupplier = meterRegistrySupplier;
+	}
+
+	/**
+	 * Counts a dropped message, when a meter registry is available.
+	 *
+	 * @param metricName Metric name.
+	 * @param message    Dropped message.
+	 * @param tags       Extra tags (key, value pairs).
+	 */
+	private void countDroppedMessage(
+			final String metricName,
+			final Message message,
+			final String... tags) {
+		final MeterRegistry meterRegistry = (this.meterRegistrySupplier == null ? null : this.meterRegistrySupplier.get());
+		if (meterRegistry != null) {
+			String destination = "unknown";
+			try {
+				destination = Objects.toString(((ActiveMQDestination) message.getJMSDestination()).getAddress(), destination);
+			}
+			catch (final JMSException exception) {
+				ExtendedMessagingMessageListenerAdapter.LOGGER.debug("Dropped message destination could not be read.", exception);
+			}
+			Counter.builder(metricName).tag("destination", destination).tags(tags).register(meterRegistry).increment();
+		}
+	}
+
+	/**
+	 * Resolves the broker queue the listener consumes from, from the container
+	 * when available: the queue a point-to-point container listens to (also a
+	 * fully qualified queue on a multicast address), or the subscription queue of
+	 * a durable or shared subscription. Without a container (or its destination
+	 * name), falls back to the message destination when it is a queue. The
+	 * subscription queue is named with the container client id: a client id set
+	 * only on the connection factory is not seen here, and the resolved name then
+	 * does not match the broker queue.
+	 *
+	 * @param  destination Message destination.
+	 * @return             The queue name, or null when it cannot be resolved (e.g.
+	 *                     a non-durable non-shared subscription, whose queue is
+	 *                     temporary).
+	 */
+	private String getConsumedQueueName(
+			final ActiveMQDestination destination) {
+		final boolean containerAvailable = (this.listenerContainer != null);
+		String queueName = null;
+		if (containerAvailable && !this.listenerContainer.isPubSubDomain() && (this.listenerContainer.getDestinationName() != null)) {
+			queueName = CompositeAddress.extractQueueName(this.listenerContainer.getDestinationName());
+		}
+		else if (containerAvailable && this.listenerContainer.isPubSubDomain()) {
+			if ((this.listenerContainer.getSubscriptionName() != null)
+					&& (this.listenerContainer.isSubscriptionDurable() || this.listenerContainer.isSubscriptionShared())) {
+				queueName = ActiveMQDestination.createQueueNameForSubscription(this.listenerContainer.isSubscriptionDurable(),
+						this.listenerContainer.getClientId(), this.listenerContainer.getSubscriptionName()).toString();
+			}
+		}
+		else if (destination.isQueue()) {
+			queueName = CompositeAddress.extractQueueName(destination.getName());
+		}
+		return queueName;
 	}
 
 	/**
@@ -65,14 +184,10 @@ public class ExtendedMessagingMessageListenerAdapter extends MessagingMessageLis
 	private void validateAsyncHops(
 			final Message message) throws JMSException {
 		final Long maximumAsyncHops = this.jmsConverterProperties.getMaximumAsyncHops();
-		@SuppressWarnings("unchecked")
-		final Long currentAsyncHop = (EnumerationUtils.toList(message.getPropertyNames())
-				.contains(ExtendedMessagingMessageListenerAdapter.CURRENT_ASYNC_HOP_PARAMETER)
-						? message.getLongProperty(ExtendedMessagingMessageListenerAdapter.CURRENT_ASYNC_HOP_PARAMETER)
-						: 0L);
+		final Long currentAsyncHop = JmsMessageHelper.getLongProperty(message, ExtendedMessagingMessageListenerAdapter.CURRENT_ASYNC_HOP_PARAMETER, 0L);
 		if ((maximumAsyncHops > 0) && (currentAsyncHop > maximumAsyncHops)) {
 			final String destination = ((ActiveMQDestination) message.getJMSDestination()).getAddress();
-			throw new JmsAsyncHopsExceededException(destination, currentAsyncHop, message.getBody(Object.class));
+			throw new JmsAsyncHopsExceededException(destination, currentAsyncHop);
 		}
 	}
 
@@ -164,6 +279,7 @@ public class ExtendedMessagingMessageListenerAdapter extends MessagingMessageLis
 			// same-key processing.
 			if (this.isSupersededByNewerProcessing(message)) {
 				ExtendedMessagingMessageListenerAdapter.LOGGER.debug("Dropping stale message superseded by a newer same-key processing.");
+				this.countDroppedMessage(ExtendedMessagingMessageListenerAdapter.STALE_DROPPED_MESSAGES_METRIC, message);
 			}
 			else {
 
@@ -180,31 +296,40 @@ public class ExtendedMessagingMessageListenerAdapter extends MessagingMessageLis
 
 		}
 		// Sends messages with async hops exceeded to a new specific queue.
+		// The original address and queue are what the broker retry operation (e.g. the
+		// console "Retry") uses to move the message back; the hops restart on retry.
 		catch (final JmsAsyncHopsExceededException exception) {
-			final String destination = ((ActiveMQDestination) message.getJMSDestination()).getAddress();
+			final ActiveMQDestination destination = (ActiveMQDestination) message.getJMSDestination();
 			final Message copiedMessage = JmsMessageHelper.copy(session, message);
-			copiedMessage.setStringProperty(org.apache.activemq.artemis.api.core.Message.HDR_ORIGINAL_ADDRESS.toString(), destination);
-			copiedMessage.setObjectProperty(ExtendedMessagingMessageListenerAdapter.CURRENT_ASYNC_HOP_PARAMETER, null);
+			copiedMessage.setStringProperty(org.apache.activemq.artemis.api.core.Message.HDR_ORIGINAL_ADDRESS.toString(), destination.getAddress());
+			// Always overwritten: an original queue inherited from the consumed message must
+			// not steer the retry (null makes the broker skip it).
+			copiedMessage.setObjectProperty(org.apache.activemq.artemis.api.core.Message.HDR_ORIGINAL_QUEUE.toString(),
+					this.getConsumedQueueName(destination));
+			copiedMessage.setLongProperty(ExtendedMessagingMessageListenerAdapter.CURRENT_ASYNC_HOP_PARAMETER, 0L);
 			try (MessageProducer producer = session.createProducer(session.createQueue("async-hops/exceeded"))) {
 				producer.send(copiedMessage);
 			}
-			ExtendedMessagingMessageListenerAdapter.LOGGER.warn(exception.getLocalizedMessage() + "Sending message to 'async-hops/exceeded' queue.");
+			ExtendedMessagingMessageListenerAdapter.LOGGER.warn("{} Sending message '{}' to 'async-hops/exceeded' queue.", exception.getLocalizedMessage(),
+					message.getJMSMessageID());
 		}
 		// Handles listener execution failed exceptions.
 		catch (final ListenerExecutionFailedException exception) {
 			final Throwable exceptionCause = exception.getCause();
 
-			// If not an non-retrieable exception.
+			// If not a non-retriable exception.
 			if (!this.nonRetriableExceptions.contains(exceptionCause.getClass())) {
-				// If not a retrieable exception or is a retrieable exception without a retry-in
-				// value.
+				// Retries unless the cause is a retriable-aware exception without a retry-in
+				// value (which is dropped below).
 				if (!(exceptionCause instanceof final RetriableIn retriableException) || (retriableException.getRetryIn() != null)) {
 					// Re-throws the exception to trigger a retry.
 					throw exception;
 				}
 			}
 
-			// Logs and drops the message.
+			// Logs, counts and drops the message.
+			this.countDroppedMessage(ExtendedMessagingMessageListenerAdapter.DROPPED_MESSAGES_METRIC, message, "exception",
+					exceptionCause.getClass().getName());
 			ExtendedMessagingMessageListenerAdapter.LOGGER
 					.warn("Dropping message due to non-retriable error '" + exception.getClass() + ": " + exception.getLocalizedMessage()
 							+ "' and nested error '" + exceptionCause.getClass() + ": " + exceptionCause.getLocalizedMessage() + "'.");

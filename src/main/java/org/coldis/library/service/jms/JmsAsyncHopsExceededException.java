@@ -4,7 +4,9 @@ import org.coldis.library.exception.IntegrationException;
 import org.coldis.library.model.SimpleMessage;
 
 /**
- * JMS asynchronous hops exceeded exception.
+ * JMS asynchronous hops exceeded exception. The message payload is not part of
+ * the exception text (it may hold sensitive data and is kept on the exceeded
+ * queue anyway).
  */
 public class JmsAsyncHopsExceededException extends IntegrationException {
 
@@ -16,13 +18,27 @@ public class JmsAsyncHopsExceededException extends IntegrationException {
 	/**
 	 * Default constructor.
 	 *
-	 * @param hopsCount Maximum allowed hops.
-	 * @param payload   Message payload.
+	 * @param destination Destination.
+	 * @param hopsCount   Current hops.
 	 */
-	public JmsAsyncHopsExceededException(final String destination, final Long hopsCount, final Object payload) {
+	public JmsAsyncHopsExceededException(final String destination, final Long hopsCount) {
 		super(new SimpleMessage("jms.async.hops.exceeded",
-				"The maximum number of async hops (" + hopsCount + ") was exceeded for message '" + payload + "' in destination '" + destination + "'.",
-				new Object[] { destination, hopsCount, payload }));
+				"The maximum number of async hops (" + hopsCount + ") was exceeded in destination '" + destination + "'.",
+				new Object[] { destination, hopsCount, null }));
+	}
+
+	/**
+	 * Constructor kept for compatibility: the payload is ignored.
+	 *
+	 * @param      destination Destination.
+	 * @param      hopsCount   Current hops.
+	 * @param      payload     Ignored.
+	 * @deprecated             Use
+	 *                             {@link #JmsAsyncHopsExceededException(String, Long)}.
+	 */
+	@Deprecated
+	public JmsAsyncHopsExceededException(final String destination, final Long hopsCount, final Object payload) {
+		this(destination, hopsCount);
 	}
 
 	/**
@@ -46,21 +62,15 @@ public class JmsAsyncHopsExceededException extends IntegrationException {
 	}
 
 	/**
-	 * Sets the payload.
+	 * Does nothing: kept for compatibility.
 	 *
-	 * @param payload The payload.
+	 * @param      payload Ignored.
+	 * @deprecated         The payload is no longer part of the exception.
 	 */
+	@Deprecated
 	public void setPayload(
 			final Object payload) {
-		this.getInternalMessage().getParameters()[2] = payload;
-	}
-
-	/**
-	 * @see org.coldis.library.exception.IntegrationException#getMessage()
-	 */
-	@Override
-	public String getMessage() {
-		return super.getMessage().formatted(this.getInternalMessage().getParameters());
+		// The payload is not kept (it may hold sensitive data).
 	}
 
 	/**

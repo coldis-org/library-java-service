@@ -9,7 +9,13 @@ import org.springframework.stereotype.Component;
 
 /**
  * JMS configuration properties.
+ *
+ * @deprecated Not read by the library: the listener adapter and converter use
+ *                 {@link JmsConverterProperties} (same prefix), whose defaults
+ *                 apply (e.g. 50 maximum async hops, not 53). To be removed in
+ *                 the next major version.
  */
+@Deprecated
 @Component
 @ConfigurationProperties(
 		prefix = "org.coldis.library.service.jms",

@@ -8,6 +8,7 @@ import java.util.Set;
 
 import org.coldis.library.service.jms.MeteredJmsPoolConnectionFactory;
 import org.junit.jupiter.api.Assertions;
+import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.messaginghub.pooled.jms.JmsPoolConnectionFactory;
 import org.springframework.boot.autoconfigure.jms.JmsPoolConnectionFactoryFactory;
@@ -29,6 +30,7 @@ import jakarta.jms.ConnectionFactory;
  * today's code copies today's attributes; walking every public getter means an attribute Boot starts
  * setting in the future also has to be handled here, or this test fails.
  */
+@DisplayName("Metered JMS pool connection factory")
 public class MeteredJmsPoolConnectionFactoryUnitTest {
 
 	/**
@@ -72,6 +74,7 @@ public class MeteredJmsPoolConnectionFactoryUnitTest {
 	 * Every pool attribute must match what Spring Boot's factory produces from the same properties.
 	 */
 	@Test
+	@DisplayName("Every pool attribute matches Spring Boot's factory for the same properties")
 	public void testPoolConfigurationMatchesSpringBoot() throws Exception {
 
 		// Builds both factories from the same properties and the same underlying connection factory.
@@ -102,6 +105,7 @@ public class MeteredJmsPoolConnectionFactoryUnitTest {
 	 * A null meter registry must be tolerated, since metrics are optional.
 	 */
 	@Test
+	@DisplayName("A missing meter registry is tolerated")
 	public void testWithoutMeterRegistry() {
 		final MeteredJmsPoolConnectionFactory pooledConnectionFactory = MeteredJmsPoolConnectionFactory.create(null, this.distinctiveProperties(),
 				new JmsPoolConnectionFactory());
@@ -114,6 +118,7 @@ public class MeteredJmsPoolConnectionFactoryUnitTest {
 	 * blowing up on an empty stream.
 	 */
 	@Test
+	@DisplayName("With no connection created, the busiest-connection session count is zero")
 	public void testMaxActiveSessionsWithoutConnections() {
 		final MeteredJmsPoolConnectionFactory pooledConnectionFactory = MeteredJmsPoolConnectionFactory.create(null, this.distinctiveProperties(),
 				new JmsPoolConnectionFactory());

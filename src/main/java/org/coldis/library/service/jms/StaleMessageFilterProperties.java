@@ -37,7 +37,10 @@ public class StaleMessageFilterProperties {
 	/**
 	 * Leniency margin for clock skew (between producers and consumers) and
 	 * read-replica lag. Messages are only dropped when a same-key processing
-	 * started at least this much after the message was posted.
+	 * started at least this much after the message was posted. The post time is
+	 * the producer's clock and the processing start the consumer's: hosts must be
+	 * clock-synchronized well below this margin (default 1 second), or newer
+	 * messages may be dropped as stale.
 	 */
 	private Duration clockSkewMargin;
 

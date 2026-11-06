@@ -75,6 +75,24 @@ public class JmsConfiguration {
 				.connectionFactory(ConnectionFactoryUnwrapper.unwrap(connectionFactory)).topic(true).build();
 	}
 
+	/**
+	 * Creates a JMS container factory for non-durable, non-shared topic
+	 * subscriptions (temporary subscription queues).
+	 *
+	 * @param  connectionFactory Connection factory.
+	 * @return                   The JMS container factory.
+	 */
+	@Bean
+	@Qualifier("jmsListenerNonDurableTopicContainerFactory")
+	public DefaultJmsListenerContainerFactory jmsListenerNonDurableTopicContainerFactory(
+			final DefaultJmsListenerContainerFactoryConfigurer configurer,
+			final ConnectionFactory connectionFactory) {
+		final DefaultJmsListenerContainerFactory containerFactory = this.jmsConfigurationHelper.createJmsListenerContainerFactoryBuilder()
+				.configurer(configurer).connectionFactory(ConnectionFactoryUnwrapper.unwrap(connectionFactory)).topic(false).build();
+		containerFactory.setPubSubDomain(true);
+		return containerFactory;
+	}
+
 
 	/**
 	 * Creates the JMS template.
