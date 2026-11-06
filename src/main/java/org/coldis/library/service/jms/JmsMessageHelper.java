@@ -25,8 +25,11 @@ public class JmsMessageHelper {
 
 	/**
 	 * Gets a long property, tolerating a missing or null-valued property (the JMS
-	 * long getter fails on a property that exists with a null value). Otherwise
-	 * follows the JMS long conversion: integral numbers and numeric strings.
+	 * long getter fails on a property that exists with a null value). Converts
+	 * integral numbers and numeric strings, as the JMS getter does; unlike it, a
+	 * non-numeric string raises {@link MessageFormatException} (with the
+	 * {@link NumberFormatException} as cause), like any other non-convertible
+	 * value.
 	 *
 	 * @param  message                Message.
 	 * @param  propertyName           Property name.
