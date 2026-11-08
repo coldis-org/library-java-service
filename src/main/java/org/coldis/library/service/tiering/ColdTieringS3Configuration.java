@@ -1,5 +1,7 @@
 package org.coldis.library.service.tiering;
 
+import org.coldis.library.service.tiering.repository.ColdStorageRepository;
+import org.coldis.library.service.tiering.repository.S3ColdStorageRepository;
 import org.springframework.beans.factory.BeanFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnClass;

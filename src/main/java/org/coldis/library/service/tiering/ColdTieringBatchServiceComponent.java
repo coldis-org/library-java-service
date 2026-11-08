@@ -5,7 +5,9 @@ import java.time.Duration;
 import java.time.LocalDateTime;
 import java.util.HashMap;
 import java.util.List;
+import java.util.LinkedHashMap;
 import java.util.Map;
+import java.util.concurrent.ScheduledFuture;
 
 import org.coldis.library.exception.BusinessException;
 import org.coldis.library.helper.DateTimeHelper;
@@ -14,6 +16,7 @@ import org.coldis.library.service.batch.BatchExecutor;
 import org.coldis.library.service.batch.BatchService;
 import org.coldis.library.service.tiering.ColdTieringProperties.BatchProperties;
 import org.coldis.library.service.tiering.ColdTieringProperties.TableProperties;
+import org.coldis.library.service.tiering.repository.HotTierRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.ObjectProvider;
@@ -85,6 +88,9 @@ public class ColdTieringBatchServiceComponent implements SmartInitializingSingle
 	/** Task scheduler (present when scheduling is enabled). */
 	@Autowired
 	private ObjectProvider<TaskScheduler> taskScheduler;
+
+	/** Crons scheduled, by batch key suffix. */
+	private final Map<String, String> scheduled = new LinkedHashMap<>();
 
 	/**
 	 * The moment before which a table's rows are evictable.
@@ -185,8 +191,8 @@ public class ColdTieringBatchServiceComponent implements SmartInitializingSingle
 			final TieringBatch batch) throws BusinessException {
 		final TableProperties tableProperties = this.properties.of(table);
 		final BatchProperties batchProperties = batch == TieringBatch.EVICTION ? tableProperties.getEviction() : tableProperties.getBackfill();
-		final Boolean started = tableProperties.getEnabled() && batchProperties.getEnabled();
-		if (started) {
+		final Boolean isStarted = tableProperties.getEnabled() && batchProperties.getEnabled();
+		if (isStarted) {
 			final Class<?> itemType = batch == TieringBatch.EVICTION ? EvictionChunk.class : TieredRowKey.class;
 			final Long size = batch == TieringBatch.EVICTION ? 1L : batchProperties.getChunkSize();
 			final Map<BatchAction, String> delegates = batch == TieringBatch.EVICTION ? Map.of(BatchAction.GET, "findNextEvictionChunk", BatchAction.EXECUTE, "evictChunk")
@@ -195,9 +201,12 @@ public class ColdTieringBatchServiceComponent implements SmartInitializingSingle
 					batchProperties.getDelayBetweenChunks(), batchProperties.getFinishWithin(), ColdTieringBatchServiceComponent.BEAN_NAME, new HashMap<>(delegates),
 					new HashMap<>(Map.of(ColdTieringBatchServiceComponent.TABLE_ARGUMENT, table.getId())));
 			executor.setCleansWithin(ColdTieringBatchServiceComponent.CLEANS_WITHIN);
+			// Messages name the table and the counts only: never a key (business ids).
+			executor.setMessagesTemplates(new HashMap<>(Map.of(BatchAction.START, "Cold tiering " + batch + " of " + table.getId() + " started.", BatchAction.FINISH,
+					"Cold tiering " + batch + " of " + table.getId() + " finished in ${duration} minutes.")));
 			this.batchService.start(executor, false, false);
 		}
-		return started;
+		return isStarted;
 	}
 
 	/**
@@ -236,20 +245,35 @@ public class ColdTieringBatchServiceComponent implements SmartInitializingSingle
 	/**
 	 * Schedules one batch of one table when its cron is set.
 	 *
-	 * @param scheduler Scheduler.
-	 * @param table     Table.
-	 * @param batch     Batch.
-	 * @param cron      Cron.
+	 * @param  table Table.
+	 * @param  batch Batch.
+	 * @param  cron  Cron; {@link ColdTieringProperties#NO_SCHEDULE} for none.
+	 * @return       The scheduled task, or null when there is no cron or no scheduler.
 	 */
-	private void schedule(
-			final TaskScheduler scheduler,
+	public ScheduledFuture<?> schedule(
 			final TieredTable table,
 			final TieringBatch batch,
 			final String cron) {
-		if (!ColdTieringProperties.NO_SCHEDULE.equals(cron)) {
-			scheduler.schedule(() -> this.runScheduled(table, batch), new CronTrigger(cron));
+		ScheduledFuture<?> task = null;
+		final TaskScheduler scheduler = this.taskScheduler.getIfAvailable();
+		if (scheduler == null) {
+			ColdTieringBatchServiceComponent.LOGGER.warn("[COLD_TIERING] no task scheduler: batches run only through run()");
+		}
+		else if (!ColdTieringProperties.NO_SCHEDULE.equals(cron)) {
+			task = scheduler.schedule(() -> this.runScheduled(table, batch), new CronTrigger(cron));
+			this.scheduled.put(batch.keySuffix(table.getId()), cron);
 			ColdTieringBatchServiceComponent.LOGGER.info("[COLD_TIERING] table={} batch={} scheduled: {}", table.getId(), batch, cron);
 		}
+		return task;
+	}
+
+	/**
+	 * The crons scheduled, by batch key suffix.
+	 *
+	 * @return The schedules.
+	 */
+	public Map<String, String> getScheduled() {
+		return Map.copyOf(this.scheduled);
 	}
 
 	/**
@@ -257,16 +281,10 @@ public class ColdTieringBatchServiceComponent implements SmartInitializingSingle
 	 */
 	@Override
 	public void afterSingletonsInstantiated() {
-		final TaskScheduler scheduler = this.taskScheduler.getIfAvailable();
-		if (scheduler == null) {
-			ColdTieringBatchServiceComponent.LOGGER.warn("[COLD_TIERING] no task scheduler: batches run only through run()");
-		}
-		else {
-			for (final TieredTable table : this.registry.getTables()) {
-				final TableProperties tableProperties = this.properties.of(table);
-				this.schedule(scheduler, table, TieringBatch.EVICTION, tableProperties.getEviction().getCron());
-				this.schedule(scheduler, table, TieringBatch.BACKFILL, tableProperties.getBackfill().getCron());
-			}
+		for (final TieredTable table : this.registry.getTables()) {
+			final TableProperties tableProperties = this.properties.of(table);
+			this.schedule(table, TieringBatch.EVICTION, tableProperties.getEviction().getCron());
+			this.schedule(table, TieringBatch.BACKFILL, tableProperties.getBackfill().getCron());
 		}
 	}
 

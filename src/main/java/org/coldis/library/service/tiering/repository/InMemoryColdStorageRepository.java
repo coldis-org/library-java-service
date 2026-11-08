@@ -1,10 +1,12 @@
-package org.coldis.library.service.tiering;
+package org.coldis.library.service.tiering.repository;
 
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.ConcurrentSkipListMap;
 
+import org.coldis.library.service.tiering.ColdObject;
+import org.coldis.library.service.tiering.ColdTieringProperties;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Repository;
 
@@ -40,15 +42,6 @@ public class InMemoryColdStorageRepository implements ColdStorageRepository {
 		this.objects.put(key, content);
 	}
 
-	/**
-	 * Removes an object.
-	 *
-	 * @param key Object key.
-	 */
-	public void remove(
-			final String key) {
-		this.objects.remove(key);
-	}
 
 	/**
 	 * Number of objects.
@@ -78,6 +71,15 @@ public class InMemoryColdStorageRepository implements ColdStorageRepository {
 	public Optional<byte[]> load(
 			final String key) {
 		return Optional.ofNullable(this.objects.get(key)).map(byte[]::clone);
+	}
+
+	/**
+	 * @see ColdStorageRepository#delete(String)
+	 */
+	@Override
+	public void delete(
+			final String key) {
+		this.objects.remove(key);
 	}
 
 	/**

@@ -3,15 +3,20 @@ package org.coldis.library.service.tiering;
 import java.net.URLDecoder;
 import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
+import java.sql.ResultSet;
+import java.sql.SQLException;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.OffsetDateTime;
+import java.time.ZoneId;
 import java.time.ZoneOffset;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
+import java.util.Set;
 import java.util.UUID;
 
 import org.coldis.library.exception.IntegrationException;
@@ -24,6 +29,18 @@ import org.coldis.library.model.SimpleMessage;
  * the order of the values).
  */
 public final class ColumnValues {
+
+	/** Timestamp without time zone. */
+	public static final String TIMESTAMP = "timestamp without time zone";
+
+	/** Timestamp with time zone. */
+	public static final String TIMESTAMPTZ = "timestamp with time zone";
+
+	/** Date. */
+	public static final String DATE = "date";
+
+	/** Types a versioned table's last key column may have (an as-of moment converts to them). */
+	public static final Set<String> TEMPORAL_TYPES = Set.of(ColumnValues.TIMESTAMP, ColumnValues.TIMESTAMPTZ, ColumnValues.DATE);
 
 	/** Fixed-width timestamp format. */
 	private static final DateTimeFormatter TIMESTAMP_FORMAT = DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ss.SSSSSS");
@@ -52,27 +69,71 @@ public final class ColumnValues {
 			case "bigint" -> Long.valueOf(value);
 			case "integer", "smallint" -> Integer.valueOf(value);
 			case "uuid" -> UUID.fromString(value);
-			case "date" -> LocalDate.parse(value);
-			case "timestamp without time zone" -> LocalDateTime.parse(value);
-			case "timestamp with time zone" -> OffsetDateTime.parse(value);
+			case ColumnValues.DATE -> LocalDate.parse(value);
+			case ColumnValues.TIMESTAMP -> LocalDateTime.parse(value);
+			case ColumnValues.TIMESTAMPTZ -> OffsetDateTime.parse(value);
 			case "text", "character varying", "character" -> value;
 			default -> throw new IntegrationException(new SimpleMessage("coldTiering.key.type.unsupported", new Object[] { dataType }));
 		};
 	}
 
 	/**
-	 * The string form of a key value read from the database or given by a consumer.
+	 * The string form of a value read from the database or given by a consumer.
 	 *
 	 * @param  value JDBC object.
 	 * @return       The string.
 	 */
 	public static String format(
 			final Object value) {
+		if (value == null) {
+			throw new IntegrationException(new SimpleMessage("coldTiering.value.null"));
+		}
 		return switch (value) {
 			case java.sql.Timestamp timestamp -> timestamp.toLocalDateTime().toString();
 			case java.sql.Date date -> date.toLocalDate().toString();
 			default -> value.toString();
 		};
+	}
+
+	/**
+	 * Reads a column with the object type of its SQL type (so a {@code timestamptz} keeps its
+	 * offset).
+	 *
+	 * @param  resultSet Result set.
+	 * @param  column    Column.
+	 * @param  dataType  SQL type.
+	 * @return           The value.
+	 * @throws SQLException If the read fails.
+	 */
+	public static Object read(
+			final ResultSet resultSet,
+			final String column,
+			final String dataType) throws SQLException {
+		return switch (dataType) {
+			case ColumnValues.TIMESTAMPTZ -> resultSet.getObject(column, OffsetDateTime.class);
+			case ColumnValues.TIMESTAMP -> resultSet.getObject(column, LocalDateTime.class);
+			case ColumnValues.DATE -> resultSet.getObject(column, LocalDate.class);
+			default -> resultSet.getObject(column);
+		};
+	}
+
+	/**
+	 * Whether two values of a column are the same (instants compared as instants).
+	 *
+	 * @param  dataType SQL type.
+	 * @param  first    First value (string form).
+	 * @param  second   Second value (string form).
+	 * @return          Whether they are the same value.
+	 */
+	public static Boolean same(
+			final String dataType,
+			final String first,
+			final String second) {
+		final Object firstValue = ColumnValues.parse(dataType, first);
+		final Object secondValue = ColumnValues.parse(dataType, second);
+		return (firstValue instanceof final OffsetDateTime firstMoment) && (secondValue instanceof final OffsetDateTime secondMoment)
+				? firstMoment.isEqual(secondMoment)
+				: Objects.equals(firstValue, secondValue);
 	}
 
 	/**
@@ -87,10 +148,28 @@ public final class ColumnValues {
 			case "bigint" -> Long.MIN_VALUE;
 			case "integer", "smallint" -> Integer.MIN_VALUE;
 			case "uuid" -> new UUID(0L, 0L);
-			case "date" -> LocalDate.of(1, 1, 1);
-			case "timestamp without time zone" -> LocalDateTime.of(1, 1, 1, 0, 0);
-			case "timestamp with time zone" -> OffsetDateTime.of(1, 1, 1, 0, 0, 0, 0, ZoneOffset.UTC);
+			case ColumnValues.DATE -> LocalDate.of(1, 1, 1);
+			case ColumnValues.TIMESTAMP -> LocalDateTime.of(1, 1, 1, 0, 0);
+			case ColumnValues.TIMESTAMPTZ -> OffsetDateTime.of(1, 1, 1, 0, 0, 0, 0, ZoneOffset.UTC);
 			case "text", "character varying", "character" -> "";
+			default -> throw new IntegrationException(new SimpleMessage("coldTiering.key.type.unsupported", new Object[] { dataType }));
+		};
+	}
+
+	/**
+	 * An as-of moment as the string form of a temporal column.
+	 *
+	 * @param  dataType SQL type (one of {@link #TEMPORAL_TYPES}).
+	 * @param  moment   Moment.
+	 * @return          The string form.
+	 */
+	public static String ofMoment(
+			final String dataType,
+			final LocalDateTime moment) {
+		return switch (dataType) {
+			case ColumnValues.TIMESTAMP -> moment.toString();
+			case ColumnValues.TIMESTAMPTZ -> moment.atZone(ZoneId.systemDefault()).toOffsetDateTime().toString();
+			case ColumnValues.DATE -> moment.toLocalDate().toString();
 			default -> throw new IntegrationException(new SimpleMessage("coldTiering.key.type.unsupported", new Object[] { dataType }));
 		};
 	}
@@ -129,9 +208,9 @@ public final class ColumnValues {
 		return switch (dataType) {
 			case "bigint" -> Long.valueOf(segment).toString();
 			case "integer", "smallint" -> Integer.valueOf(segment).toString();
-			case "timestamp without time zone" -> LocalDateTime.parse(segment, ColumnValues.TIMESTAMP_FORMAT).toString();
-			case "timestamp with time zone" -> OffsetDateTime.parse(segment.substring(0, segment.length() - 1), ColumnValues.TIMESTAMP_FORMAT.withZone(ZoneOffset.UTC))
-					.toString();
+			case ColumnValues.TIMESTAMP -> LocalDateTime.parse(segment, ColumnValues.TIMESTAMP_FORMAT).toString();
+			case ColumnValues.TIMESTAMPTZ -> OffsetDateTime
+					.parse(segment.substring(0, segment.length() - 1), ColumnValues.TIMESTAMP_FORMAT.withZone(ZoneOffset.UTC)).toString();
 			case "text", "character varying", "character" -> URLDecoder.decode(segment, StandardCharsets.UTF_8);
 			default -> segment;
 		};
@@ -173,14 +252,14 @@ public final class ColumnValues {
 			final Map<String, String> columnTypes,
 			final Map<String, String> values) {
 		final List<String> segments = new ArrayList<>();
-		Boolean complete = true;
+		Boolean isContiguous = true;
 		for (final String column : table.getKeyColumns()) {
 			final String value = values.get(column);
-			if (complete && (value != null)) {
+			if (isContiguous && (value != null)) {
 				segments.add(ColumnValues.toSegment(columnTypes.get(column), value));
 			}
 			else {
-				complete = false;
+				isContiguous = false;
 			}
 		}
 		return segments;

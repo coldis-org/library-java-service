@@ -3,6 +3,10 @@ package org.coldis.library.service.tiering;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
+import java.util.regex.Pattern;
+
+import org.coldis.library.exception.IntegrationException;
+import org.coldis.library.model.SimpleMessage;
 
 /**
  * Definition of one hot table under cold tiering: its structure (what the SQL and the object keys
@@ -19,6 +23,9 @@ public class TieredTable {
 
 	/** Default archived-at column. */
 	public static final String DEFAULT_ARCHIVED_AT_COLUMN = "archived_at";
+
+	/** What a table or column name may be (it goes into generated SQL unquoted). */
+	public static final Pattern IDENTIFIER = Pattern.compile("^[a-z_][a-z0-9_]*$");
 
 	/** Id (property key, batch key, object key segment). */
 	private final String id;
@@ -68,8 +75,28 @@ public class TieredTable {
 			final String tableName,
 			final List<String> keyColumns) {
 		this.id = Objects.requireNonNull(id);
-		this.tableName = Objects.requireNonNull(tableName);
+		this.tableName = TieredTable.identifier(tableName);
 		this.keyColumns = List.copyOf(Objects.requireNonNull(keyColumns));
+		if (this.keyColumns.isEmpty()) {
+			throw new IntegrationException(new SimpleMessage("coldTiering.table.key.empty", new Object[] { id }));
+		}
+		for (final String keyColumn : this.keyColumns) {
+			TieredTable.identifier(keyColumn);
+		}
+	}
+
+	/**
+	 * Checks a SQL identifier before it reaches generated SQL.
+	 *
+	 * @param  name Name.
+	 * @return      The name.
+	 */
+	public static String identifier(
+			final String name) {
+		if ((name == null) || !TieredTable.IDENTIFIER.matcher(name).matches()) {
+			throw new IntegrationException(new SimpleMessage("coldTiering.identifier.invalid", new Object[] { name }));
+		}
+		return name;
 	}
 
 	/**
@@ -81,14 +108,14 @@ public class TieredTable {
 	public static String toProperty(
 			final String column) {
 		final StringBuilder property = new StringBuilder();
-		Boolean upperNext = false;
+		Boolean isWordStart = false;
 		for (final char character : column.toCharArray()) {
 			if (character == '_') {
-				upperNext = true;
+				isWordStart = true;
 			}
 			else {
-				property.append(upperNext ? Character.toUpperCase(character) : character);
-				upperNext = false;
+				property.append(isWordStart ? Character.toUpperCase(character) : character);
+				isWordStart = false;
 			}
 		}
 		return property.toString();
@@ -147,7 +174,7 @@ public class TieredTable {
 	 */
 	public TieredTable withWatermarkColumn(
 			final String watermarkColumn) {
-		this.watermarkColumn = watermarkColumn;
+		this.watermarkColumn = TieredTable.identifier(watermarkColumn);
 		return this;
 	}
 
@@ -168,7 +195,7 @@ public class TieredTable {
 	 */
 	public TieredTable withLastAccessedColumn(
 			final String lastAccessedColumn) {
-		this.lastAccessedColumn = lastAccessedColumn;
+		this.lastAccessedColumn = TieredTable.identifier(lastAccessedColumn);
 		return this;
 	}
 
@@ -189,7 +216,7 @@ public class TieredTable {
 	 */
 	public TieredTable withArchivedAtColumn(
 			final String archivedAtColumn) {
-		this.archivedAtColumn = archivedAtColumn;
+		this.archivedAtColumn = TieredTable.identifier(archivedAtColumn);
 		return this;
 	}
 
@@ -242,7 +269,7 @@ public class TieredTable {
 			final TtlClock ttlClock,
 			final String clockColumn) {
 		this.ttlClock = ttlClock;
-		this.clockColumn = clockColumn;
+		this.clockColumn = ttlClock == TtlClock.COLUMN ? TieredTable.identifier(clockColumn) : null;
 		return this;
 	}
 

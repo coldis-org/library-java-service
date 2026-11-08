@@ -1,12 +1,15 @@
-package org.coldis.library.service.tiering;
+package org.coldis.library.service.tiering.repository;
 
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 
+import org.coldis.library.service.tiering.ColdObject;
+
 import software.amazon.awssdk.core.sync.RequestBody;
 import software.amazon.awssdk.services.s3.S3Client;
+import software.amazon.awssdk.services.s3.model.DeleteObjectRequest;
 import software.amazon.awssdk.services.s3.model.GetObjectRequest;
 import software.amazon.awssdk.services.s3.model.ListObjectsV2Request;
 import software.amazon.awssdk.services.s3.model.ListObjectsV2Response;
@@ -47,7 +50,8 @@ public class S3ColdStorageRepository implements ColdStorageRepository {
 			final String key,
 			final byte[] content,
 			final Map<String, String> metadata) {
-		this.s3Client.putObject(PutObjectRequest.builder().bucket(this.bucket).key(key).metadata(metadata).build(), RequestBody.fromBytes(content));
+		this.s3Client.putObject(PutObjectRequest.builder().bucket(this.bucket).key(key).contentType(metadata.get(ColdStorageRepository.CONTENT_TYPE_METADATA))
+				.metadata(metadata).build(), RequestBody.fromBytes(content));
 		return new ColdObject(key, (long) content.length);
 	}
 
@@ -65,6 +69,15 @@ public class S3ColdStorageRepository implements ColdStorageRepository {
 			content = Optional.empty();
 		}
 		return content;
+	}
+
+	/**
+	 * @see ColdStorageRepository#delete(String)
+	 */
+	@Override
+	public void delete(
+			final String key) {
+		this.s3Client.deleteObject(DeleteObjectRequest.builder().bucket(this.bucket).key(key).build());
 	}
 
 	/**

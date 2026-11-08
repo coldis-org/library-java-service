@@ -1,13 +1,12 @@
 package org.coldis.library.test.service.tiering;
 
-import org.coldis.library.service.tiering.TieredRepository;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.stereotype.Repository;
 
 /**
- * Snapshot repository: JPA plus the tiered reads.
+ * Snapshot repository: plain JPA; the tiered reads are on the tiering component.
  */
 @Repository
-public interface TieredSnapshotRepository extends JpaRepository<TieredSnapshot, TieredSnapshotKey>, TieredRepository<TieredSnapshot, TieredSnapshotKey> {
+public interface TieredSnapshotRepository extends JpaRepository<TieredSnapshot, TieredSnapshotKey> {
 
 }

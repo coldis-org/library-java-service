@@ -2,19 +2,17 @@ package org.coldis.library.service.tiering;
 
 import java.io.Serializable;
 import java.time.LocalDateTime;
-import java.util.LinkedHashMap;
-import java.util.List;
 import java.util.Map;
 import java.util.Optional;
-import java.util.function.Supplier;
 
-import org.coldis.library.exception.IntegrationException;
 import org.coldis.library.helper.DateTimeHelper;
-import org.coldis.library.model.SimpleMessage;
 import org.coldis.library.service.jms.JmsMessage;
 import org.coldis.library.service.jms.JmsTemplateHelper;
 import org.coldis.library.service.tiering.ColdTieringProperties.TableProperties;
-import org.coldis.library.service.tiering.HotTierRepository.HotRow;
+import org.coldis.library.service.tiering.repository.ColdStorageRepository;
+import org.coldis.library.service.tiering.repository.HotTierRepository;
+import org.coldis.library.service.tiering.repository.HotTierRepository.HotRow;
+import org.coldis.library.service.tiering.repository.TieredRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -26,10 +24,11 @@ import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 
 /**
- * Cold tiering of the registered tables: write-through upload after a write, archive (upload
- * under the row lock, confirm on the row), touch, and reads that fall back to the cold tier
- * (object key derived from the row key) and rehydrate when the table says so. Batches (backfill,
- * eviction) are in {@link ColdTieringBatchServiceComponent}. Design:
+ * The policy of the cold tiering: when a write is uploaded, when a read goes to the cold tier and
+ * whether it rehydrates, when a read touches, how a row is archived. Everything it does with the
+ * database and the store goes through the repositories ({@link TieredRepository},
+ * {@link HotTierRepository}, {@link ColdStorageRepository}), never the other way round. Batches
+ * (backfill, eviction) are in {@link ColdTieringBatchServiceComponent}. Design:
  * {@code doc/cold-storage-tiering.md}.
  */
 @Component
@@ -40,10 +39,10 @@ import org.springframework.transaction.annotation.Transactional;
 public class ColdTieringServiceComponent {
 
 	/** Write-through upload queue. */
-	public static final String UPLOAD_QUEUE = "cold-tiering/upload";
+	private static final String UPLOAD_QUEUE = "cold-tiering/upload";
 
 	/** Touch queue. */
-	public static final String TOUCH_QUEUE = "cold-tiering/touch";
+	private static final String TOUCH_QUEUE = "cold-tiering/touch";
 
 	/** Object metadata: the row's watermark when archived. */
 	public static final String UPDATED_AT_METADATA = "updated-at";
@@ -62,6 +61,10 @@ public class ColdTieringServiceComponent {
 	@Autowired
 	private ColdTieringProperties properties;
 
+	/** Tiered access. */
+	@Autowired
+	private TieredRepository tieredRepository;
+
 	/** Hot tier. */
 	@Autowired
 	private HotTierRepository hotTierRepository;
@@ -73,10 +76,6 @@ public class ColdTieringServiceComponent {
 	/** Codec. */
 	@Autowired
 	private PayloadCodec codec;
-
-	/** Object key strategy. */
-	@Autowired
-	private ObjectKeyStrategy objectKeyStrategy;
 
 	/** JMS template. */
 	@Autowired
@@ -121,6 +120,17 @@ public class ColdTieringServiceComponent {
 	}
 
 	/**
+	 * Whether a table's cold tier may be read.
+	 *
+	 * @param  tableProperties Table properties.
+	 * @return                 Whether cold reads are on.
+	 */
+	private static Boolean isColdReadable(
+			final TableProperties tableProperties) {
+		return tableProperties.getEnabled() && tableProperties.getColdReadEnabled();
+	}
+
+	/**
 	 * The row key of a table from column values (any JDBC-compatible objects).
 	 *
 	 * @param  tableId Table id.
@@ -130,16 +140,20 @@ public class ColdTieringServiceComponent {
 	public TieredRowKey keyOf(
 			final String tableId,
 			final Map<String, Object> values) {
-		final TieredTable table = this.registry.getTable(tableId);
-		final Map<String, String> formatted = new LinkedHashMap<>();
-		for (final String column : table.getKeyColumns()) {
-			final Object value = values.get(column);
-			if (value == null) {
-				throw new IntegrationException(new SimpleMessage("coldTiering.key.incomplete", new Object[] { tableId, column }));
-			}
-			formatted.put(column, ColumnValues.format(value));
-		}
-		return new TieredRowKey(tableId, formatted);
+		return this.tieredRepository.keyOf(this.registry.getTable(tableId), values);
+	}
+
+	/**
+	 * The row key of an entity id.
+	 *
+	 * @param  entityClass Entity class bound to a table.
+	 * @param  id          Entity id.
+	 * @return             The key.
+	 */
+	public TieredRowKey keyOf(
+			final Class<?> entityClass,
+			final Object id) {
+		return this.tieredRepository.keyOf(this.registry.getTable(entityClass), id);
 	}
 
 	/**
@@ -150,9 +164,7 @@ public class ColdTieringServiceComponent {
 	 */
 	public String objectKeyOf(
 			final TieredRowKey key) {
-		final TieredTable table = this.registry.getTable(key.tableId());
-		return this.objectKeyStrategy.keyOf(this.properties.getPrefix(), table, ColumnValues.toSegments(table, this.registry.getColumnTypes(table), key.values()),
-				this.codec.extension());
+		return this.tieredRepository.objectKeyOf(this.registry.getTable(key.tableId()), key);
 	}
 
 	/**
@@ -164,8 +176,7 @@ public class ColdTieringServiceComponent {
 	public void afterWrite(
 			final TieredRowKey key) {
 		final TieredTable table = this.registry.getTable(key.tableId());
-		final TableProperties tableProperties = this.properties.of(table);
-		if (tableProperties.getEnabled()) {
+		if (this.properties.of(table).getEnabled()) {
 			this.hotTierRepository.afterWrite(table, this.registry.getColumnTypes(table), key, DateTimeHelper.getCurrentLocalDateTime());
 			this.send(ColdTieringServiceComponent.UPLOAD_QUEUE, key);
 		}
@@ -173,10 +184,10 @@ public class ColdTieringServiceComponent {
 
 	/**
 	 * Archives a row in the caller's transaction (write-through upload and backfill): under the
-	 * row's lock, uploads the whole row to its derived key and marks the hot row archived if it
-	 * was not rewritten meanwhile. The lock is what orders concurrent archives of one key, since
-	 * every one of them writes the same object: the holder reads the current content, so an
-	 * object is never overwritten with older content.
+	 * row's lock, uploads the whole row to its derived key and marks the hot row archived at the
+	 * watermark uploaded, if it was not rewritten meanwhile. The lock is what orders concurrent
+	 * archives of one key, since every one of them writes the same object: the holder reads the
+	 * current content, so an object is never overwritten with older content.
 	 *
 	 * @param  key Row key.
 	 * @return     Whether an object was written (false: the row is not hot).
@@ -187,25 +198,23 @@ public class ColdTieringServiceComponent {
 	)
 	public Boolean archive(
 			final TieredRowKey key) {
-		Boolean uploaded = false;
+		Boolean isUploaded = false;
 		final TieredTable table = this.registry.getTable(key.tableId());
 		final Map<String, String> columnTypes = this.registry.getColumnTypes(table);
 		final Optional<HotRow> hotRow = this.hotTierRepository.lockForArchive(table, columnTypes, key);
 		if (hotRow.isPresent()) {
-			final LocalDateTime archivedMoment = DateTimeHelper.getCurrentLocalDateTime();
-			final String objectKey = this.objectKeyOf(key);
-			this.coldStorageRepository.store(objectKey, this.codec.encode(hotRow.get().rowJson()),
-					Map.of(ColdTieringServiceComponent.TABLE_METADATA, table.getId(), ColdTieringServiceComponent.UPDATED_AT_METADATA,
-							ColumnValues.format(hotRow.get().watermark()), "content-type", this.codec.contentType()));
-			uploaded = true;
-			final Integer marked = this.hotTierRepository.markArchived(table, columnTypes, key, hotRow.get().watermark(), archivedMoment);
+			this.coldStorageRepository.store(this.tieredRepository.objectKeyOf(table, key), this.codec.encode(hotRow.get().rowJson()),
+					Map.of(ColdTieringServiceComponent.TABLE_METADATA, table.getId(), ColdTieringServiceComponent.UPDATED_AT_METADATA, hotRow.get().watermark(),
+							ColdStorageRepository.CONTENT_TYPE_METADATA, this.codec.contentType()));
+			isUploaded = true;
+			final Integer marked = this.hotTierRepository.markArchived(table, columnTypes, key, hotRow.get().watermark());
 			if (marked == 0) {
-				ColdTieringServiceComponent.LOGGER.warn("[COLD_TIERING_UPLOAD] table={} key={} rewritten during the archive; left for its own upload or the backfill",
-						table.getId(), key.values());
+				ColdTieringServiceComponent.LOGGER.warn("[COLD_TIERING_UPLOAD] table={} a row was rewritten during its archive; left for its own upload or the backfill",
+						table.getId());
 			}
 		}
-		ColdTieringServiceComponent.LOGGER.debug("[COLD_TIERING_UPLOAD] table={} key={} uploaded={}", key.tableId(), key.values(), uploaded);
-		return uploaded;
+		ColdTieringServiceComponent.LOGGER.debug("[COLD_TIERING_UPLOAD] table={} uploaded={}", key.tableId(), isUploaded);
+		return isUploaded;
 	}
 
 	/**
@@ -250,7 +259,7 @@ public class ColdTieringServiceComponent {
 	}
 
 	/**
-	 * Reads a row from the cold tier, whatever its hot state: one {@code GET} on the derived key.
+	 * Reads a row from the cold tier, whatever its hot state, when the table allows cold reads.
 	 * Never writes the hot table (the read path of {@link Rehydration#NONE} tables).
 	 *
 	 * @param  key Row key.
@@ -258,96 +267,128 @@ public class ColdTieringServiceComponent {
 	 */
 	public Optional<ColdRow> readCold(
 			final TieredRowKey key) {
-		Optional<ColdRow> coldRow = Optional.empty();
 		final TieredTable table = this.registry.getTable(key.tableId());
-		final TableProperties tableProperties = this.properties.of(table);
-		if (tableProperties.getEnabled() && tableProperties.getColdReadEnabled()) {
-			coldRow = this.coldStorageRepository.load(this.objectKeyOf(key)).map(content -> new ColdRow(key, this.codec.decode(content)));
-			ColdTieringServiceComponent.LOGGER.debug("[COLD_TIERING_COLD_READ] table={} key={} found={}", table.getId(), key.values(), coldRow.isPresent());
+		Optional<ColdRow> coldRow = Optional.empty();
+		if (ColdTieringServiceComponent.isColdReadable(this.properties.of(table))) {
+			coldRow = this.tieredRepository.loadCold(table, key);
+			ColdTieringServiceComponent.LOGGER.debug("[COLD_TIERING_COLD_READ] table={} found={}", table.getId(), coldRow.isPresent());
 		}
 		return coldRow;
 	}
 
 	/**
-	 * Reads a row: hot (touching its clock when stale), else from the cold tier, rehydrated into
-	 * the hot table and read again through the hot lookup. On a {@link Rehydration#NONE} table a
-	 * cold row is a miss here; {@link #readCold(TieredRowKey)} serves it.
+	 * Reads a row from the cold tier by entity id.
 	 *
-	 * @param  <Type>    Row type.
-	 * @param  key       Row key.
-	 * @param  hotLookup Hot table lookup (the consumer's JPA query).
-	 * @return           The row, or empty.
+	 * @param  entityClass Entity class bound to a table.
+	 * @param  id          Entity id.
+	 * @return             The cold row, or empty.
+	 */
+	public Optional<ColdRow> findColdRow(
+			final Class<?> entityClass,
+			final Object id) {
+		return this.readCold(this.keyOf(entityClass, id));
+	}
+
+	/**
+	 * Reads a row: hot (touching its clock when stale), else, on a table that rehydrates and
+	 * allows cold reads, from the cold tier, rehydrated and read again. On a
+	 * {@link Rehydration#NONE} table a cold row is a miss here: {@link #findColdRow(Class, Object)}
+	 * serves it.
+	 *
+	 * @param  <Type>      Entity type.
+	 * @param  entityClass Entity class bound to a table.
+	 * @param  id          Entity id.
+	 * @return             The entity, or empty.
 	 */
 	@Transactional(
 			propagation = Propagation.REQUIRED,
 			timeoutString = "${org.coldis.library.service.transaction.regular-timeout}"
 	)
-	public <Type> Optional<Type> readThrough(
-			final TieredRowKey key,
-			final Supplier<Optional<Type>> hotLookup) {
-		final TieredTable table = this.registry.getTable(key.tableId());
+	public <Type> Optional<Type> findByIdTiered(
+			final Class<Type> entityClass,
+			final Object id) {
+		final TieredTable table = this.registry.getTable(entityClass);
 		final TableProperties tableProperties = this.properties.of(table);
-		Optional<Type> row = hotLookup.get();
-		if (row.isPresent()) {
+		final TieredRowKey key = this.tieredRepository.keyOf(table, id);
+		Optional<Type> entity = this.tieredRepository.findHot(table, entityClass, key);
+		if (entity.isPresent()) {
 			this.requestTouchIfStale(table, tableProperties, key);
 		}
-		else if (tableProperties.getRehydration() == Rehydration.INSERT) {
-			final Optional<ColdRow> coldRow = this.readCold(key);
+		else if ((tableProperties.getRehydration() == Rehydration.INSERT) && ColdTieringServiceComponent.isColdReadable(tableProperties)) {
+			final Optional<ColdRow> coldRow = this.tieredRepository.loadCold(table, key);
 			if (coldRow.isPresent()) {
-				this.hotTierRepository.rehydrate(table, this.registry.getColumnTypes(table), key, coldRow.get().rowJson(), DateTimeHelper.getCurrentLocalDateTime());
-				row = hotLookup.get();
+				this.tieredRepository.rehydrate(table, coldRow.get(), DateTimeHelper.getCurrentLocalDateTime());
+				entity = this.tieredRepository.findHot(table, entityClass, key);
 			}
+			ColdTieringServiceComponent.LOGGER.debug("[COLD_TIERING_COLD_READ] table={} found={}", table.getId(), coldRow.isPresent());
 		}
-		return row;
+		return entity;
 	}
 
 	/**
-	 * The newest archived row of a key prefix on or before a moment, on a versioned table: a
-	 * {@code LIST} of the other key columns' prefix, picking the greatest name not after the
-	 * moment. Rows written before their first archive are not there yet: compare with the hot
-	 * table's own newest ({@link TieredRepository#findNewestTiered(Map, LocalDateTime)} does).
+	 * The newest row of a key prefix on or before a moment, hot or cold (a versioned table): the
+	 * newer of the newest hot row and the newest archived one. A cold winner is rehydrated and
+	 * served hot on a table that rehydrates, served as a cold row otherwise.
 	 *
-	 * @param  tableId   Table id.
-	 * @param  keyPrefix Values of every key column but the last.
-	 * @param  asOf      Upper bound of the last key column, or null for the newest.
-	 * @return           The row key, or empty.
+	 * @param  <Type>      Entity type.
+	 * @param  entityClass Entity class bound to a table.
+	 * @param  keyPrefix   Values of every key column but the last, by column name.
+	 * @param  asOf        Upper bound of the last key column, or null for the newest.
+	 * @return             The hit, or empty.
 	 */
-	public Optional<TieredRowKey> findNewestCold(
-			final String tableId,
+	@Transactional(
+			propagation = Propagation.REQUIRED,
+			timeoutString = "${org.coldis.library.service.transaction.regular-timeout}"
+	)
+	public <Type> Optional<TieredHit<Type>> findNewestTiered(
+			final Class<Type> entityClass,
 			final Map<String, Object> keyPrefix,
 			final LocalDateTime asOf) {
-		final TieredTable table = this.registry.getTable(tableId);
+		final TieredTable table = this.registry.getTable(entityClass);
 		final TableProperties tableProperties = this.properties.of(table);
-		if (!table.isVersioned()) {
-			throw new IntegrationException(new SimpleMessage("coldTiering.table.not.versioned", new Object[] { tableId }));
-		}
-		Optional<TieredRowKey> newest = Optional.empty();
-		if (tableProperties.getEnabled() && tableProperties.getColdReadEnabled()) {
-			final Map<String, String> columnTypes = this.registry.getColumnTypes(table);
-			final Map<String, String> formatted = new LinkedHashMap<>();
-			keyPrefix.forEach((
-					column,
-					value) -> formatted.put(column, ColumnValues.format(value)));
-			final List<String> segments = ColumnValues.toSegments(table, columnTypes, formatted);
-			if (segments.size() != (table.getKeyColumns().size() - 1)) {
-				throw new IntegrationException(new SimpleMessage("coldTiering.key.prefix.incomplete", new Object[] { tableId }));
-			}
-			final String lastType = columnTypes.get(table.getLastKeyColumn());
-			final String ceiling = asOf == null ? null : ColumnValues.toSegment(lastType, asOf.toString());
-			String newestSegment = null;
-			for (final String objectKey : this.coldStorageRepository.list(this.objectKeyStrategy.prefixOf(this.properties.getPrefix(), table, segments))) {
-				final String segment = this.objectKeyStrategy.lastSegmentOf(objectKey, this.codec.extension());
-				if (((ceiling == null) || (segment.compareTo(ceiling) <= 0)) && ((newestSegment == null) || (segment.compareTo(newestSegment) > 0))) {
-					newestSegment = segment;
+		final Optional<Type> newestHot = this.tieredRepository.findNewestHot(table, entityClass, keyPrefix, asOf);
+		final Optional<TieredRowKey> newestColdKey = ColdTieringServiceComponent.isColdReadable(tableProperties)
+				? this.tieredRepository.findNewestColdKey(table, keyPrefix, asOf)
+				: Optional.empty();
+		Optional<TieredHit<Type>> hit = newestHot.map(entity -> new TieredHit<>(entity, null));
+		if (newestColdKey.isPresent()) {
+			final String lastColumn = table.getLastKeyColumn();
+			final String lastSegment = ColumnValues.toSegment(this.registry.getColumnTypes(table).get(lastColumn), newestColdKey.get().values().get(lastColumn));
+			final Boolean isColdNewer = newestHot.isEmpty() || (ColumnValues.toSegment(this.registry.getColumnTypes(table).get(lastColumn),
+					this.tieredRepository.keyOfEntity(table, newestHot.get()).values().get(lastColumn)).compareTo(lastSegment) < 0);
+			if (isColdNewer) {
+				final Optional<ColdRow> coldRow = this.tieredRepository.loadCold(table, newestColdKey.get());
+				if (coldRow.isPresent() && (tableProperties.getRehydration() == Rehydration.INSERT)) {
+					this.tieredRepository.rehydrate(table, coldRow.get(), DateTimeHelper.getCurrentLocalDateTime());
+					hit = this.tieredRepository.findHot(table, entityClass, newestColdKey.get()).map(entity -> new TieredHit<>(entity, null));
 				}
+				else if (coldRow.isPresent()) {
+					hit = Optional.of(new TieredHit<>(null, coldRow.get()));
+				}
+				ColdTieringServiceComponent.LOGGER.debug("[COLD_TIERING_COLD_READ] table={} found={}", table.getId(), coldRow.isPresent());
 			}
-			if (newestSegment != null) {
-				final Map<String, String> values = new LinkedHashMap<>(formatted);
-				values.put(table.getLastKeyColumn(), ColumnValues.fromSegment(lastType, newestSegment));
-				newest = Optional.of(new TieredRowKey(tableId, values));
+			else if (newestHot.isPresent()) {
+				this.requestTouchIfStale(table, tableProperties, this.tieredRepository.keyOfEntity(table, newestHot.get()));
 			}
 		}
-		return newest;
+		else if (newestHot.isPresent()) {
+			this.requestTouchIfStale(table, tableProperties, this.tieredRepository.keyOfEntity(table, newestHot.get()));
+		}
+		return hit;
+	}
+
+	/**
+	 * Removes a row from both tiers (a business delete must not leave the cold copy behind).
+	 *
+	 * @param key Row key.
+	 */
+	@Transactional(
+			propagation = Propagation.REQUIRED,
+			timeoutString = "${org.coldis.library.service.transaction.regular-timeout}"
+	)
+	public void delete(
+			final TieredRowKey key) {
+		this.tieredRepository.delete(this.registry.getTable(key.tableId()), key);
 	}
 
 }

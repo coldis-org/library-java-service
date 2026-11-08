@@ -20,6 +20,12 @@ public class ColdTieringTestConfiguration {
 	/** Archive entry table id. */
 	public static final String ARCHIVE_TABLE = "tiered-archive-entry";
 
+	/** A definition of the archive table disabled by property. */
+	public static final String DISABLED_TABLE = "tiered-archive-entry-disabled";
+
+	/** A definition of the archive table with cold reads off by property. */
+	public static final String NO_COLD_READ_TABLE = "tiered-archive-entry-no-cold-read";
+
 	/**
 	 * Snapshots: composite key with a time version, JSONB payload, sliding TTL, rehydration.
 	 *
@@ -39,7 +45,31 @@ public class ColdTieringTestConfiguration {
 	 */
 	@Bean
 	public TieredTable tieredArchiveEntryTable() {
-		return new TieredTable(ColdTieringTestConfiguration.ARCHIVE_TABLE, "tiered_archive_entry", List.of("id")).withTtlClock(TtlClock.LAST_WRITE, null).withRehydration(Rehydration.INSERT).withEntity(TieredArchiveEntry.class, null);
+		return new TieredTable(ColdTieringTestConfiguration.ARCHIVE_TABLE, "tiered_archive_entry", List.of("id")).withTtlClock(TtlClock.LAST_WRITE, null)
+				.withRehydration(Rehydration.INSERT).withEntity(TieredArchiveEntry.class, null);
+	}
+
+	/**
+	 * The archive table again, disabled by {@code table.<id>.enabled=false}: nothing happens.
+	 *
+	 * @return The definition.
+	 */
+	@Bean
+	public TieredTable tieredArchiveEntryDisabledTable() {
+		return new TieredTable(ColdTieringTestConfiguration.DISABLED_TABLE, "tiered_archive_entry", List.of("id")).withTtlClock(TtlClock.LAST_WRITE, null)
+				.withRehydration(Rehydration.NONE);
+	}
+
+	/**
+	 * The archive table again, enabled with {@code cold-read-enabled=false}: archives, never reads
+	 * cold.
+	 *
+	 * @return The definition.
+	 */
+	@Bean
+	public TieredTable tieredArchiveEntryNoColdReadTable() {
+		return new TieredTable(ColdTieringTestConfiguration.NO_COLD_READ_TABLE, "tiered_archive_entry", List.of("id")).withTtlClock(TtlClock.LAST_WRITE, null)
+				.withRehydration(Rehydration.NONE);
 	}
 
 }

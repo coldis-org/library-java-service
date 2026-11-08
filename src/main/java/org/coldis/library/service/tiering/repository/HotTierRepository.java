@@ -1,15 +1,21 @@
-package org.coldis.library.service.tiering;
+package org.coldis.library.service.tiering.repository;
 
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Timestamp;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 
+import org.coldis.library.service.tiering.ColdTieringProperties;
+import org.coldis.library.service.tiering.ColumnValues;
+import org.coldis.library.service.tiering.TieredRowKey;
+import org.coldis.library.service.tiering.TieredTable;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
@@ -33,10 +39,10 @@ public class HotTierRepository {
 	/**
 	 * A hot row read for archiving.
 	 *
-	 * @param watermark Watermark value when read (the archive mark is conditioned on it).
+	 * @param watermark Watermark value when read (string form; the archive mark takes it).
 	 * @param rowJson   The whole row as JSON.
 	 */
-	public record HotRow(Object watermark, String rowJson) {
+	public record HotRow(String watermark, String rowJson) {
 
 	}
 
@@ -89,6 +95,18 @@ public class HotTierRepository {
 	}
 
 	/**
+	 * The predicate of an evictable row: archived after its last write, clock before the moment.
+	 *
+	 * @param  table Table.
+	 * @return       The predicate (parameter {@code before}).
+	 */
+	private static String evictablePredicate(
+			final TieredTable table) {
+		return table.getArchivedAtColumn() + " IS NOT NULL AND " + table.getArchivedAtColumn() + " >= " + table.getWatermarkColumn() + " AND "
+				+ table.clockExpression() + " < :before";
+	}
+
+	/**
 	 * A timestamp column as a local date time.
 	 *
 	 * @param  resultSet Result set.
@@ -121,6 +139,23 @@ public class HotTierRepository {
 	}
 
 	/**
+	 * The nullable columns of a table.
+	 *
+	 * @param  tableName Table name.
+	 * @return           The column names.
+	 */
+	public Set<String> nullableColumns(
+			final String tableName) {
+		final Set<String> columns = new HashSet<>();
+		this.jdbcTemplate.query(
+				"SELECT column_name FROM information_schema.columns WHERE table_schema = current_schema() AND table_name = :table AND is_nullable = 'YES'",
+				new MapSqlParameterSource("table", tableName), resultSet -> {
+					columns.add(resultSet.getString("column_name"));
+				});
+		return columns;
+	}
+
+	/**
 	 * Runs DDL.
 	 *
 	 * @param statement Statement.
@@ -147,31 +182,31 @@ public class HotTierRepository {
 				+ " hot WHERE " + HotTierRepository.keyPredicate(table) + " FOR UPDATE";
 		final List<HotRow> rows = this.jdbcTemplate.query(sql, HotTierRepository.keyParameters(ColumnValues.parseKey(table, columnTypes, key)), (
 				resultSet,
-				rowNumber) -> new HotRow(resultSet.getObject("watermark_"), resultSet.getString("row_")));
+				rowNumber) -> new HotRow(ColumnValues.format(ColumnValues.read(resultSet, "watermark_", columnTypes.get(table.getWatermarkColumn()))),
+						resultSet.getString("row_")));
 		return rows.stream().findFirst();
 	}
 
 	/**
-	 * Marks a row archived only if it was not rewritten since it was read: a rewrite keeps the mark
-	 * null and its own upload archives the new content.
+	 * Marks a row archived with the watermark of the content uploaded, only if it was not
+	 * rewritten since it was read: a rewrite keeps the mark null (or older than its watermark) and
+	 * its own upload archives the new content.
 	 *
 	 * @param  table       Table.
 	 * @param  columnTypes Column types.
 	 * @param  key         Row key.
-	 * @param  watermark   Watermark read for the archive.
-	 * @param  archivedAt  Archive moment.
+	 * @param  watermark   Watermark read for the archive (string form).
 	 * @return             Rows marked (0 when rewritten).
 	 */
 	public Integer markArchived(
 			final TieredTable table,
 			final Map<String, String> columnTypes,
 			final TieredRowKey key,
-			final Object watermark,
-			final LocalDateTime archivedAt) {
-		final String sql = "UPDATE " + table.getTableName() + " SET " + table.getArchivedAtColumn() + " = :archivedAt WHERE "
-				+ HotTierRepository.keyPredicate(table) + " AND " + table.getWatermarkColumn() + " = :watermark";
-		return this.jdbcTemplate.update(sql,
-				HotTierRepository.keyParameters(ColumnValues.parseKey(table, columnTypes, key)).addValue("archivedAt", archivedAt).addValue("watermark", watermark));
+			final String watermark) {
+		final String sql = "UPDATE " + table.getTableName() + " SET " + table.getArchivedAtColumn() + " = :watermark WHERE " + HotTierRepository.keyPredicate(table)
+				+ " AND " + table.getWatermarkColumn() + " = :watermark";
+		return this.jdbcTemplate.update(sql, HotTierRepository.keyParameters(ColumnValues.parseKey(table, columnTypes, key)).addValue("watermark",
+				ColumnValues.parse(columnTypes.get(table.getWatermarkColumn()), watermark)));
 	}
 
 	/**
@@ -233,9 +268,9 @@ public class HotTierRepository {
 	}
 
 	/**
-	 * Rehydrates a cold row from its JSON (every column as archived: no watermark bump), then
-	 * marks it archived now with a fresh clock. A concurrent rehydration of the same key is a
-	 * no-op.
+	 * Rehydrates a cold row from its JSON (every column as archived: no watermark bump), marked
+	 * archived at its own watermark (the content is the archived one) with a fresh clock. A
+	 * concurrent rehydration of the same key is a no-op.
 	 *
 	 * @param  table       Table.
 	 * @param  columnTypes Column types.
@@ -256,11 +291,27 @@ public class HotTierRepository {
 				+ ", CAST(:rowJson AS json)) ON CONFLICT " + HotTierRepository.keyTuple(table) + " DO NOTHING";
 		final Integer inserted = this.jdbcTemplate.update(insert, parameters);
 		if (inserted > 0) {
-			final String mark = "UPDATE " + table.getTableName() + " SET " + table.getArchivedAtColumn() + " = :now"
+			final String mark = "UPDATE " + table.getTableName() + " SET " + table.getArchivedAtColumn() + " = " + table.getWatermarkColumn()
 					+ (table.isTouching() ? ", " + table.getLastAccessedColumn() + " = :now" : "") + " WHERE " + HotTierRepository.keyPredicate(table);
 			this.jdbcTemplate.update(mark, parameters);
 		}
 		return inserted;
+	}
+
+	/**
+	 * Deletes a hot row.
+	 *
+	 * @param  table       Table.
+	 * @param  columnTypes Column types.
+	 * @param  key         Row key.
+	 * @return             Rows deleted.
+	 */
+	public Integer delete(
+			final TieredTable table,
+			final Map<String, String> columnTypes,
+			final TieredRowKey key) {
+		return this.jdbcTemplate.update("DELETE FROM " + table.getTableName() + " WHERE " + HotTierRepository.keyPredicate(table),
+				HotTierRepository.keyParameters(ColumnValues.parseKey(table, columnTypes, key)));
 	}
 
 	/**
@@ -273,14 +324,15 @@ public class HotTierRepository {
 	public Boolean existsEvictable(
 			final TieredTable table,
 			final LocalDateTime before) {
-		final String sql = "SELECT EXISTS (SELECT 1 FROM " + table.getTableName() + " WHERE " + table.getArchivedAtColumn() + " IS NOT NULL AND "
-				+ table.getArchivedAtColumn() + " >= " + table.getWatermarkColumn() + " AND " + table.clockExpression() + " < :before)";
+		final String sql = "SELECT EXISTS (SELECT 1 FROM " + table.getTableName() + " WHERE " + HotTierRepository.evictablePredicate(table) + ")";
 		return this.jdbcTemplate.queryForObject(sql, new MapSqlParameterSource("before", before), Boolean.class);
 	}
 
 	/**
-	 * Deletes up to a chunk of rows with a clock before the moment, only those archived after their
-	 * last write: a row (or a rewrite of it) is never dropped before the cold tier has it.
+	 * Deletes up to a chunk of evictable rows: archived after their last write, clock before the
+	 * moment. The chunk is picked {@code FOR UPDATE SKIP LOCKED} (a row being archived or
+	 * rewritten is left to the next run) and the predicate is repeated on the delete itself, so a
+	 * row rewritten between the pick and the delete is kept.
 	 *
 	 * @param  table  Table.
 	 * @param  before Moment.
@@ -292,8 +344,8 @@ public class HotTierRepository {
 			final LocalDateTime before,
 			final Long limit) {
 		final String sql = "DELETE FROM " + table.getTableName() + " WHERE " + HotTierRepository.keyTuple(table) + " IN (SELECT " + String.join(", ", table.getKeyColumns())
-				+ " FROM " + table.getTableName() + " WHERE " + table.getArchivedAtColumn() + " IS NOT NULL AND " + table.getArchivedAtColumn() + " >= "
-				+ table.getWatermarkColumn() + " AND " + table.clockExpression() + " < :before LIMIT :limit)";
+				+ " FROM " + table.getTableName() + " WHERE " + HotTierRepository.evictablePredicate(table) + " LIMIT :limit FOR UPDATE SKIP LOCKED) AND "
+				+ HotTierRepository.evictablePredicate(table);
 		return this.jdbcTemplate.update(sql, new MapSqlParameterSource("before", before).addValue("limit", limit));
 	}
 
@@ -327,7 +379,7 @@ public class HotTierRepository {
 				rowNumber) -> {
 			final Map<String, String> values = new LinkedHashMap<>();
 			for (final String column : table.getKeyColumns()) {
-				values.put(column, ColumnValues.format(resultSet.getObject(column)));
+				values.put(column, ColumnValues.format(ColumnValues.read(resultSet, column, columnTypes.get(column))));
 			}
 			return new TieredRowKey(table.getId(), values);
 		});

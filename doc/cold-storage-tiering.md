@@ -113,28 +113,44 @@ batch lock.
 ### Shape
 
 ```
-consumer                                   library (org.coldis.library.service.tiering)
-────────                                   ────────────────────────────────────────────
-TieredTable bean per hot table ──────────► TieredTableRegistry (validates against information_schema,
-                                             create-schema for tests)
-JPA save of the hot row, then              ColdTieringServiceComponent
-  tiering.afterWrite(key) ───────────────►   afterWrite: UPDATE archived_at = NULL[, last_accessed_at],
-                                              upload request after commit (JMS cold-tiering/upload)
-                                             upload listener → archive(key): FOR UPDATE, row_to_json,
-                                              PUT <derived key>, markArchived WHERE updated_at = read
-                                             touch listener  → GREATEST(clock, now)
-repository.findByIdTiered(id) ───────────►   readThrough: hot (touch if stale) | GET derived key →
-                                              json_populate_record (INSERT) or ColdRow (NONE)
-repository.findNewestTiered(prefix, asOf) ►  findNewestCold: LIST prefix, greatest name <= asOf
-                                           ColdTieringBatchServiceComponent (BatchService, CronTrigger
-                                             per table and batch): backfill, eviction
-                                           HotTierRepository (JDBC, SQL generated from TieredTable)
-                                           ColdStorageRepository: S3 (consumer's S3Client) | in-memory
+consumer                                library (org.coldis.library.service.tiering)
+────────                                ─────────────────────────────────────────────
+TieredTable bean per hot table ───────► TieredTableRegistry (validates against information_schema and
+                                          the properties; create-schema for tests)
+JPA save of the hot row, then           ColdTieringServiceComponent (policy only)
+  tiering.afterWrite(key) ────────────►   afterWrite (table enabled?) → HotTierRepository.afterWrite,
+                                           upload request after commit (JMS cold-tiering/upload)
+                                          upload listener → archive(key): lockForArchive, store,
+                                           markArchived at the uploaded watermark
+                                          touch listener → HotTierRepository.touch
+tiering.findByIdTiered(Entity.class, id)  hot? touch if stale : cold-read and INSERT? load + rehydrate
+tiering.findColdRow(Entity.class, id)     cold-read enabled? loadCold
+tiering.findNewestTiered(Entity.class,    newest hot vs newest cold key; cold wins → rehydrate (INSERT)
+  prefix, asOf) → TieredHit                or serve the ColdRow (NONE)
+tiering.delete(key)                       both tiers
+                                        ColdTieringBatchServiceComponent (BatchService, CronTrigger per
+                                          table and batch): backfill, eviction
+                                        ── repository package (access only, no policy, no component) ──
+                                        TieredRepository: keyOf, objectKeyOf, findHot / findNewestHot
+                                          (JPQL), loadCold (GET + decode), findNewestColdKey (LIST +
+                                          pick), rehydrate (key check + json_populate_record), delete
+                                        HotTierRepository (JDBC, SQL generated from TieredTable)
+                                        ColdStorageRepository: S3 (consumer's S3Client) | folder | memory
 ```
+
+**Split by nature.** The repository package holds access logic only and may compose other
+repositories (`TieredRepository` uses `HotTierRepository`, `ColdStorageRepository`, the codec and
+the key strategy); none of it reads a flag, calls a component or uses `StaticContextAccessor`.
+The component holds the policy: table enabled, cold reads enabled, rehydration per table, touch
+threshold, archive and eviction orchestration, the queues. Calls go component → repositories,
+never back. The consumer-side repository fragment of the first cut (default methods reaching the
+component through `StaticContextAccessor`) is gone for that reason: a consumer's repository stays a
+plain JPA repository and the tiered reads are on the component, by entity class.
 
 Data access is JDBC (`NamedParameterJdbcTemplate`) with SQL generated from the definition: the
 library cannot know the consumer's entities, and every statement must stay native (no watermark
-bump, no history listener). The consumer keeps JPA for its own writes and reads.
+bump, no history listener). Table and column names are validated against `^[a-z_][a-z0-9_]*$`
+before any SQL or DDL. The consumer keeps JPA for its own writes and reads.
 
 ### Object keys (no index table)
 
@@ -178,12 +194,12 @@ lists the consumer's columns. Object metadata: `table`, `updated-at` (the waterm
 | Row key | `TieredRowKey(tableId, Map<String, String> values)`: JMS message, batch item, cursor; values as strings, bound with the column types read from `information_schema`. A single-column primary key is a one-entry map | yes | — |
 | Retrieval | by full key (`readThrough`, `readCold`); by key prefix + "newest on or before" (`findNewestCold`), versioned tables only | both | — |
 | TTL clock | `TtlClock.LAST_ACCESS` (`COALESCE(last_accessed_at, updated_at)`, reads touch), `LAST_WRITE` (`updated_at`, no touch column), `COLUMN` (any timestamp column) | yes | — |
-| Rehydration | per table, `Rehydration.INSERT` or `NONE`, definition default overridden by `table.<id>.rehydration` | yes | — |
+| Rehydration | per table, `Rehydration.INSERT` or `NONE`, definition default overridden by `table.<id>.rehydration`; `INSERT` needs the `LAST_ACCESS` clock (a rehydrated row must be able to expire by access), rejected otherwise at registration | yes | — |
 | Payload codec | `PayloadCodec` (`encode`, `decode`, `extension`, `contentType`); default gzip JSON, replaced by declaring another bean | yes | Parquet for window tiering |
 | Object key layout | `ObjectKeyStrategy` (`keyOf`, `prefixOf`, `lastSegmentOf`); default path layout above | yes | hashed segments |
 | Cold storage | `ColdStorageRepository` (`store`, `load` → empty on 404, `list` every page): `S3ColdStorageRepository` on the consumer's `S3Client` bean, `FolderColdStorageRepository` (local folder: key → relative path, atomic write through a temporary file and a move, metadata in a `.meta` sidecar, lexicographic listing), `InMemoryColdStorageRepository` | yes | — |
-| Scheduling | `ColdTieringBatchServiceComponent`: one `CronTrigger` per table and batch on the `TaskScheduler`, `-` disables, `run(tableId, batch)` on demand | yes | export batch (window) |
-| Tiered reads | `TieredRepository<T, ID>` fragment: `findByIdTiered`, `findColdRow`, `findNewestTiered`; `findById` itself not overridden | yes | — |
+| Scheduling | `ColdTieringBatchServiceComponent`: one `CronTrigger` per table and batch on the `TaskScheduler`, `-` disables, `run(tableId, batch)` on demand, `schedule(table, batch, cron)` and `getScheduled()` | yes | export batch (window) |
+| Tiered reads | on the component, by entity class: `findByIdTiered`, `findColdRow`, `findNewestTiered` → `TieredHit` (hot entity or cold row); `delete(key)` removes both tiers | yes | — |
 
 ### Row and window tiering
 
@@ -203,16 +219,16 @@ properties. Not worth building: a Parquet writer in the library, scan reads of w
 `DELETE` fallback for unpartitioned window tables (that is row tiering with `COLUMN` clock),
 creating partitions ahead, re-attaching dropped partitions, a transparent `findById` override.
 
-### Tiered repository fragment
+### Tiered reads
 
-`TieredRepository<T, ID> extends CrudRepository<T, ID>` (`@NoRepositoryBean`), all default
-methods, so it works across the library/consumer package boundary with no `Impl` discovery: the
-consumer's interface extends it beside `JpaRepository`. The entity type is resolved from the
-consumer interface's generics; the table from the registry by entity class; the key from the id
-(the `@IdClass` fields named by `keyProperties`, or the id itself for a single key column);
-`findNewestTiered` runs a JPQL over the key properties for the hot candidate and picks the newer
-of hot and cold. `findById` is deliberately not overridden: a locked read or an internal lookup
-must never cost a `GET`.
+On `ColdTieringServiceComponent`, by entity class bound with `withEntity`: `findByIdTiered(Entity.class,
+id)` (hot, touching when stale; else `GET` + rehydrate on an `INSERT` table; a `NONE` table misses),
+`findColdRow(Entity.class, id)`, `findNewestTiered(Entity.class, keyPrefix, asOf)` returning a
+`TieredHit` (the hot entity, or the cold row on a `NONE` table: never empty when an answer exists).
+The key comes from the id (the `@IdClass` fields named by `keyProperties`, validated at
+registration, or the id itself for a single key column); the hot candidate is a JPQL over the key
+properties (`TieredRepository.findHot`/`findNewestHot`). The consumer's own `findById` never reaches
+the cold tier: a locked read or an internal lookup must never cost a `GET`.
 
 ### Library vs consumer split
 
@@ -223,7 +239,7 @@ must never cost a `GET`.
 | Native SQL (lock, `row_to_json`, mark, touch, rehydrate, evict, cursor) | generated | none |
 | Cold storage | S3 repository, in-memory repository, codec, key layout | `S3Client` bean, bucket, prefix; a custom codec or layout only when needed |
 | Write-through, touch, listeners | yes | calls `afterWrite(key)` after its JPA save |
-| Reads | `readThrough`, `readCold`, `findNewestCold`, the fragment | endpoints, DTOs, lookups beyond key and prefix |
+| Reads | `findByIdTiered`, `findColdRow`, `findNewestTiered`, `readCold`, `delete` | endpoints, DTOs, lookups beyond key and prefix; a business delete calls `delete(key)` so the cold copy goes too |
 | Batches and schedules | backfill, eviction, triggers, chunking, Slack | crons, chunk sizes, flags in properties |
 | Monitoring | log lines | dashboards, alarms, DLQ |
 | Data migration (backfill, verify, truncate, rollout) | the backfill batch | the rollout plan |
@@ -241,8 +257,10 @@ CREATE INDEX CONCURRENTLY IF NOT EXISTS <hot>_cold_evict_idx
 ```
 
 The registry reads the hot table's column types from `information_schema` at startup, validates
-the definition (key, watermark, lifecycle and clock columns present, key types supported) and
-fails the boot otherwise.
+the definition (key, watermark, lifecycle and clock columns present; watermark `NOT NULL`; key
+types supported; a versioned table's last column temporal — date, timestamp, timestamptz — so an
+as-of moment converts to it; `INSERT` only with `LAST_ACCESS`; key properties present on the
+entity and its `@IdClass`) and fails the boot otherwise.
 
 ### Write, archive, read, touch, eviction, backfill
 
@@ -251,16 +269,20 @@ fails the boot otherwise.
   `cold-tiering/upload` after the commit.
 - **Archive** (`archive(key)`, upload listener and backfill EXECUTE, `REQUIRED`): `SELECT
   updated_at, row_to_json(hot) … FOR UPDATE` (missing → nothing to do); encode; `PUT` to the
-  derived key; `UPDATE hot SET archived_at = now WHERE key AND updated_at = :read` (0 rows → the
-  rewrite's own message archives the new content). Failures throw: broker retry, DLQ.
-- **Read** (`readThrough(key, hotLookup)`): hot hit → touch request when the clock is older than
-  `touch-threshold`; miss and `INSERT` → `GET`, `json_populate_record`, hot lookup again; miss and
-  `NONE` → empty, `readCold(key)` serves the `ColdRow`. No object → empty, never an error.
+  derived key; `UPDATE hot SET archived_at = :watermark WHERE key AND updated_at = :watermark`,
+  the watermark being the value read and uploaded, not the wall clock (0 rows → the rewrite's own
+  message archives the new content). Failures throw: broker retry, DLQ.
+- **Read**: hot hit → touch request when the clock is older than `touch-threshold`; miss and
+  `INSERT` → `GET`, the decoded row's key columns checked against the requested key,
+  `json_populate_record`, `archived_at = updated_at`, hot lookup again; miss and `NONE` →
+  `findColdRow` serves the `ColdRow`. No object → empty, never an error.
 - **Touch**: `UPDATE hot SET last_accessed_at = GREATEST(<clock>, now) WHERE key`.
 - **Eviction** (`BatchExecutor<EvictionChunk>`, one chunk per transaction): GET =
   `existsEvictable(now - ttl - safety-margin)`; EXECUTE = `DELETE … WHERE (key) IN (SELECT key …
-  WHERE archived_at IS NOT NULL AND archived_at >= updated_at AND <clock> < :before LIMIT :chunk)`.
-  Works on partitioned tables (keys, not `ctid`).
+  WHERE <evictable> LIMIT :chunk FOR UPDATE SKIP LOCKED) AND <evictable>`, with `<evictable>` =
+  `archived_at IS NOT NULL AND archived_at >= updated_at AND <clock> < :before`: a row being
+  archived or rewritten is skipped, and one rewritten between the pick and the delete
+  (EvalPlanQual re-check) is kept. Works on partitioned tables (keys, not `ctid`).
 - **Backfill** (`BatchExecutor<TieredRowKey>`): GET = keys after the cursor with `archived_at IS
   NULL OR archived_at < updated_at`, row-value comparison on the key in key order; EXECUTE =
   `archive`. Resumes from the batch record after a restart.
@@ -274,8 +296,8 @@ fails the boot otherwise.
 | Guarantee | Mechanism |
 |---|---|
 | Concurrent archives of one key never write older content over newer | Keys are deterministic, so every archive of a row writes the same object; `archive` reads the row `FOR UPDATE` and uploads while holding the lock, so archives of one key run one at a time and each uploads the content current at its turn. A writer rewriting the row waits for the upload in flight, then its own message uploads the new content |
-| A rewrite during an upload is never marked archived | `archived_at` set only `WHERE updated_at = :read` |
-| A row is never evicted before S3 holds its current content | `archived_at >= updated_at` in the eviction predicate (whatever path wrote the row, even one that skipped `afterWrite`) |
+| A rewrite during an upload is never marked archived | `archived_at` set to the uploaded watermark, only `WHERE updated_at = :watermark`; a concurrent rewrite with an earlier timestamp, or clock skew between instances, cannot satisfy `archived_at >= updated_at` with a mark that is not its own watermark |
+| A row is never evicted before S3 holds its current content | `archived_at >= updated_at` in the eviction predicate, repeated on the delete itself. It covers every write that bumps the watermark, `afterWrite` or not; a write that leaves the watermark unchanged is outside the contract (the watermark is "bumped by every write" by definition) |
 | Duplicate upload or touch messages | the upload rewrites the same object with the same content; `GREATEST` makes the touch a no-op |
 | Crash between PUT and mark | redelivery repeats the PUT (idempotent) |
 | Integrity in transit | the SDK's transfer checksums on PUT and GET; no digest in the database |
@@ -323,24 +345,30 @@ tunables):
 
 `[COLD_TIERING]` (registration, scheduling), `[COLD_TIERING_UPLOAD]`, `[COLD_TIERING_COLD_READ]`,
 `[COLD_TIERING_EVICT] table chunk deleted` (info), the rest at debug; the batch service's own
-Slack messages per batch key. Micrometer counters are not built yet (open question).
+messages per batch key name the table and the counts only. No key value reaches a log:
+`TieredRowKey.toString()` shows the table and the number of columns, the batch message templates
+carry no `${lastProcessed}`. Micrometer counters are not built yet (open question).
 
 ## Testing
 
 `ColdTieringServiceTest` (`src/test/java/org/coldis/library/test/service/tiering/`), on
 `ContainerTestHelper` (Postgres, Redis, Artemis), one Spring context, no Mockito, `storage=folder` under
 `java.io.tmpdir` (the file, its `.meta` sidecar and the listing are asserted),
-`create-schema=true`, crons `-` except the archive table's eviction (`* * * * * *`, proves the
-library schedules). Two consumer-side fixtures in the test package: `TieredSnapshot`
-(`@IdClass` owner + `cached_at`, JSONB payload, `LAST_ACCESS`, versioned, `INSERT`) and
-`TieredArchiveEntry` (single bigint id, text payload, `LAST_WRITE`, `INSERT` in the bean overridden
-to `NONE` by property), each with a repository extending `JpaRepository` and `TieredRepository`.
-Cases: write → archived at the derived key → clock +20 d → eviction → `findByIdTiered` rehydrates
-with the original `updated_at` → a read past the threshold touches → object removed → empty; a
-rewrite after the archive is re-archived before eviction; the backfill archives seeded rows in
-chunks; `findNewestTiered` over hot and cold snapshots (newest, as-of, before the first, unknown
-owner); the `NONE` table: archived, evicted by the scheduled batch (batch record present),
-`findByIdTiered` empty, `findColdRow` holds the row, hot table stays empty.
+`create-schema=true`, every cron `-` (a random folder per run). Two consumer-side entities in the
+test package, `TieredSnapshot` (`@IdClass` owner + `cached_at`, JSONB payload, `LAST_ACCESS`,
+versioned, `INSERT`) and `TieredArchiveEntry` (single bigint id, text payload, `LAST_WRITE`,
+`INSERT` in the bean overridden to `NONE` by property), with plain JPA repositories; the archive
+table is also registered twice more, one definition disabled and one with cold reads off, by
+property. Cases: write → archived at the derived key (`archived_at = updated_at`) → clock +20 d →
+eviction deletes it and keeps a never-archived row and one rewritten without the hook (no cold
+object for the former) → `findByIdTiered` rehydrates with the original `updated_at` → a read past
+the threshold touches → object removed → empty; a rewrite after the archive is re-archived before
+eviction, and `delete` clears both tiers; the backfill archives seeded rows in chunks;
+`findNewestTiered` over hot and cold snapshots (newest, as-of, before the first, unknown owner);
+the `NONE` table: archived, evicted, `findByIdTiered` empty, `findColdRow` holds the row, hot
+table stays empty, `schedule` registers a cron and `-` registers nothing; the disabled definition
+archives nothing, `run` is false and a cold object is never read; cold reads off: archived, never
+read.
 
 `S3ColdStorageRepository` itself has no test in this library (no LocalStack): it is covered by the
 first consumer's tests, the folder storage exercises the same interface contract.
@@ -355,9 +383,9 @@ first consumer's tests, the folder storage exercises the same interface contract
 | `BoaVistaOnlineReportColdRepository`, `*S3Repository`, `BoaVistaBatchObjectStorage` | `ColdStorageRepository`, `S3ColdStorageRepository` (consumer's `S3Client`), `InMemoryColdStorageRepository`, `GzipJsonPayloadCodec`, `PathObjectKeyStrategy` |
 | `BoaVista*Index` entities and repositories, `s3_key`/`sha256`/`size_bytes` | dropped: derived keys, whole-row objects, SDK checksums |
 | Native queries on the hot repositories, `BoaVistaOnlineUnarchivedKey` | `HotTierRepository` |
-| `BoaVistaOnlineTieringServiceComponent` | `ColdTieringServiceComponent` |
+| `BoaVistaOnlineTieringServiceComponent` | `ColdTieringServiceComponent` (policy) + `TieredRepository` (access) |
 | `BoaVistaOnlineTieringBatchServiceComponent` (`@Scheduled`) | `ColdTieringBatchServiceComponent` (crons per table) |
-| `findReport` / `findCadastroPositivo` | `TieredRepository.findNewestTiered` / `findByIdTiered` |
+| `findReport` / `findCadastroPositivo` | `ColdTieringServiceComponent.findNewestTiered` / `findByIdTiered` |
 | Entity `touchOnWrite` | `afterWrite(key)` |
 | `boa_vista_online_tiering.sql` | `ColdTieringSchema.statements` in the consumer's Flyway migration |
 | `…boavista.online-tiering.*` | `org.coldis.library.service.tiering.*` |
@@ -366,7 +394,7 @@ first consumer's tests, the folder storage exercises the same interface contract
 version, cached_at`, versioned; `boa-vista-cadastro-positivo-report`: key `tax_id, cached_at`,
 versioned; both `LAST_ACCESS`, `INSERT`); Flyway migration from the schema helper (drop the
 `*_index` tables of the branch); `upsertReport` calls `afterWrite`; `BoaVistaOnlineReportService`
-on `findNewestTiered` / `findByIdTiered`; delete the two components, the index entities, the
+on the component's `findNewestTiered` / `findByIdTiered`; business deletes through `delete(key)`; delete the two components, the index entities, the
 cold/S3 repositories and the tiering native queries; the batch mirror's `S3Client` exposed as a
 bean for `s3.client-bean`; flags off; rollout as the reference doc (backfill, verify, `TRUNCATE`,
 eviction). Object keys carry the tax id as a path segment: see open question 1.
@@ -390,7 +418,8 @@ evicted by row delete), then the two full tables as row-tiered, versioned, `INSE
 - No LocalStack in this library: the tests run on the folder storage; the S3 adapter is covered
   by the first consumer's tests.
 - Rehydration is per table (`INSERT` / `NONE`), the log service uses `NONE`.
-- Table structure in a bean, tunables in properties; reads through the default-method fragment.
+- Table structure in a bean, tunables in properties; access logic in the repository package, policy
+  in the component, reads on the component by entity class (no repository fragment).
 
 ## Open questions
 
@@ -399,8 +428,8 @@ evicted by row delete), then the two full tables as row-tiered, versioned, `INSE
    possible later.
 2. **Micrometer metrics** (`cold.tiering.read{tier}`, `upload{result}`, `evicted`,
    `unarchived.rows`): names proposed, not built.
-3. **Negative integer keys** break the fixed-width ordering of the default layout (only matters
-   for versioned tables with a signed numeric version).
+3. **Negative integer keys** break the fixed-width ordering of the default layout; versioned tables
+   are restricted to temporal last columns, so it only matters for listing-free tables (cosmetic).
 4. **Default partition for `PARTITION_DROP` with rehydration** (step 4): add one to
    `boa_vista_report_full`, or rehydrate into a separate table.
 5. **Log service move (step 3)**: worth it, or does only the row tiering move to the library?

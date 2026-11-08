@@ -7,6 +7,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.concurrent.ScheduledFuture;
 
 import org.coldis.library.helper.DateTimeHelper;
 import org.coldis.library.persistence.keyvalue.KeyValueServiceComponent;
@@ -14,9 +15,11 @@ import org.coldis.library.service.batch.BatchService;
 import org.coldis.library.service.tiering.ColdRow;
 import org.coldis.library.service.tiering.ColdTieringBatchServiceComponent;
 import org.coldis.library.service.tiering.ColdTieringServiceComponent;
-import org.coldis.library.service.tiering.FolderColdStorageRepository;
+import org.coldis.library.service.tiering.TieredHit;
 import org.coldis.library.service.tiering.TieredRowKey;
+import org.coldis.library.service.tiering.TieredTable;
 import org.coldis.library.service.tiering.TieringBatch;
+import org.coldis.library.service.tiering.repository.FolderColdStorageRepository;
 import org.coldis.library.test.StartTestWithContainerExtension;
 import org.coldis.library.test.TestHelper;
 import org.coldis.library.test.TestWithContainer;
@@ -28,22 +31,21 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.context.SpringBootTest.WebEnvironment;
 import org.springframework.transaction.annotation.Transactional;
 
 /**
- * Cold tiering: write-through, eviction, cold reads with and without rehydration, backfill,
- * "newest on or before" reads and the library-owned scheduling, through consumer repositories in
- * another package, on the local-folder cold storage.
+ * Cold tiering: write-through, eviction (and what eviction must leave alone), cold reads with and
+ * without rehydration, backfill, "newest on or before" reads, disabled tables and the
+ * library-owned scheduling, through consumer entities in another package, on the local-folder
+ * cold storage.
  */
 @TestWithContainer(reuse = true)
 @ExtendWith(StartTestWithContainerExtension.class)
 @SpringBootTest(webEnvironment = WebEnvironment.RANDOM_PORT)
 public class ColdTieringServiceTest extends ContainerTestHelper {
-
-	/** Batch record key of the archive table's scheduled eviction. */
-	private static final String ARCHIVE_EVICTION_KEY = BatchService.BATCH_KEY_PREFIX + TieringBatch.EVICTION.keySuffix(ColdTieringTestConfiguration.ARCHIVE_TABLE);
 
 	/** Tiering component. */
 	@Autowired
@@ -69,6 +71,11 @@ public class ColdTieringServiceTest extends ContainerTestHelper {
 	@Autowired
 	private KeyValueServiceComponent keyValueService;
 
+	/** Archive table definition. */
+	@Autowired
+	@Qualifier("tieredArchiveEntryTable")
+	private TieredTable archiveTable;
+
 	/**
 	 * Clean state.
 	 */
@@ -77,6 +84,14 @@ public class ColdTieringServiceTest extends ContainerTestHelper {
 		TestHelper.cleanClock();
 		this.clean();
 		this.coldStorage.reset();
+	}
+
+	/**
+	 * Restores the clock.
+	 */
+	@AfterEach
+	public void afterEach() {
+		TestHelper.cleanClock();
 	}
 
 	/**
@@ -107,14 +122,6 @@ public class ColdTieringServiceTest extends ContainerTestHelper {
 	}
 
 	/**
-	 * Restores the clock.
-	 */
-	@AfterEach
-	public void afterEach() {
-		TestHelper.cleanClock();
-	}
-
-	/**
 	 * Snapshot key.
 	 *
 	 * @param  snapshotKey Entity key.
@@ -122,8 +129,7 @@ public class ColdTieringServiceTest extends ContainerTestHelper {
 	 */
 	private TieredRowKey rowKey(
 			final TieredSnapshotKey snapshotKey) {
-		return this.tieringServiceComponent.keyOf(ColdTieringTestConfiguration.SNAPSHOT_TABLE,
-				Map.of("owner_id", snapshotKey.getOwnerId(), "cached_at", snapshotKey.getCachedAt()));
+		return this.tieringServiceComponent.keyOf(TieredSnapshot.class, snapshotKey);
 	}
 
 	/**
@@ -142,15 +148,17 @@ public class ColdTieringServiceTest extends ContainerTestHelper {
 	}
 
 	/**
-	 * Writes an archive entry with the tiering hook.
+	 * Writes an archive entry with the tiering hook of one of the archive table's definitions.
 	 *
-	 * @param entry Entry.
+	 * @param entry   Entry.
+	 * @param tableId Definition id.
 	 */
 	@Transactional
 	private void write(
-			final TieredArchiveEntry entry) {
+			final TieredArchiveEntry entry,
+			final String tableId) {
 		this.archiveEntryRepository.save(entry);
-		this.tieringServiceComponent.afterWrite(this.tieringServiceComponent.keyOf(ColdTieringTestConfiguration.ARCHIVE_TABLE, Map.of("id", entry.getId())));
+		this.tieringServiceComponent.afterWrite(this.tieringServiceComponent.keyOf(tableId, Map.of("id", entry.getId())));
 	}
 
 	/**
@@ -168,7 +176,7 @@ public class ColdTieringServiceTest extends ContainerTestHelper {
 	/**
 	 * Evicts a table and waits for a snapshot to leave the hot table.
 	 *
-	 * @param  key Key.
+	 * @param  key       Key.
 	 * @throws Exception If the batch cannot start or the wait fails.
 	 */
 	private void evictSnapshots(
@@ -179,8 +187,8 @@ public class ColdTieringServiceTest extends ContainerTestHelper {
 	}
 
 	/**
-	 * Write-through archive, eviction past the TTL, cold read with rehydration, sliding TTL touch,
-	 * and a miss when the object is gone.
+	 * Write-through archive, eviction past the TTL (and what it must keep), cold read with
+	 * rehydration, sliding TTL touch, and a miss when the object is gone.
 	 *
 	 * @throws Exception If the test fails.
 	 */
@@ -189,45 +197,62 @@ public class ColdTieringServiceTest extends ContainerTestHelper {
 	public void testWriteEvictRehydrateTouch() throws Exception {
 		final TieredSnapshotKey key = this.write(new TieredSnapshot("owner-1", LocalDateTime.of(2026, 1, 10, 12, 0), new HashMap<>(Map.of("marker", "one"))));
 		this.waitArchived(key);
+		final TieredSnapshot archived = this.snapshotRepository.findById(key).orElseThrow();
+		Assertions.assertEquals(archived.getUpdatedAt(), archived.getArchivedAt());
 		final String objectKey = this.tieringServiceComponent.objectKeyOf(this.rowKey(key));
 		Assertions.assertEquals("cold-tiering/tiered-snapshot/owner-1/2026-01-10T12:00:00.000000.json.gz", objectKey);
 		Assertions.assertTrue(this.coldStorage.load(objectKey).isPresent());
 		Assertions.assertTrue(Files.isRegularFile(this.coldStorage.getRoot().resolve(objectKey)));
 		Assertions.assertTrue(Files.readString(this.coldStorage.getRoot().resolve(objectKey + FolderColdStorageRepository.METADATA_SUFFIX)).contains("table=tiered-snapshot"));
 
-		// Past the TTL and the safety margin, the archived row is evicted.
+		// Rows the eviction must keep: never archived; archived, then rewritten by a path that
+		// bumped the watermark but skipped the hook.
+		final TieredSnapshotKey neverArchivedKey = new TieredSnapshotKey("owner-1", LocalDateTime.of(2026, 1, 11, 12, 0));
+		this.seed(new TieredSnapshot(neverArchivedKey.getOwnerId(), neverArchivedKey.getCachedAt(), new HashMap<>(Map.of("marker", "never"))));
+		final TieredSnapshotKey rewrittenKey = this.write(new TieredSnapshot("owner-1", LocalDateTime.of(2026, 1, 12, 12, 0), new HashMap<>(Map.of("marker", "before"))));
+		this.waitArchived(rewrittenKey);
+		TestHelper.moveClockBy(Duration.ofMinutes(1));
+		final TieredSnapshot rewritten = this.snapshotRepository.findById(rewrittenKey).orElseThrow();
+		rewritten.setData(new HashMap<>(Map.of("marker", "after")));
+		rewritten.setUpdatedAt(DateTimeHelper.getCurrentLocalDateTime());
+		this.seed(rewritten);
+
+		// Past the TTL and the safety margin, only the archived row is evicted.
 		TestHelper.moveClockBy(Duration.ofDays(20));
 		this.evictSnapshots(key);
+		Assertions.assertTrue(this.snapshotRepository.findById(neverArchivedKey).isPresent());
+		Assertions.assertTrue(this.snapshotRepository.findById(rewrittenKey).isPresent());
+		Assertions.assertTrue(this.coldStorage.load(this.tieringServiceComponent.objectKeyOf(this.rowKey(neverArchivedKey))).isEmpty());
 
 		// A read fetches the object and rehydrates the row with its original columns.
-		final TieredSnapshot rehydrated = this.snapshotRepository.findByIdTiered(key).orElseThrow();
+		final TieredSnapshot rehydrated = this.tieringServiceComponent.findByIdTiered(TieredSnapshot.class, key).orElseThrow();
 		Assertions.assertEquals("one", rehydrated.getData().get("marker"));
 		Assertions.assertNotNull(rehydrated.getLastAccessedAt());
-		Assertions.assertNotNull(rehydrated.getArchivedAt());
+		Assertions.assertEquals(rehydrated.getUpdatedAt(), rehydrated.getArchivedAt());
 		Assertions.assertTrue(rehydrated.getUpdatedAt().isBefore(DateTimeHelper.getCurrentLocalDateTime().minusDays(19)));
 		final LocalDateTime rehydratedClock = rehydrated.getLastAccessedAt();
 
 		// A read past the touch threshold extends the clock.
 		TestHelper.moveClockBy(Duration.ofDays(2));
-		this.snapshotRepository.findByIdTiered(key).orElseThrow();
+		this.tieringServiceComponent.findByIdTiered(TieredSnapshot.class, key).orElseThrow();
 		Assertions.assertTrue(TestHelper.waitUntilValid(() -> this.snapshotRepository.findById(key).orElseThrow().getLastAccessedAt(),
 				clock -> clock.isAfter(rehydratedClock.plusDays(1)), TestHelper.REGULAR_WAIT * 4, TestHelper.SHORT_WAIT));
 
 		// Evicted again and the object gone: a miss, not an error.
 		TestHelper.moveClockBy(Duration.ofDays(20));
 		this.evictSnapshots(key);
-		this.coldStorage.remove(objectKey);
-		Assertions.assertTrue(this.snapshotRepository.findByIdTiered(key).isEmpty());
+		this.coldStorage.delete(objectKey);
+		Assertions.assertTrue(this.tieringServiceComponent.findByIdTiered(TieredSnapshot.class, key).isEmpty());
 	}
 
 	/**
 	 * A rewrite after the archive drops the mark, is re-archived with the new content, and only then
-	 * evicted.
+	 * evicted; a delete removes both tiers.
 	 *
 	 * @throws Exception If the test fails.
 	 */
 	@Test
-	@DisplayName("Snapshot: a rewrite is re-archived before it can be evicted")
+	@DisplayName("Snapshot: a rewrite is re-archived before it can be evicted; a delete clears both tiers")
 	public void testRewriteIsReArchived() throws Exception {
 		final TieredSnapshotKey key = this.write(new TieredSnapshot("owner-2", LocalDateTime.of(2026, 1, 11, 12, 0), new HashMap<>(Map.of("marker", "first"))));
 		this.waitArchived(key);
@@ -243,7 +268,12 @@ public class ColdTieringServiceTest extends ContainerTestHelper {
 
 		TestHelper.moveClockBy(Duration.ofDays(20));
 		this.evictSnapshots(key);
-		Assertions.assertEquals("second", this.snapshotRepository.findByIdTiered(key).orElseThrow().getData().get("marker"));
+		Assertions.assertEquals("second", this.tieringServiceComponent.findByIdTiered(TieredSnapshot.class, key).orElseThrow().getData().get("marker"));
+
+		this.tieringServiceComponent.delete(this.rowKey(key));
+		Assertions.assertTrue(this.snapshotRepository.findById(key).isEmpty());
+		Assertions.assertTrue(this.coldStorage.load(this.tieringServiceComponent.objectKeyOf(this.rowKey(key))).isEmpty());
+		Assertions.assertTrue(this.tieringServiceComponent.findByIdTiered(TieredSnapshot.class, key).isEmpty());
 	}
 
 	/**
@@ -268,7 +298,7 @@ public class ColdTieringServiceTest extends ContainerTestHelper {
 	}
 
 	/**
-	 * "Newest on or before" over hot and cold rows, through the repository fragment.
+	 * "Newest on or before" over hot and cold rows.
 	 *
 	 * @throws Exception If the test fails.
 	 */
@@ -289,43 +319,91 @@ public class ColdTieringServiceTest extends ContainerTestHelper {
 		this.seed(new TieredSnapshot("owner-7", third, new HashMap<>(Map.of("marker", "third"))));
 
 		final Map<String, Object> prefix = Map.of("owner_id", "owner-7");
-		Assertions.assertEquals("third", this.snapshotRepository.findNewestTiered(prefix, null).orElseThrow().getData().get("marker"));
-		Assertions.assertEquals("second", this.snapshotRepository.findNewestTiered(prefix, second).orElseThrow().getData().get("marker"));
-		Assertions.assertEquals("first", this.snapshotRepository.findNewestTiered(prefix, second.minusDays(1)).orElseThrow().getData().get("marker"));
-		Assertions.assertTrue(this.snapshotRepository.findNewestTiered(prefix, first.minusDays(1)).isEmpty());
-		Assertions.assertTrue(this.snapshotRepository.findNewestTiered(Map.of("owner_id", "nobody"), null).isEmpty());
+		Assertions.assertEquals("third", this.newest(prefix, null).getData().get("marker"));
+		Assertions.assertEquals("second", this.newest(prefix, second).getData().get("marker"));
+		Assertions.assertEquals("first", this.newest(prefix, second.minusDays(1)).getData().get("marker"));
+		Assertions.assertTrue(this.tieringServiceComponent.findNewestTiered(TieredSnapshot.class, prefix, first.minusDays(1)).isEmpty());
+		Assertions.assertTrue(this.tieringServiceComponent.findNewestTiered(TieredSnapshot.class, Map.of("owner_id", "nobody"), null).isEmpty());
 		// The cold ones were rehydrated by the reads.
 		Assertions.assertTrue(this.snapshotRepository.findById(firstKey).isPresent());
 		Assertions.assertTrue(this.snapshotRepository.findById(secondKey).isPresent());
 	}
 
 	/**
+	 * The newest hot snapshot of a prefix.
+	 *
+	 * @param  prefix Prefix.
+	 * @param  asOf   Moment.
+	 * @return        The entity.
+	 */
+	private TieredSnapshot newest(
+			final Map<String, Object> prefix,
+			final LocalDateTime asOf) {
+		return this.tieringServiceComponent.findNewestTiered(TieredSnapshot.class, prefix, asOf).orElseThrow().hot().orElseThrow();
+	}
+
+	/**
 	 * A table with rehydration NONE (property override), a single id, a text payload and an age
-	 * from the last write: archived on write, evicted by the library's own schedule, readable cold
-	 * only, never hot again.
+	 * from the last write: archived on write, evicted, readable cold only, never hot again; the
+	 * library schedules a batch from a cron.
 	 *
 	 * @throws Exception If the test fails.
 	 */
 	@Test
-	@DisplayName("Archive entry: no rehydration, cold read only, evicted by the scheduled batch")
-	public void testNoRehydrationAndScheduledEviction() throws Exception {
-		this.write(new TieredArchiveEntry(42L, "forty-two"));
+	@DisplayName("Archive entry: no rehydration, cold read only, eviction and schedule registration")
+	public void testNoRehydration() throws Exception {
+		this.write(new TieredArchiveEntry(42L, "forty-two"), ColdTieringTestConfiguration.ARCHIVE_TABLE);
 		Assertions.assertTrue(TestHelper.waitUntilValid(() -> this.archiveEntryRepository.findById(42L).map(TieredArchiveEntry::getArchivedAt).orElse(null),
 				archivedAt -> archivedAt != null, TestHelper.REGULAR_WAIT * 4, TestHelper.SHORT_WAIT));
 		Assertions.assertEquals("cold-tiering/tiered-archive-entry/0000000000000000042.json.gz",
-				this.tieringServiceComponent.objectKeyOf(this.tieringServiceComponent.keyOf(ColdTieringTestConfiguration.ARCHIVE_TABLE, Map.of("id", 42L))));
+				this.tieringServiceComponent.objectKeyOf(this.tieringServiceComponent.keyOf(TieredArchiveEntry.class, 42L)));
 
-		// Evicted by the eviction scheduled every second (TTL one day, no safety margin).
+		// Evicted (TTL one day, no safety margin).
 		TestHelper.moveClockBy(Duration.ofDays(2));
-		Assertions.assertTrue(TestHelper.waitUntilValid(() -> this.archiveEntryRepository.findById(42L).isEmpty(), evicted -> evicted, TestHelper.REGULAR_WAIT * 8,
+		Assertions.assertTrue(this.batchServiceComponent.run(ColdTieringTestConfiguration.ARCHIVE_TABLE, TieringBatch.EVICTION));
+		Assertions.assertTrue(TestHelper.waitUntilValid(() -> this.archiveEntryRepository.findById(42L).isEmpty(), evicted -> evicted, TestHelper.REGULAR_WAIT * 4,
 				TestHelper.SHORT_WAIT));
-		Assertions.assertTrue(this.keyValueService.getRepository().findById(ColdTieringServiceTest.ARCHIVE_EVICTION_KEY).isPresent());
 
 		// Cold only: the tiered read is a miss, the cold row holds the whole row, the hot table stays empty.
-		Assertions.assertTrue(this.archiveEntryRepository.findByIdTiered(42L).isEmpty());
-		final Optional<ColdRow> coldRow = this.archiveEntryRepository.findColdRow(42L);
+		Assertions.assertTrue(this.tieringServiceComponent.findByIdTiered(TieredArchiveEntry.class, 42L).isEmpty());
+		final Optional<ColdRow> coldRow = this.tieringServiceComponent.findColdRow(TieredArchiveEntry.class, 42L);
 		Assertions.assertTrue(coldRow.get().rowJson().contains("\"content\":\"forty-two\""));
 		Assertions.assertTrue(this.archiveEntryRepository.findById(42L).isEmpty());
+
+		// The library registers a schedule from a cron, none from "-".
+		Assertions.assertTrue(this.batchServiceComponent.getScheduled().isEmpty());
+		final ScheduledFuture<?> task = this.batchServiceComponent.schedule(this.archiveTable, TieringBatch.EVICTION, "0 0 3 * * *");
+		Assertions.assertNotNull(task);
+		Assertions.assertEquals("0 0 3 * * *", this.batchServiceComponent.getScheduled().get(TieringBatch.EVICTION.keySuffix(ColdTieringTestConfiguration.ARCHIVE_TABLE)));
+		task.cancel(false);
+		Assertions.assertNull(this.batchServiceComponent.schedule(this.archiveTable, TieringBatch.BACKFILL, "-"));
+	}
+
+	/**
+	 * A definition disabled by property does nothing; one with cold reads off archives but never
+	 * reads cold.
+	 *
+	 * @throws Exception If the test fails.
+	 */
+	@Test
+	@DisplayName("Archive entry: a disabled definition does nothing, cold reads off never reach the store")
+	public void testDisabledDefinitions() throws Exception {
+		this.write(new TieredArchiveEntry(43L, "disabled"), ColdTieringTestConfiguration.DISABLED_TABLE);
+		final TieredRowKey disabledKey = this.tieringServiceComponent.keyOf(ColdTieringTestConfiguration.DISABLED_TABLE, Map.of("id", 43L));
+		Assertions.assertFalse(this.batchServiceComponent.run(ColdTieringTestConfiguration.DISABLED_TABLE, TieringBatch.EVICTION));
+		Assertions.assertFalse(this.batchServiceComponent.run(ColdTieringTestConfiguration.DISABLED_TABLE, TieringBatch.BACKFILL));
+		Thread.sleep(TestHelper.SHORT_WAIT * 2);
+		Assertions.assertNull(this.archiveEntryRepository.findById(43L).orElseThrow().getArchivedAt());
+		Assertions.assertTrue(this.coldStorage.list("cold-tiering/tiered-archive-entry-disabled/").isEmpty());
+		// Even with an object in place, a disabled table never reads it.
+		this.coldStorage.store(this.tieringServiceComponent.objectKeyOf(disabledKey), new byte[] { 1 }, Map.of());
+		Assertions.assertTrue(this.tieringServiceComponent.readCold(disabledKey).isEmpty());
+
+		this.write(new TieredArchiveEntry(44L, "no-cold-read"), ColdTieringTestConfiguration.NO_COLD_READ_TABLE);
+		final TieredRowKey noColdReadKey = this.tieringServiceComponent.keyOf(ColdTieringTestConfiguration.NO_COLD_READ_TABLE, Map.of("id", 44L));
+		Assertions.assertTrue(TestHelper.waitUntilValid(() -> this.coldStorage.load(this.tieringServiceComponent.objectKeyOf(noColdReadKey)).isPresent(),
+				archived -> archived, TestHelper.REGULAR_WAIT * 4, TestHelper.SHORT_WAIT));
+		Assertions.assertTrue(this.tieringServiceComponent.readCold(noColdReadKey).isEmpty());
 	}
 
 }

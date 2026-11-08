@@ -1,4 +1,4 @@
-package org.coldis.library.service.tiering;
+package org.coldis.library.service.tiering.repository;
 
 import java.io.IOException;
 import java.io.UncheckedIOException;
@@ -15,6 +15,8 @@ import java.util.stream.Stream;
 
 import org.coldis.library.exception.IntegrationException;
 import org.coldis.library.model.SimpleMessage;
+import org.coldis.library.service.tiering.ColdObject;
+import org.coldis.library.service.tiering.ColdTieringProperties;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Repository;
@@ -53,6 +55,29 @@ public class FolderColdStorageRepository implements ColdStorageRepository {
 	}
 
 	/**
+	 * A key segment as a file name: a segment that is only dots ({@code .}, {@code ..}) would
+	 * mean the directory itself or its parent, so its dots are percent-encoded.
+	 *
+	 * @param  segment Key segment.
+	 * @return         The file name.
+	 */
+	private static String fileNameOf(
+			final String segment) {
+		return segment.matches("\\.+") ? segment.replace(".", "%2E") : segment;
+	}
+
+	/**
+	 * A file name as a key segment.
+	 *
+	 * @param  fileName File name.
+	 * @return          The segment.
+	 */
+	private static String segmentOf(
+			final String fileName) {
+		return fileName.matches("(%2E)+") ? fileName.replace("%2E", ".") : fileName;
+	}
+
+	/**
 	 * The path of an object key.
 	 *
 	 * @param  key Object key.
@@ -60,8 +85,13 @@ public class FolderColdStorageRepository implements ColdStorageRepository {
 	 */
 	private Path pathOf(
 			final String key) {
-		final Path path = this.root.resolve(key).normalize();
-		if (!path.startsWith(this.root)) {
+		Path path = this.root;
+		for (final String segment : key.split("/")) {
+			if (!segment.isEmpty()) {
+				path = path.resolve(FolderColdStorageRepository.fileNameOf(segment));
+			}
+		}
+		if (!path.normalize().startsWith(this.root) || path.equals(this.root)) {
 			throw new IntegrationException(new SimpleMessage("coldTiering.folder.key.invalid", new Object[] { key }));
 		}
 		return path;
@@ -75,7 +105,11 @@ public class FolderColdStorageRepository implements ColdStorageRepository {
 	 */
 	private String keyOf(
 			final Path path) {
-		return this.root.relativize(path).toString().replace(path.getFileSystem().getSeparator(), "/");
+		final List<String> segments = new ArrayList<>();
+		for (final Path name : this.root.relativize(path)) {
+			segments.add(FolderColdStorageRepository.segmentOf(name.toString()));
+		}
+		return String.join("/", segments);
 	}
 
 	/**
@@ -120,18 +154,17 @@ public class FolderColdStorageRepository implements ColdStorageRepository {
 	}
 
 	/**
-	 * Removes an object and its metadata (tests).
-	 *
-	 * @param key Object key.
+	 * @see ColdStorageRepository#delete(String)
 	 */
-	public void remove(
+	@Override
+	public void delete(
 			final String key) {
 		try {
 			Files.deleteIfExists(this.pathOf(key));
 			Files.deleteIfExists(this.pathOf(key + FolderColdStorageRepository.METADATA_SUFFIX));
 		}
 		catch (final IOException exception) {
-			throw new UncheckedIOException(exception);
+			throw new IntegrationException(new SimpleMessage("coldTiering.folder.delete.error", new Object[] { key }), exception);
 		}
 	}
 
