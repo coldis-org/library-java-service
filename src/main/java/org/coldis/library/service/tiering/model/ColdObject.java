@@ -1,4 +1,4 @@
-package org.coldis.library.service.tiering;
+package org.coldis.library.service.tiering.model;
 
 /**
  * An object written to the cold tier.

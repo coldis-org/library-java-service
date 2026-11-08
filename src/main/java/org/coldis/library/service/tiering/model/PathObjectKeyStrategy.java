@@ -1,4 +1,4 @@
-package org.coldis.library.service.tiering;
+package org.coldis.library.service.tiering.model;
 
 import java.util.List;
 
@@ -13,7 +13,7 @@ import org.springframework.stereotype.Component;
  */
 @Component
 @ConditionalOnProperty(
-		name = ColdTieringProperties.PREFIX + ".object-key-strategy",
+		name = ColdTieringPropertyNames.PREFIX + ".object-key-strategy",
 		havingValue = PathObjectKeyStrategy.NAME,
 		matchIfMissing = true
 )

@@ -1,4 +1,4 @@
-package org.coldis.library.service.tiering;
+package org.coldis.library.service.tiering.model;
 
 /**
  * Encodes a row payload (its text as stored) into the bytes kept in the cold tier, and back.

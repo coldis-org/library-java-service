@@ -14,9 +14,9 @@ import java.util.Optional;
 import java.util.stream.Stream;
 
 import org.coldis.library.exception.IntegrationException;
+import org.coldis.library.service.tiering.model.ColdTieringPropertyNames;
 import org.coldis.library.model.SimpleMessage;
-import org.coldis.library.service.tiering.ColdObject;
-import org.coldis.library.service.tiering.ColdTieringProperties;
+import org.coldis.library.service.tiering.model.ColdObject;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Repository;
@@ -29,7 +29,7 @@ import org.springframework.stereotype.Repository;
  */
 @Repository
 @ConditionalOnProperty(
-		name = ColdTieringProperties.PREFIX + ".storage",
+		name = ColdTieringPropertyNames.STORAGE,
 		havingValue = "folder"
 )
 public class FolderColdStorageRepository implements ColdStorageRepository {
@@ -49,7 +49,7 @@ public class FolderColdStorageRepository implements ColdStorageRepository {
 	 * @param root Root directory.
 	 */
 	public FolderColdStorageRepository(
-			@Value("${" + ColdTieringProperties.PREFIX + ".folder.root}")
+			@Value("${" + ColdTieringPropertyNames.PREFIX + ".folder.root}")
 			final String root) {
 		this.root = Path.of(root).toAbsolutePath().normalize();
 	}

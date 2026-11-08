@@ -7,17 +7,18 @@ import java.util.Map;
 import java.util.Optional;
 
 import org.coldis.library.exception.IntegrationException;
+import org.coldis.library.service.tiering.model.ColdTieringPropertyNames;
 import org.coldis.library.model.SimpleMessage;
 import org.coldis.library.serialization.ObjectMapperHelper;
-import org.coldis.library.service.tiering.ColdRow;
-import org.coldis.library.service.tiering.ColdTieringProperties;
-import org.coldis.library.service.tiering.ColumnValues;
-import org.coldis.library.service.tiering.ObjectKeyStrategy;
-import org.coldis.library.service.tiering.PayloadCodec;
-import org.coldis.library.service.tiering.TieredEntityKeys;
-import org.coldis.library.service.tiering.TieredRowKey;
-import org.coldis.library.service.tiering.TieredTable;
+import org.coldis.library.service.tiering.model.ColdRow;
+import org.coldis.library.service.tiering.model.ColumnValues;
+import org.coldis.library.service.tiering.model.ObjectKeyStrategy;
+import org.coldis.library.service.tiering.model.PayloadCodec;
+import org.coldis.library.service.tiering.model.TieredEntityKeys;
+import org.coldis.library.service.tiering.model.TieredRowKey;
+import org.coldis.library.service.tiering.model.TieredTable;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Repository;
 
@@ -37,7 +38,7 @@ import jakarta.persistence.TypedQuery;
  */
 @Repository
 @ConditionalOnProperty(
-		name = ColdTieringProperties.ENABLED_PROPERTY,
+		name = ColdTieringPropertyNames.ENABLED,
 		matchIfMissing = false
 )
 public class TieredRepository {
@@ -48,9 +49,9 @@ public class TieredRepository {
 	/** JPQL parameter prefix of key properties. */
 	private static final String KEY_PARAMETER_PREFIX = "key_";
 
-	/** Properties (key prefix). */
-	@Autowired
-	private ColdTieringProperties properties;
+	/** Object key prefix. */
+	@Value(ColdTieringPropertyNames.OBJECT_PREFIX_PLACEHOLDER)
+	private String objectPrefix;
 
 	/** Hot tier. */
 	@Autowired
@@ -144,7 +145,7 @@ public class TieredRepository {
 	public String objectKeyOf(
 			final TieredTable table,
 			final TieredRowKey key) {
-		return this.objectKeyStrategy.keyOf(this.properties.getPrefix(), table, ColumnValues.toSegments(table, table.getColumnTypes(), key.values()),
+		return this.objectKeyStrategy.keyOf(this.objectPrefix, table, ColumnValues.toSegments(table, table.getColumnTypes(), key.values()),
 				this.codec.extension());
 	}
 
@@ -270,7 +271,7 @@ public class TieredRepository {
 		final String lastType = columnTypes.get(table.getLastKeyColumn());
 		final String ceiling = asOf == null ? null : ColumnValues.toSegment(lastType, ColumnValues.ofMoment(lastType, asOf));
 		String newestSegment = null;
-		for (final String objectKey : this.coldStorageRepository.list(this.objectKeyStrategy.prefixOf(this.properties.getPrefix(), table, segments))) {
+		for (final String objectKey : this.coldStorageRepository.list(this.objectKeyStrategy.prefixOf(this.objectPrefix, table, segments))) {
 			final String segment = this.objectKeyStrategy.lastSegmentOf(objectKey, this.codec.extension());
 			if (((ceiling == null) || (segment.compareTo(ceiling) <= 0)) && ((newestSegment == null) || (segment.compareTo(newestSegment) > 0))) {
 				newestSegment = segment;

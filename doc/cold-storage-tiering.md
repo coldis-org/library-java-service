@@ -138,13 +138,17 @@ tiering.delete(key)                       both tiers
                                         ColdStorageRepository: S3 (consumer's S3Client) | folder | memory
 ```
 
-**Split by nature.** The repository package holds access logic only and may compose other
-repositories (`TieredRepository` uses `HotTierRepository`, `ColdStorageRepository`, the codec and
-the key strategy); none of it reads a flag, calls a component, the registry or
-`StaticContextAccessor`: everything a repository needs about a table (its column types, read
-from `information_schema`) is bound on the `TieredTable` definition by the registry at startup,
-so dependencies run strictly component → repository → model and a first data access never
-triggers registration or DDL. The component holds the policy: table enabled, cold reads enabled,
+**Split by nature, three packages, one direction.** `tiering` (policy: the components, the
+properties, the registry, the schema helper, `TieredHit`, `TieringBatch`) → `tiering.repository`
+(access: `HotTierRepository`, `TieredRepository`, `ColdStorageRepository` and its S3, folder and
+in-memory stores) → `tiering.model` (`TieredTable`, `TieredRowKey`, `ColdRow`, `ColdObject`,
+`TtlClock`, `Rehydration`, `ColumnValues`, `TieredEntityKeys`, the `PayloadCodec` and
+`ObjectKeyStrategy` SPIs with their defaults, `ColdTieringPropertyNames`). Nothing in a lower
+package imports a higher one: repositories read what they need from the definition (the column
+types the registry binds at startup) and from `@Value` properties (object key prefix, folder
+root, storage selection through `ColdTieringPropertyNames`), never from `ColdTieringProperties`,
+the registry, a component or `StaticContextAccessor`; `TieredRepository` composes the other
+repositories. A first data access never triggers registration or DDL. The component holds the policy: table enabled, cold reads enabled,
 rehydration per table, touch threshold, archive and eviction orchestration, the queues. The consumer-side repository fragment of the first cut (default methods reaching the
 component through `StaticContextAccessor`) is gone for that reason: a consumer's repository stays a
 plain JPA repository and the tiered reads are on the component, by entity class.
@@ -199,7 +203,7 @@ lists the consumer's columns. Object metadata: `table`, `updated-at` (the waterm
 | Rehydration | per table, `Rehydration.INSERT` or `NONE`, definition default overridden by `table.<id>.rehydration`; `INSERT` needs the `LAST_ACCESS` clock (a rehydrated row must be able to expire by access), rejected otherwise at registration | yes | — |
 | Payload codec | `PayloadCodec` (`encode`, `decode`, `extension`, `contentType`); `payload-codec=gzip-json` selects the default; a consumer sets the property to another name and declares its own bean | yes | Parquet for window tiering |
 | Object key layout | `ObjectKeyStrategy` (`keyOf`, `prefixOf`, `lastSegmentOf`); `object-key-strategy=path` selects the default layout above; a consumer sets the property to another name and declares its own bean | yes | hashed segments |
-| Cold storage | `ColdStorageRepository` (`store`, `load` → empty on 404, `list` every page, `delete`): `S3ColdStorageRepository` on the consumer's `S3Client` bean (production); `FolderColdStorageRepository` (local folder: key → relative path, atomic write through a temporary file and a move, metadata in a `.meta` sidecar, lexicographic listing) and `InMemoryColdStorageRepository`, both library-provided test and local-run support, kept on purpose | yes | — |
+| Cold storage | `ColdStorageRepository` (`store`, `load` → empty on 404, `list` every page, `delete`): `S3ColdStorageRepository` on the consumer's `S3Client` bean (production; the unique one, or the `@Primary` one when the consumer has several); `FolderColdStorageRepository` (local folder: key → relative path, atomic write through a temporary file and a move, metadata in a `.meta` sidecar, lexicographic listing) and `InMemoryColdStorageRepository`, both library-provided test and local-run support, kept on purpose | yes | — |
 | Scheduling | `ColdTieringBatchServiceComponent`: one `CronTrigger` per table and batch on the `TaskScheduler`, `-` disables, `run(tableId, batch)` on demand, `schedule`/`unschedule`/`cancelAll` and `getScheduled()` | yes | export batch (window) |
 | Tiered reads | on the component, by entity class: `findByIdTiered`, `findColdRow`, `findNewestTiered` → `TieredHit` (hot entity or cold row); `delete(key)` removes both tiers | yes | — |
 
@@ -300,7 +304,7 @@ entity and its `@IdClass`) and fails the boot otherwise.
 
 | Guarantee | Mechanism |
 |---|---|
-| Concurrent archives of one key never write older content over newer | Keys are deterministic, so every archive of a row writes the same object; `archive` reads the row `FOR UPDATE` and uploads while holding the lock, so archives of one key run one at a time and each uploads the content current at its turn. A writer rewriting the row waits for the upload in flight, then its own message uploads the new content |
+| Concurrent archives of one key never write older content over newer | Keys are deterministic, so every archive of a row writes the same object; `archive` reads the row `FOR UPDATE` and uploads while holding the lock, so archives of one key run one at a time and each uploads the content current at its turn. A writer rewriting the row waits for the upload in flight, then its own message uploads the new content. **Trade-off**: holding the row lock across the S3 `PUT` is what rules out an older-over-newer overwrite without a version in the key; its cost is that writers to that row wait on S3 latency (plus the row's own upload after theirs). Mitigation: the consumer's `S3Client` call and attempt timeouts well below `long-timeout`; the lock covers one row, so unrelated writers never wait. Revisit with S3 conditional writes (`If-Match` / `If-None-Match` on the object's ETag, the uploaded watermark in the metadata) if row-level write contention shows up; then the PUT could leave the lock |
 | A rewrite during an upload is never marked archived | `archived_at` set to the uploaded watermark, only `WHERE updated_at = :watermark`; a concurrent rewrite with an earlier timestamp, or clock skew between instances, cannot satisfy `archived_at >= updated_at` with a mark that is not its own watermark |
 | A row is never evicted before S3 holds its current content | `archived_at >= updated_at` in the eviction predicate, repeated on the delete itself. It covers every write that bumps the watermark, `afterWrite` or not; a write that leaves the watermark unchanged is outside the contract (the watermark is "bumped by every write" by definition) |
 | Duplicate upload or touch messages | the upload rewrites the same object with the same content; `GREATEST` makes the touch a no-op |
@@ -313,8 +317,7 @@ entity and its `@IdClass`) and fails the boot otherwise.
 ### Dependency and wiring
 
 `software.amazon.awssdk:s3` is `<optional>` in this pom (`aws.sdk.version`, 2.55.11); the
-consumer declares the SDK and exposes an `S3Client` bean (named by
-`org.coldis.library.service.tiering.s3.client-bean`, default `s3Client`);
+consumer declares the SDK and exposes an `S3Client` bean (unique, or `@Primary` among several);
 `ColdTieringS3Configuration` is `@ConditionalOnClass(S3Client.class)`. The upload runs under the
 hot row's `FOR UPDATE` lock inside the `long-timeout` transaction, so the consumer's `S3Client`
 must have call and attempt timeouts well below that (a hung PUT otherwise holds the row lock for
@@ -332,7 +335,7 @@ Global, `org.coldis.library.service.tiering.`:
 | `storage` | `s3` | `s3`, `folder` (local runs and tests) or `memory` (tests) |
 | `payload-codec` / `object-key-strategy` | `gzip-json` / `path` | Which codec and layout bean is active; another value with a consumer bean plugs a custom one |
 | `folder.root` | `${java.io.tmpdir}/cold-tiering` | Root directory of the folder storage |
-| `s3.client-bean`, `s3.bucket` | `s3Client`, — | The consumer's client bean and the bucket |
+| `s3.bucket` | — | The bucket; the client is the consumer's `S3Client` bean (unique or `@Primary`) |
 | `prefix` | `cold-tiering/` | Key prefix |
 | `create-schema` | `false` | Run the DDL at startup (tests) |
 | `upload.concurrency` / `touch.concurrency` | `1-4` / `1-2` | JMS listeners per instance |
@@ -428,7 +431,7 @@ evicted by row delete), then the two full tables as row-tiered, versioned, `INSE
   checksums for integrity (2026-11-08).
 - Business ids in object keys (the tax id as a path segment) are accepted for now; a keyed-HMAC
   segment layout is a later improvement through `ObjectKeyStrategy`, not v1.
-- The S3 client is the consumer's bean; the library builds none.
+- The S3 client is the consumer's bean (unique or `@Primary`); the library builds none.
 - No LocalStack in this library: the tests run on the folder storage; the S3 adapter is covered
   by the first consumer's tests.
 - Rehydration is per table (`INSERT` / `NONE`), the log service uses `NONE`.

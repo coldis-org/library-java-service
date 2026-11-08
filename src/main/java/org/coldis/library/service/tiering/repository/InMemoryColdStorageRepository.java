@@ -5,8 +5,8 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.ConcurrentSkipListMap;
 
-import org.coldis.library.service.tiering.ColdObject;
-import org.coldis.library.service.tiering.ColdTieringProperties;
+import org.coldis.library.service.tiering.model.ColdObject;
+import org.coldis.library.service.tiering.model.ColdTieringPropertyNames;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Repository;
 
@@ -16,7 +16,7 @@ import org.springframework.stereotype.Repository;
  */
 @Repository
 @ConditionalOnProperty(
-		name = ColdTieringProperties.PREFIX + ".storage",
+		name = ColdTieringPropertyNames.STORAGE,
 		havingValue = "memory"
 )
 public class InMemoryColdStorageRepository implements ColdStorageRepository {

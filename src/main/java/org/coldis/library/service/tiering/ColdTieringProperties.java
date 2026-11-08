@@ -5,6 +5,9 @@ import java.util.HashMap;
 import java.util.Map;
 import java.util.Objects;
 
+import org.coldis.library.service.tiering.model.ColdTieringPropertyNames;
+import org.coldis.library.service.tiering.model.Rehydration;
+import org.coldis.library.service.tiering.model.TieredTable;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 import org.springframework.stereotype.Component;
@@ -25,13 +28,13 @@ import org.springframework.stereotype.Component;
 public class ColdTieringProperties {
 
 	/** Master switch. */
-	public static final String ENABLED_PROPERTY = "org.coldis.configuration.service.cold-tiering-enabled";
+	public static final String ENABLED_PROPERTY = ColdTieringPropertyNames.ENABLED;
 
 	/** Property prefix. */
-	public static final String PREFIX = "org.coldis.library.service.tiering";
+	public static final String PREFIX = ColdTieringPropertyNames.PREFIX;
 
 	/** Disables a schedule. */
-	public static final String NO_SCHEDULE = "-";
+	public static final String NO_SCHEDULE = ColdTieringPropertyNames.NO_SCHEDULE;
 
 	/**
 	 * One batch's tunables.

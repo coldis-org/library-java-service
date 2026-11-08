@@ -10,6 +10,8 @@ import java.util.Map;
 import java.util.concurrent.ScheduledFuture;
 
 import org.coldis.library.exception.BusinessException;
+import org.coldis.library.service.tiering.model.TieredRowKey;
+import org.coldis.library.service.tiering.model.TieredTable;
 import org.coldis.library.helper.DateTimeHelper;
 import org.coldis.library.service.batch.BatchAction;
 import org.coldis.library.service.batch.BatchExecutor;

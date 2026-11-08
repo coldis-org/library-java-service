@@ -4,9 +4,9 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.util.List;
 
-import org.coldis.library.service.tiering.Rehydration;
-import org.coldis.library.service.tiering.TieredTable;
-import org.coldis.library.service.tiering.TtlClock;
+import org.coldis.library.service.tiering.model.Rehydration;
+import org.coldis.library.service.tiering.model.TieredTable;
+import org.coldis.library.service.tiering.model.TtlClock;
 import org.coldis.library.service.tiering.repository.FolderColdStorageRepository;
 import org.springframework.beans.factory.DisposableBean;
 import org.springframework.context.annotation.Bean;

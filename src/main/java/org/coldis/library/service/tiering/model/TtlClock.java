@@ -1,4 +1,4 @@
-package org.coldis.library.service.tiering;
+package org.coldis.library.service.tiering.model;
 
 /**
  * Which timestamp of a hot row drives its hot-tier TTL.

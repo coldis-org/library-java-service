@@ -12,10 +12,10 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 
-import org.coldis.library.service.tiering.ColdTieringProperties;
-import org.coldis.library.service.tiering.ColumnValues;
-import org.coldis.library.service.tiering.TieredRowKey;
-import org.coldis.library.service.tiering.TieredTable;
+import org.coldis.library.service.tiering.model.ColumnValues;
+import org.coldis.library.service.tiering.model.ColdTieringPropertyNames;
+import org.coldis.library.service.tiering.model.TieredRowKey;
+import org.coldis.library.service.tiering.model.TieredTable;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
@@ -31,7 +31,7 @@ import org.springframework.stereotype.Repository;
  */
 @Repository
 @ConditionalOnProperty(
-		name = ColdTieringProperties.ENABLED_PROPERTY,
+		name = ColdTieringPropertyNames.ENABLED,
 		matchIfMissing = false
 )
 public class HotTierRepository {

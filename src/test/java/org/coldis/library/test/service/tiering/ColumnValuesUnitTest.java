@@ -8,9 +8,9 @@ import java.time.ZoneId;
 import java.util.List;
 import java.util.Map;
 
-import org.coldis.library.service.tiering.ColumnValues;
-import org.coldis.library.service.tiering.PathObjectKeyStrategy;
-import org.coldis.library.service.tiering.TieredTable;
+import org.coldis.library.service.tiering.model.ColumnValues;
+import org.coldis.library.service.tiering.model.PathObjectKeyStrategy;
+import org.coldis.library.service.tiering.model.TieredTable;
 import org.coldis.library.service.tiering.repository.FolderColdStorageRepository;
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.Test;

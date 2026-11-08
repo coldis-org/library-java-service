@@ -1,4 +1,4 @@
-package org.coldis.library.service.tiering;
+package org.coldis.library.service.tiering.model;
 
 import java.net.URLDecoder;
 import java.net.URLEncoder;

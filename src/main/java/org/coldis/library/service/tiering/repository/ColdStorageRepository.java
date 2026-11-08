@@ -1,7 +1,8 @@
 package org.coldis.library.service.tiering.repository;
 
 import java.util.List;
-import org.coldis.library.service.tiering.ColdObject;
+import org.coldis.library.service.tiering.model.ColdObject;
+import org.coldis.library.service.tiering.model.ObjectKeyStrategy;
 import java.util.Map;
 import java.util.Optional;
 

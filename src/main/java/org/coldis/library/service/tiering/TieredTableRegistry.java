@@ -8,6 +8,11 @@ import java.util.Optional;
 import java.util.Set;
 
 import org.coldis.library.exception.IntegrationException;
+import org.coldis.library.service.tiering.model.TieredTable;
+import org.coldis.library.service.tiering.model.TtlClock;
+import org.coldis.library.service.tiering.model.Rehydration;
+import org.coldis.library.service.tiering.model.ColumnValues;
+import org.coldis.library.service.tiering.model.TieredEntityKeys;
 import org.coldis.library.model.SimpleMessage;
 import org.coldis.library.service.tiering.repository.HotTierRepository;
 import org.slf4j.Logger;

@@ -1,4 +1,4 @@
-package org.coldis.library.service.tiering;
+package org.coldis.library.service.tiering.model;
 
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
@@ -19,7 +19,7 @@ import org.springframework.stereotype.Component;
  */
 @Component
 @ConditionalOnProperty(
-		name = ColdTieringProperties.PREFIX + ".payload-codec",
+		name = ColdTieringPropertyNames.PREFIX + ".payload-codec",
 		havingValue = GzipJsonPayloadCodec.NAME,
 		matchIfMissing = true
 )

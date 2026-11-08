@@ -3,6 +3,8 @@ package org.coldis.library.service.tiering;
 import java.util.ArrayList;
 import java.util.List;
 
+import org.coldis.library.service.tiering.model.TieredTable;
+
 /**
  * DDL a tiered table needs on its hot table: the lifecycle columns and the eviction index. The
  * consumer runs it in its migrations; with
