@@ -11,7 +11,8 @@ import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Repository;
 
 /**
- * In-memory cold tier for tests ({@code org.coldis.library.service.tiering.storage=memory}).
+ * In-memory cold tier ({@code org.coldis.library.service.tiering.storage=memory}): library-provided
+ * support for tests, kept on purpose beside the folder one.
  */
 @Repository
 @ConditionalOnProperty(

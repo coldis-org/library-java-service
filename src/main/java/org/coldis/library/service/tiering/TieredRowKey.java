@@ -1,6 +1,7 @@
 package org.coldis.library.service.tiering;
 
 import java.io.Serializable;
+import java.util.Collections;
 import java.util.Map;
 import java.util.TreeMap;
 
@@ -24,7 +25,7 @@ public record TieredRowKey(String tableId, Map<String, String> values) implement
 	 * @param values  Key column values.
 	 */
 	public TieredRowKey {
-		values = values == null ? Map.of() : Map.copyOf(new TreeMap<>(values));
+		values = Collections.unmodifiableSortedMap(new TreeMap<>(values == null ? Map.of() : values));
 	}
 
 	/**

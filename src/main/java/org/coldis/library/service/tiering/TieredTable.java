@@ -2,6 +2,7 @@ package org.coldis.library.service.tiering;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
 import java.util.regex.Pattern;
 
@@ -62,6 +63,9 @@ public class TieredTable {
 
 	/** Id properties of the entity's key object, in key column order (defaults to the camel case of the key columns). */
 	private List<String> keyProperties;
+
+	/** SQL types of the hot table's columns, bound by the registry at startup. */
+	private Map<String, String> columnTypes;
 
 	/**
 	 * Constructor.
@@ -235,7 +239,7 @@ public class TieredTable {
 	 *
 	 * @return This.
 	 */
-	public TieredTable versioned() {
+	public TieredTable withVersioned() {
 		this.versioned = true;
 		return this;
 	}
@@ -333,6 +337,28 @@ public class TieredTable {
 		this.entityClass = entityClass;
 		this.keyProperties = keyProperties == null ? null : List.copyOf(keyProperties);
 		return this;
+	}
+
+	/**
+	 * The SQL types of the hot table's columns, as the registry read them at startup.
+	 *
+	 * @return {@code data_type} by column name.
+	 */
+	public Map<String, String> getColumnTypes() {
+		if (this.columnTypes == null) {
+			throw new IntegrationException(new SimpleMessage("coldTiering.table.unregistered", new Object[] { this.id }));
+		}
+		return this.columnTypes;
+	}
+
+	/**
+	 * Binds the column types (the registry, once validated).
+	 *
+	 * @param columnTypes {@code data_type} by column name.
+	 */
+	public void bindColumnTypes(
+			final Map<String, String> columnTypes) {
+		this.columnTypes = Map.copyOf(columnTypes);
 	}
 
 	/**

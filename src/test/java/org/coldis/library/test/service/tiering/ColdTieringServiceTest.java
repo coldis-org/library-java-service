@@ -76,22 +76,28 @@ public class ColdTieringServiceTest extends ContainerTestHelper {
 	@Qualifier("tieredArchiveEntryTable")
 	private TieredTable archiveTable;
 
+	/** Event repository. */
+	@Autowired
+	private TieredEventRepository eventRepository;
+
 	/**
 	 * Clean state.
 	 */
 	@BeforeEach
 	public void beforeEach() {
 		TestHelper.cleanClock();
+		this.batchServiceComponent.cancelAll();
 		this.clean();
 		this.coldStorage.reset();
 	}
 
 	/**
-	 * Restores the clock.
+	 * Restores the clock and the schedules.
 	 */
 	@AfterEach
 	public void afterEach() {
 		TestHelper.cleanClock();
+		this.batchServiceComponent.cancelAll();
 	}
 
 	/**
@@ -101,9 +107,9 @@ public class ColdTieringServiceTest extends ContainerTestHelper {
 	 */
 	@Transactional
 	private void clean() {
-		this.snapshotRepository.deleteAll();
-		this.archiveEntryRepository.deleteAll();
-		for (final String tableId : List.of(ColdTieringTestConfiguration.SNAPSHOT_TABLE, ColdTieringTestConfiguration.ARCHIVE_TABLE)) {
+		this.truncateTables("tiered_snapshot", "tiered_archive_entry", "tiered_event");
+		for (final String tableId : List.of(ColdTieringTestConfiguration.SNAPSHOT_TABLE, ColdTieringTestConfiguration.ARCHIVE_TABLE,
+				ColdTieringTestConfiguration.EVENT_TABLE)) {
 			for (final TieringBatch batch : TieringBatch.values()) {
 				this.keyValueService.getRepository().deleteById(BatchService.BATCH_KEY_PREFIX + batch.keySuffix(tableId));
 			}
@@ -370,13 +376,19 @@ public class ColdTieringServiceTest extends ContainerTestHelper {
 		Assertions.assertTrue(coldRow.get().rowJson().contains("\"content\":\"forty-two\""));
 		Assertions.assertTrue(this.archiveEntryRepository.findById(42L).isEmpty());
 
-		// The library registers a schedule from a cron, none from "-".
-		Assertions.assertTrue(this.batchServiceComponent.getScheduled().isEmpty());
-		final ScheduledFuture<?> task = this.batchServiceComponent.schedule(this.archiveTable, TieringBatch.EVICTION, "0 0 3 * * *");
-		Assertions.assertNotNull(task);
-		Assertions.assertEquals("0 0 3 * * *", this.batchServiceComponent.getScheduled().get(TieringBatch.EVICTION.keySuffix(ColdTieringTestConfiguration.ARCHIVE_TABLE)));
-		task.cancel(false);
-		Assertions.assertNull(this.batchServiceComponent.schedule(this.archiveTable, TieringBatch.BACKFILL, "-"));
+		// The library registers a schedule from a cron, none from "-", and forgets it on unschedule.
+		final String scheduleKey = TieringBatch.EVICTION.keySuffix(ColdTieringTestConfiguration.ARCHIVE_TABLE);
+		Assertions.assertFalse(this.batchServiceComponent.getScheduled().containsKey(scheduleKey));
+		try {
+			final ScheduledFuture<?> task = this.batchServiceComponent.schedule(this.archiveTable, TieringBatch.EVICTION, "0 0 3 * * *");
+			Assertions.assertNotNull(task);
+			Assertions.assertEquals("0 0 3 * * *", this.batchServiceComponent.getScheduled().get(scheduleKey));
+			Assertions.assertNull(this.batchServiceComponent.schedule(this.archiveTable, TieringBatch.BACKFILL, "-"));
+		}
+		finally {
+			this.batchServiceComponent.unschedule(this.archiveTable, TieringBatch.EVICTION);
+		}
+		Assertions.assertFalse(this.batchServiceComponent.getScheduled().containsKey(scheduleKey));
 	}
 
 	/**
@@ -392,7 +404,10 @@ public class ColdTieringServiceTest extends ContainerTestHelper {
 		final TieredRowKey disabledKey = this.tieringServiceComponent.keyOf(ColdTieringTestConfiguration.DISABLED_TABLE, Map.of("id", 43L));
 		Assertions.assertFalse(this.batchServiceComponent.run(ColdTieringTestConfiguration.DISABLED_TABLE, TieringBatch.EVICTION));
 		Assertions.assertFalse(this.batchServiceComponent.run(ColdTieringTestConfiguration.DISABLED_TABLE, TieringBatch.BACKFILL));
-		Thread.sleep(TestHelper.SHORT_WAIT * 2);
+		// A later write through the enabled definition is archived; the disabled one still is not.
+		this.write(new TieredArchiveEntry(45L, "enabled"), ColdTieringTestConfiguration.ARCHIVE_TABLE);
+		Assertions.assertTrue(TestHelper.waitUntilValid(() -> this.archiveEntryRepository.findById(45L).map(TieredArchiveEntry::getArchivedAt).orElse(null),
+				archivedAt -> archivedAt != null, TestHelper.REGULAR_WAIT * 4, TestHelper.SHORT_WAIT));
 		Assertions.assertNull(this.archiveEntryRepository.findById(43L).orElseThrow().getArchivedAt());
 		Assertions.assertTrue(this.coldStorage.list("cold-tiering/tiered-archive-entry-disabled/").isEmpty());
 		// Even with an object in place, a disabled table never reads it.
@@ -404,6 +419,64 @@ public class ColdTieringServiceTest extends ContainerTestHelper {
 		Assertions.assertTrue(TestHelper.waitUntilValid(() -> this.coldStorage.load(this.tieringServiceComponent.objectKeyOf(noColdReadKey)).isPresent(),
 				archived -> archived, TestHelper.REGULAR_WAIT * 4, TestHelper.SHORT_WAIT));
 		Assertions.assertTrue(this.tieringServiceComponent.readCold(noColdReadKey).isEmpty());
+	}
+
+	/**
+	 * Writes an event with the tiering hook.
+	 *
+	 * @param event Event.
+	 */
+	@Transactional
+	private void write(
+			final TieredEvent event) {
+		this.eventRepository.save(event);
+		this.tieringServiceComponent.afterWrite(this.tieringServiceComponent.keyOf(TieredEvent.class, new TieredEventKey(event.getSource(), event.getOccurredAt())));
+	}
+
+	/**
+	 * A {@code TIMESTAMPTZ} version column mapped as {@code LocalDateTime}, a TTL on that column
+	 * and no rehydration: kept before the TTL, evicted after it, read cold by key and as the
+	 * newest on or before a moment.
+	 *
+	 * @throws Exception If the test fails.
+	 */
+	@Test
+	@DisplayName("Event: timestamptz key, TTL on the column, cold-only newest read")
+	public void testColumnClockAndTimestamptzKey() throws Exception {
+		final LocalDateTime recent = DateTimeHelper.getCurrentLocalDateTime().minusDays(10).withNano(0);
+		final LocalDateTime old = DateTimeHelper.getCurrentLocalDateTime().minusDays(30).withNano(0);
+		this.write(new TieredEvent("web", recent, "recent"));
+		this.write(new TieredEvent("web", old, "old"));
+		final TieredEventKey recentKey = new TieredEventKey("web", recent);
+		final TieredEventKey oldKey = new TieredEventKey("web", old);
+		for (final TieredEventKey key : List.of(recentKey, oldKey)) {
+			Assertions.assertTrue(TestHelper.waitUntilValid(() -> this.eventRepository.findById(key).map(TieredEvent::getArchivedAt).orElse(null),
+					archivedAt -> archivedAt != null, TestHelper.REGULAR_WAIT * 4, TestHelper.SHORT_WAIT));
+		}
+		final String objectKey = this.tieringServiceComponent.objectKeyOf(this.tieringServiceComponent.keyOf(TieredEvent.class, recentKey));
+		Assertions.assertTrue(objectKey.startsWith("cold-tiering/tiered-event/web/") && objectKey.endsWith("Z.json.gz"), objectKey);
+
+		// The TTL (15 days) counts from the column: the old event goes, the recent one stays.
+		Assertions.assertTrue(this.batchServiceComponent.run(ColdTieringTestConfiguration.EVENT_TABLE, TieringBatch.EVICTION));
+		Assertions.assertTrue(TestHelper.waitUntilValid(() -> this.eventRepository.findById(oldKey).isEmpty(), evicted -> evicted, TestHelper.REGULAR_WAIT * 4,
+				TestHelper.SHORT_WAIT));
+		Assertions.assertTrue(this.eventRepository.findById(recentKey).isPresent());
+
+		// Cold only, by key and as the newest on or before a moment; the hot one wins when newer.
+		Assertions.assertTrue(this.tieringServiceComponent.findByIdTiered(TieredEvent.class, oldKey).isEmpty());
+		Assertions.assertTrue(this.tieringServiceComponent.findColdRow(TieredEvent.class, oldKey).orElseThrow().rowJson().contains("\"content\":\"old\""));
+		final Map<String, Object> prefix = Map.of("source", "web");
+		final TieredHit<TieredEvent> newestOld = this.tieringServiceComponent.findNewestTiered(TieredEvent.class, prefix, old.plusDays(1)).orElseThrow();
+		Assertions.assertTrue(newestOld.hot().isEmpty());
+		Assertions.assertTrue(newestOld.cold().orElseThrow().rowJson().contains("\"content\":\"old\""));
+		Assertions.assertEquals("recent", this.tieringServiceComponent.findNewestTiered(TieredEvent.class, prefix, null).orElseThrow().hot().orElseThrow().getContent());
+		Assertions.assertTrue(this.eventRepository.findById(oldKey).isEmpty());
+
+		// Past the TTL on the column, the recent one goes too.
+		TestHelper.moveClockBy(Duration.ofDays(10));
+		Assertions.assertTrue(this.batchServiceComponent.run(ColdTieringTestConfiguration.EVENT_TABLE, TieringBatch.EVICTION));
+		Assertions.assertTrue(TestHelper.waitUntilValid(() -> this.eventRepository.findById(recentKey).isEmpty(), evicted -> evicted, TestHelper.REGULAR_WAIT * 4,
+				TestHelper.SHORT_WAIT));
 	}
 
 }

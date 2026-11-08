@@ -9,23 +9,24 @@ import java.util.zip.GZIPOutputStream;
 
 import org.coldis.library.exception.IntegrationException;
 import org.coldis.library.model.SimpleMessage;
-import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Component;
 
 /**
- * Default codec: the payload text, UTF-8, gzip.
+ * Default codec ({@code org.coldis.library.service.tiering.payload-codec=gzip-json}): the row's
+ * JSON, UTF-8, gzip. A consumer plugs its own by setting the property to another name and
+ * declaring its {@link PayloadCodec} bean.
  */
 @Component
-@ConditionalOnMissingBean(
-		value = PayloadCodec.class,
-		ignored = GzipJsonPayloadCodec.class
-)
 @ConditionalOnProperty(
-		name = ColdTieringProperties.ENABLED_PROPERTY,
-		matchIfMissing = false
+		name = ColdTieringProperties.PREFIX + ".payload-codec",
+		havingValue = GzipJsonPayloadCodec.NAME,
+		matchIfMissing = true
 )
 public class GzipJsonPayloadCodec implements PayloadCodec {
+
+	/** Property value selecting this codec. */
+	public static final String NAME = "gzip-json";
 
 	/**
 	 * @see PayloadCodec#encode(String)

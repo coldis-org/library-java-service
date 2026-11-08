@@ -112,7 +112,7 @@ public class ColdTieringServiceComponent {
 			final TieredRowKey key) {
 		if (table.isTouching() && tableProperties.getEnabled()) {
 			final LocalDateTime staleBefore = DateTimeHelper.getCurrentLocalDateTime().minus(tableProperties.getTouchThreshold());
-			final Optional<LocalDateTime> clock = this.hotTierRepository.clock(table, this.registry.getColumnTypes(table), key);
+			final Optional<LocalDateTime> clock = this.hotTierRepository.clock(table, key);
 			if (clock.isPresent() && clock.get().isBefore(staleBefore)) {
 				this.send(ColdTieringServiceComponent.TOUCH_QUEUE, key);
 			}
@@ -177,7 +177,7 @@ public class ColdTieringServiceComponent {
 			final TieredRowKey key) {
 		final TieredTable table = this.registry.getTable(key.tableId());
 		if (this.properties.of(table).getEnabled()) {
-			this.hotTierRepository.afterWrite(table, this.registry.getColumnTypes(table), key, DateTimeHelper.getCurrentLocalDateTime());
+			this.hotTierRepository.afterWrite(table, key, DateTimeHelper.getCurrentLocalDateTime());
 			this.send(ColdTieringServiceComponent.UPLOAD_QUEUE, key);
 		}
 	}
@@ -200,14 +200,13 @@ public class ColdTieringServiceComponent {
 			final TieredRowKey key) {
 		Boolean isUploaded = false;
 		final TieredTable table = this.registry.getTable(key.tableId());
-		final Map<String, String> columnTypes = this.registry.getColumnTypes(table);
-		final Optional<HotRow> hotRow = this.hotTierRepository.lockForArchive(table, columnTypes, key);
+		final Optional<HotRow> hotRow = this.hotTierRepository.lockForArchive(table, key);
 		if (hotRow.isPresent()) {
 			this.coldStorageRepository.store(this.tieredRepository.objectKeyOf(table, key), this.codec.encode(hotRow.get().rowJson()),
 					Map.of(ColdTieringServiceComponent.TABLE_METADATA, table.getId(), ColdTieringServiceComponent.UPDATED_AT_METADATA, hotRow.get().watermark(),
 							ColdStorageRepository.CONTENT_TYPE_METADATA, this.codec.contentType()));
 			isUploaded = true;
-			final Integer marked = this.hotTierRepository.markArchived(table, columnTypes, key, hotRow.get().watermark());
+			final Integer marked = this.hotTierRepository.markArchived(table, key, hotRow.get().watermark());
 			if (marked == 0) {
 				ColdTieringServiceComponent.LOGGER.warn("[COLD_TIERING_UPLOAD] table={} a row was rewritten during its archive; left for its own upload or the backfill",
 						table.getId());
@@ -254,7 +253,7 @@ public class ColdTieringServiceComponent {
 			final TieredRowKey key) {
 		final TieredTable table = this.registry.getTable(key.tableId());
 		if (table.isTouching()) {
-			this.hotTierRepository.touch(table, this.registry.getColumnTypes(table), key, DateTimeHelper.getCurrentLocalDateTime());
+			this.hotTierRepository.touch(table, key, DateTimeHelper.getCurrentLocalDateTime());
 		}
 	}
 
@@ -353,8 +352,8 @@ public class ColdTieringServiceComponent {
 		Optional<TieredHit<Type>> hit = newestHot.map(entity -> new TieredHit<>(entity, null));
 		if (newestColdKey.isPresent()) {
 			final String lastColumn = table.getLastKeyColumn();
-			final String lastSegment = ColumnValues.toSegment(this.registry.getColumnTypes(table).get(lastColumn), newestColdKey.get().values().get(lastColumn));
-			final Boolean isColdNewer = newestHot.isEmpty() || (ColumnValues.toSegment(this.registry.getColumnTypes(table).get(lastColumn),
+			final String lastSegment = ColumnValues.toSegment(table.getColumnTypes().get(lastColumn), newestColdKey.get().values().get(lastColumn));
+			final Boolean isColdNewer = newestHot.isEmpty() || (ColumnValues.toSegment(table.getColumnTypes().get(lastColumn),
 					this.tieredRepository.keyOfEntity(table, newestHot.get()).values().get(lastColumn)).compareTo(lastSegment) < 0);
 			if (isColdNewer) {
 				final Optional<ColdRow> coldRow = this.tieredRepository.loadCold(table, newestColdKey.get());

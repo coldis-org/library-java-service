@@ -170,19 +170,17 @@ public class HotTierRepository {
 	 * writers, so the object always follows the latest content.
 	 *
 	 * @param  table       Table.
-	 * @param  columnTypes Column types.
 	 * @param  key         Row key.
 	 * @return             The row, or empty.
 	 */
 	public Optional<HotRow> lockForArchive(
 			final TieredTable table,
-			final Map<String, String> columnTypes,
 			final TieredRowKey key) {
 		final String sql = "SELECT hot." + table.getWatermarkColumn() + " AS watermark_, CAST(row_to_json(hot) AS text) AS row_ FROM " + table.getTableName()
 				+ " hot WHERE " + HotTierRepository.keyPredicate(table) + " FOR UPDATE";
-		final List<HotRow> rows = this.jdbcTemplate.query(sql, HotTierRepository.keyParameters(ColumnValues.parseKey(table, columnTypes, key)), (
+		final List<HotRow> rows = this.jdbcTemplate.query(sql, HotTierRepository.keyParameters(ColumnValues.parseKey(table, table.getColumnTypes(), key)), (
 				resultSet,
-				rowNumber) -> new HotRow(ColumnValues.format(ColumnValues.read(resultSet, "watermark_", columnTypes.get(table.getWatermarkColumn()))),
+				rowNumber) -> new HotRow(ColumnValues.format(ColumnValues.read(resultSet, "watermark_", table.getColumnTypes().get(table.getWatermarkColumn()))),
 						resultSet.getString("row_")));
 		return rows.stream().findFirst();
 	}
@@ -193,20 +191,18 @@ public class HotTierRepository {
 	 * its own upload archives the new content.
 	 *
 	 * @param  table       Table.
-	 * @param  columnTypes Column types.
 	 * @param  key         Row key.
 	 * @param  watermark   Watermark read for the archive (string form).
 	 * @return             Rows marked (0 when rewritten).
 	 */
 	public Integer markArchived(
 			final TieredTable table,
-			final Map<String, String> columnTypes,
 			final TieredRowKey key,
 			final String watermark) {
 		final String sql = "UPDATE " + table.getTableName() + " SET " + table.getArchivedAtColumn() + " = :watermark WHERE " + HotTierRepository.keyPredicate(table)
 				+ " AND " + table.getWatermarkColumn() + " = :watermark";
-		return this.jdbcTemplate.update(sql, HotTierRepository.keyParameters(ColumnValues.parseKey(table, columnTypes, key)).addValue("watermark",
-				ColumnValues.parse(columnTypes.get(table.getWatermarkColumn()), watermark)));
+		return this.jdbcTemplate.update(sql, HotTierRepository.keyParameters(ColumnValues.parseKey(table, table.getColumnTypes(), key)).addValue("watermark",
+				ColumnValues.parse(table.getColumnTypes().get(table.getWatermarkColumn()), watermark)));
 	}
 
 	/**
@@ -214,54 +210,48 @@ public class HotTierRepository {
 	 * stale until re-uploaded).
 	 *
 	 * @param  table       Table.
-	 * @param  columnTypes Column types.
 	 * @param  key         Row key.
 	 * @param  now         Write moment.
 	 * @return             Rows updated.
 	 */
 	public Integer afterWrite(
 			final TieredTable table,
-			final Map<String, String> columnTypes,
 			final TieredRowKey key,
 			final LocalDateTime now) {
 		final String sql = "UPDATE " + table.getTableName() + " SET " + table.getArchivedAtColumn() + " = NULL"
 				+ (table.isTouching() ? ", " + table.getLastAccessedColumn() + " = :now" : "") + " WHERE " + HotTierRepository.keyPredicate(table);
-		return this.jdbcTemplate.update(sql, HotTierRepository.keyParameters(ColumnValues.parseKey(table, columnTypes, key)).addValue("now", now));
+		return this.jdbcTemplate.update(sql, HotTierRepository.keyParameters(ColumnValues.parseKey(table, table.getColumnTypes(), key)).addValue("now", now));
 	}
 
 	/**
 	 * Extends a row's clock; never backwards, so a stale or repeated touch is a no-op.
 	 *
 	 * @param  table       Table.
-	 * @param  columnTypes Column types.
 	 * @param  key         Row key.
 	 * @param  now         Access moment.
 	 * @return             Rows updated.
 	 */
 	public Integer touch(
 			final TieredTable table,
-			final Map<String, String> columnTypes,
 			final TieredRowKey key,
 			final LocalDateTime now) {
 		final String sql = "UPDATE " + table.getTableName() + " SET " + table.getLastAccessedColumn() + " = GREATEST(" + table.clockExpression() + ", :now) WHERE "
 				+ HotTierRepository.keyPredicate(table);
-		return this.jdbcTemplate.update(sql, HotTierRepository.keyParameters(ColumnValues.parseKey(table, columnTypes, key)).addValue("now", now));
+		return this.jdbcTemplate.update(sql, HotTierRepository.keyParameters(ColumnValues.parseKey(table, table.getColumnTypes(), key)).addValue("now", now));
 	}
 
 	/**
 	 * A row's TTL clock.
 	 *
 	 * @param  table       Table.
-	 * @param  columnTypes Column types.
 	 * @param  key         Row key.
 	 * @return             The clock, or empty when the row is not hot.
 	 */
 	public Optional<LocalDateTime> clock(
 			final TieredTable table,
-			final Map<String, String> columnTypes,
 			final TieredRowKey key) {
 		final String sql = "SELECT " + table.clockExpression() + " AS clock_ FROM " + table.getTableName() + " WHERE " + HotTierRepository.keyPredicate(table);
-		final List<LocalDateTime> clocks = this.jdbcTemplate.query(sql, HotTierRepository.keyParameters(ColumnValues.parseKey(table, columnTypes, key)), (
+		final List<LocalDateTime> clocks = this.jdbcTemplate.query(sql, HotTierRepository.keyParameters(ColumnValues.parseKey(table, table.getColumnTypes(), key)), (
 				resultSet,
 				rowNumber) -> HotTierRepository.localDateTime(resultSet, "clock_"));
 		return clocks.stream().findFirst();
@@ -273,7 +263,6 @@ public class HotTierRepository {
 	 * concurrent rehydration of the same key is a no-op.
 	 *
 	 * @param  table       Table.
-	 * @param  columnTypes Column types.
 	 * @param  key         Row key.
 	 * @param  rowJson     The whole row as JSON.
 	 * @param  now         Access moment.
@@ -281,11 +270,10 @@ public class HotTierRepository {
 	 */
 	public Integer rehydrate(
 			final TieredTable table,
-			final Map<String, String> columnTypes,
 			final TieredRowKey key,
 			final String rowJson,
 			final LocalDateTime now) {
-		final MapSqlParameterSource parameters = HotTierRepository.keyParameters(ColumnValues.parseKey(table, columnTypes, key)).addValue("now", now)
+		final MapSqlParameterSource parameters = HotTierRepository.keyParameters(ColumnValues.parseKey(table, table.getColumnTypes(), key)).addValue("now", now)
 				.addValue("rowJson", rowJson);
 		final String insert = "INSERT INTO " + table.getTableName() + " SELECT * FROM json_populate_record(NULL::" + table.getTableName()
 				+ ", CAST(:rowJson AS json)) ON CONFLICT " + HotTierRepository.keyTuple(table) + " DO NOTHING";
@@ -302,16 +290,14 @@ public class HotTierRepository {
 	 * Deletes a hot row.
 	 *
 	 * @param  table       Table.
-	 * @param  columnTypes Column types.
 	 * @param  key         Row key.
 	 * @return             Rows deleted.
 	 */
 	public Integer delete(
 			final TieredTable table,
-			final Map<String, String> columnTypes,
 			final TieredRowKey key) {
 		return this.jdbcTemplate.update("DELETE FROM " + table.getTableName() + " WHERE " + HotTierRepository.keyPredicate(table),
-				HotTierRepository.keyParameters(ColumnValues.parseKey(table, columnTypes, key)));
+				HotTierRepository.keyParameters(ColumnValues.parseKey(table, table.getColumnTypes(), key)));
 	}
 
 	/**
@@ -354,14 +340,12 @@ public class HotTierRepository {
 	 * since), in key order.
 	 *
 	 * @param  table       Table.
-	 * @param  columnTypes Column types.
 	 * @param  cursor      Last key processed; null for the start.
 	 * @param  limit       Keys.
 	 * @return             The keys.
 	 */
 	public List<TieredRowKey> findNextUnarchivedKeys(
 			final TieredTable table,
-			final Map<String, String> columnTypes,
 			final TieredRowKey cursor,
 			final Long limit) {
 		final MapSqlParameterSource parameters = new MapSqlParameterSource("limit", limit);
@@ -369,7 +353,7 @@ public class HotTierRepository {
 		for (final String column : table.getKeyColumns()) {
 			cursorValues.add(":" + HotTierRepository.KEY_PARAMETER_PREFIX + column);
 			parameters.addValue(HotTierRepository.KEY_PARAMETER_PREFIX + column,
-					cursor == null ? ColumnValues.lowest(columnTypes.get(column)) : ColumnValues.parse(columnTypes.get(column), cursor.values().get(column)));
+					cursor == null ? ColumnValues.lowest(table.getColumnTypes().get(column)) : ColumnValues.parse(table.getColumnTypes().get(column), cursor.values().get(column)));
 		}
 		final String sql = "SELECT " + String.join(", ", table.getKeyColumns()) + " FROM " + table.getTableName() + " WHERE " + HotTierRepository.keyTuple(table) + " > ("
 				+ String.join(", ", cursorValues) + ") AND (" + table.getArchivedAtColumn() + " IS NULL OR " + table.getArchivedAtColumn() + " < "
@@ -379,7 +363,7 @@ public class HotTierRepository {
 				rowNumber) -> {
 			final Map<String, String> values = new LinkedHashMap<>();
 			for (final String column : table.getKeyColumns()) {
-				values.put(column, ColumnValues.format(ColumnValues.read(resultSet, column, columnTypes.get(column))));
+				values.put(column, ColumnValues.format(ColumnValues.read(resultSet, column, table.getColumnTypes().get(column))));
 			}
 			return new TieredRowKey(table.getId(), values);
 		});

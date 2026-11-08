@@ -140,10 +140,12 @@ tiering.delete(key)                       both tiers
 
 **Split by nature.** The repository package holds access logic only and may compose other
 repositories (`TieredRepository` uses `HotTierRepository`, `ColdStorageRepository`, the codec and
-the key strategy); none of it reads a flag, calls a component or uses `StaticContextAccessor`.
-The component holds the policy: table enabled, cold reads enabled, rehydration per table, touch
-threshold, archive and eviction orchestration, the queues. Calls go component → repositories,
-never back. The consumer-side repository fragment of the first cut (default methods reaching the
+the key strategy); none of it reads a flag, calls a component, the registry or
+`StaticContextAccessor`: everything a repository needs about a table (its column types, read
+from `information_schema`) is bound on the `TieredTable` definition by the registry at startup,
+so dependencies run strictly component → repository → model and a first data access never
+triggers registration or DDL. The component holds the policy: table enabled, cold reads enabled,
+rehydration per table, touch threshold, archive and eviction orchestration, the queues. The consumer-side repository fragment of the first cut (default methods reaching the
 component through `StaticContextAccessor`) is gone for that reason: a consumer's repository stays a
 plain JPA repository and the tiered reads are on the component, by entity class.
 
@@ -159,7 +161,7 @@ before any SQL or DDL. The consumer keeps JPA for its own writes and reads.
 ```
 <prefix><tableId>/<segment 1>/.../<segment n-1>/<segment n><extension>
   segment i = canonical form of key column i (ColumnValues.toSegment):
-    text          URL-encoded (never contains "/")
+    text          URL-encoded (never contains "/"; order not kept, so never a version column)
     bigint/int    %019d (non-negative values keep their order)
     timestamp     yyyy-MM-ddTHH:mm:ss.SSSSSS (fixed width; timestamptz in UTC with a trailing Z)
     date, uuid    ISO
@@ -190,15 +192,15 @@ lists the consumer's columns. Object metadata: `table`, `updated-at` (the waterm
 
 | Extension point | Interface / setting | v1 | Later |
 |---|---|---|---|
-| Table definition | `TieredTable(id, tableName, keyColumns)` bean; `withWatermarkColumn` (`updated_at`), `withLastAccessedColumn`, `withArchivedAtColumn`, `versioned()`, `withTtlClock(clock, column)`, `withRehydration`, `withEntity(class, keyProperties)` | yes | `fromEntity` from the JPA metamodel |
+| Table definition | `TieredTable(id, tableName, keyColumns)` bean; `withWatermarkColumn` (`updated_at`), `withLastAccessedColumn`, `withArchivedAtColumn`, `withVersioned()`, `withTtlClock(clock, column)`, `withRehydration`, `withEntity(class, keyProperties)`; the registry binds the column types on it | yes | `fromEntity` from the JPA metamodel |
 | Row key | `TieredRowKey(tableId, Map<String, String> values)`: JMS message, batch item, cursor; values as strings, bound with the column types read from `information_schema`. A single-column primary key is a one-entry map | yes | — |
 | Retrieval | by full key (`readThrough`, `readCold`); by key prefix + "newest on or before" (`findNewestCold`), versioned tables only | both | — |
 | TTL clock | `TtlClock.LAST_ACCESS` (`COALESCE(last_accessed_at, updated_at)`, reads touch), `LAST_WRITE` (`updated_at`, no touch column), `COLUMN` (any timestamp column) | yes | — |
 | Rehydration | per table, `Rehydration.INSERT` or `NONE`, definition default overridden by `table.<id>.rehydration`; `INSERT` needs the `LAST_ACCESS` clock (a rehydrated row must be able to expire by access), rejected otherwise at registration | yes | — |
-| Payload codec | `PayloadCodec` (`encode`, `decode`, `extension`, `contentType`); default gzip JSON, replaced by declaring another bean | yes | Parquet for window tiering |
-| Object key layout | `ObjectKeyStrategy` (`keyOf`, `prefixOf`, `lastSegmentOf`); default path layout above | yes | hashed segments |
-| Cold storage | `ColdStorageRepository` (`store`, `load` → empty on 404, `list` every page): `S3ColdStorageRepository` on the consumer's `S3Client` bean, `FolderColdStorageRepository` (local folder: key → relative path, atomic write through a temporary file and a move, metadata in a `.meta` sidecar, lexicographic listing), `InMemoryColdStorageRepository` | yes | — |
-| Scheduling | `ColdTieringBatchServiceComponent`: one `CronTrigger` per table and batch on the `TaskScheduler`, `-` disables, `run(tableId, batch)` on demand, `schedule(table, batch, cron)` and `getScheduled()` | yes | export batch (window) |
+| Payload codec | `PayloadCodec` (`encode`, `decode`, `extension`, `contentType`); `payload-codec=gzip-json` selects the default; a consumer sets the property to another name and declares its own bean | yes | Parquet for window tiering |
+| Object key layout | `ObjectKeyStrategy` (`keyOf`, `prefixOf`, `lastSegmentOf`); `object-key-strategy=path` selects the default layout above; a consumer sets the property to another name and declares its own bean | yes | hashed segments |
+| Cold storage | `ColdStorageRepository` (`store`, `load` → empty on 404, `list` every page, `delete`): `S3ColdStorageRepository` on the consumer's `S3Client` bean (production); `FolderColdStorageRepository` (local folder: key → relative path, atomic write through a temporary file and a move, metadata in a `.meta` sidecar, lexicographic listing) and `InMemoryColdStorageRepository`, both library-provided test and local-run support, kept on purpose | yes | — |
+| Scheduling | `ColdTieringBatchServiceComponent`: one `CronTrigger` per table and batch on the `TaskScheduler`, `-` disables, `run(tableId, batch)` on demand, `schedule`/`unschedule`/`cancelAll` and `getScheduled()` | yes | export batch (window) |
 | Tiered reads | on the component, by entity class: `findByIdTiered`, `findColdRow`, `findNewestTiered` → `TieredHit` (hot entity or cold row); `delete(key)` removes both tiers | yes | — |
 
 ### Row and window tiering
@@ -222,7 +224,10 @@ creating partitions ahead, re-attaching dropped partitions, a transparent `findB
 ### Tiered reads
 
 On `ColdTieringServiceComponent`, by entity class bound with `withEntity`: `findByIdTiered(Entity.class,
-id)` (hot, touching when stale; else `GET` + rehydrate on an `INSERT` table; a `NONE` table misses),
+id)` (hot, touching when stale; else `GET` + rehydrate on an `INSERT` table; a `NONE` table misses).
+Key values given as the Java types the entity maps the columns with (a `timestamptz` column as
+`LocalDateTime`, `Instant` or `ZonedDateTime`) are converted to the column's type and back for the
+JPQL parameters, so an entity's mapping choice does not matter.
 `findColdRow(Entity.class, id)`, `findNewestTiered(Entity.class, keyPrefix, asOf)` returning a
 `TieredHit` (the hot entity, or the cold row on a `NONE` table: never empty when an answer exists).
 The key comes from the id (the `@IdClass` fields named by `keyProperties`, validated at
@@ -310,7 +315,10 @@ entity and its `@IdClass`) and fails the boot otherwise.
 `software.amazon.awssdk:s3` is `<optional>` in this pom (`aws.sdk.version`, 2.55.11); the
 consumer declares the SDK and exposes an `S3Client` bean (named by
 `org.coldis.library.service.tiering.s3.client-bean`, default `s3Client`);
-`ColdTieringS3Configuration` is `@ConditionalOnClass(S3Client.class)`. Every bean is guarded by
+`ColdTieringS3Configuration` is `@ConditionalOnClass(S3Client.class)`. The upload runs under the
+hot row's `FOR UPDATE` lock inside the `long-timeout` transaction, so the consumer's `S3Client`
+must have call and attempt timeouts well below that (a hung PUT otherwise holds the row lock for
+the whole transaction timeout). Every bean is guarded by
 `org.coldis.configuration.service.cold-tiering-enabled` (default off, like `batch-enabled`); the
 batch component also needs `batch-enabled`. Defaults ship in `service.properties`.
 
@@ -322,6 +330,7 @@ Global, `org.coldis.library.service.tiering.`:
 |---|---|---|
 | `org.coldis.configuration.service.cold-tiering-enabled` | `false` | Creates the beans, listeners and schedules |
 | `storage` | `s3` | `s3`, `folder` (local runs and tests) or `memory` (tests) |
+| `payload-codec` / `object-key-strategy` | `gzip-json` / `path` | Which codec and layout bean is active; another value with a consumer bean plugs a custom one |
 | `folder.root` | `${java.io.tmpdir}/cold-tiering` | Root directory of the folder storage |
 | `s3.client-bean`, `s3.bucket` | `s3Client`, — | The consumer's client bean and the bucket |
 | `prefix` | `cold-tiering/` | Key prefix |
@@ -366,9 +375,14 @@ the threshold touches → object removed → empty; a rewrite after the archive 
 eviction, and `delete` clears both tiers; the backfill archives seeded rows in chunks;
 `findNewestTiered` over hot and cold snapshots (newest, as-of, before the first, unknown owner);
 the `NONE` table: archived, evicted, `findByIdTiered` empty, `findColdRow` holds the row, hot
-table stays empty, `schedule` registers a cron and `-` registers nothing; the disabled definition
-archives nothing, `run` is false and a cold object is never read; cold reads off: archived, never
-read.
+table stays empty, `schedule` registers a cron, `-` registers nothing and `unschedule` forgets it;
+the disabled definition archives nothing while a later write through the enabled one does, `run`
+is false and a cold object is never read; cold reads off: archived, never read; `TieredEvent`
+(`timestamptz` version column mapped as `LocalDateTime`, `COLUMN` clock, `NONE`): aged by the
+column (old evicted, recent kept, then evicted after the clock moves), cold-only `findColdRow` and
+`findNewestTiered` serving the cold row. `ColumnValuesUnitTest` (plain JUnit) covers the segment
+round trip and order per type (text with `/`, `..`, spaces, non-ASCII; integers; timestamp;
+timestamptz; date), the conversions, the path layout and the folder storage's dot-only segments.
 
 `S3ColdStorageRepository` itself has no test in this library (no LocalStack): it is covered by the
 first consumer's tests, the folder storage exercises the same interface contract.

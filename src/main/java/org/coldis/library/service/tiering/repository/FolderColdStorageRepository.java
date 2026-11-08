@@ -92,7 +92,7 @@ public class FolderColdStorageRepository implements ColdStorageRepository {
 			}
 		}
 		if (!path.normalize().startsWith(this.root) || path.equals(this.root)) {
-			throw new IntegrationException(new SimpleMessage("coldTiering.folder.key.invalid", new Object[] { key }));
+			throw new IntegrationException(new SimpleMessage("coldTiering.folder.key.invalid"));
 		}
 		return path;
 	}
@@ -164,7 +164,7 @@ public class FolderColdStorageRepository implements ColdStorageRepository {
 			Files.deleteIfExists(this.pathOf(key + FolderColdStorageRepository.METADATA_SUFFIX));
 		}
 		catch (final IOException exception) {
-			throw new IntegrationException(new SimpleMessage("coldTiering.folder.delete.error", new Object[] { key }), exception);
+			throw new IntegrationException(new SimpleMessage("coldTiering.folder.delete.error"), exception);
 		}
 	}
 
@@ -186,7 +186,7 @@ public class FolderColdStorageRepository implements ColdStorageRepository {
 			FolderColdStorageRepository.writeAtomically(this.pathOf(key), content);
 		}
 		catch (final IOException exception) {
-			throw new IntegrationException(new SimpleMessage("coldTiering.folder.write.error", new Object[] { key }), exception);
+			throw new IntegrationException(new SimpleMessage("coldTiering.folder.write.error"), exception);
 		}
 		return new ColdObject(key, (long) content.length);
 	}
@@ -202,7 +202,7 @@ public class FolderColdStorageRepository implements ColdStorageRepository {
 			return Files.isRegularFile(path) ? Optional.of(Files.readAllBytes(path)) : Optional.empty();
 		}
 		catch (final IOException exception) {
-			throw new IntegrationException(new SimpleMessage("coldTiering.folder.read.error", new Object[] { key }), exception);
+			throw new IntegrationException(new SimpleMessage("coldTiering.folder.read.error"), exception);
 		}
 	}
 
@@ -223,7 +223,7 @@ public class FolderColdStorageRepository implements ColdStorageRepository {
 				}
 			}
 			catch (final IOException exception) {
-				throw new IntegrationException(new SimpleMessage("coldTiering.folder.list.error", new Object[] { prefix }), exception);
+				throw new IntegrationException(new SimpleMessage("coldTiering.folder.list.error"), exception);
 			}
 		}
 		keys.sort(Comparator.naturalOrder());

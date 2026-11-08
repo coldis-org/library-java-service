@@ -92,6 +92,9 @@ public class ColdTieringBatchServiceComponent implements SmartInitializingSingle
 	/** Crons scheduled, by batch key suffix. */
 	private final Map<String, String> scheduled = new LinkedHashMap<>();
 
+	/** Scheduled tasks, by batch key suffix. */
+	private final Map<String, ScheduledFuture<?>> tasks = new LinkedHashMap<>();
+
 	/**
 	 * The moment before which a table's rows are evictable.
 	 *
@@ -161,7 +164,7 @@ public class ColdTieringBatchServiceComponent implements SmartInitializingSingle
 			final Long size,
 			final Map<String, String> arguments) {
 		final TieredTable table = this.registry.getTable(arguments.get(ColdTieringBatchServiceComponent.TABLE_ARGUMENT));
-		return this.hotTierRepository.findNextUnarchivedKeys(table, this.registry.getColumnTypes(table), lastKey, size);
+		return this.hotTierRepository.findNextUnarchivedKeys(table, lastKey, size);
 	}
 
 	/**
@@ -260,11 +263,46 @@ public class ColdTieringBatchServiceComponent implements SmartInitializingSingle
 			ColdTieringBatchServiceComponent.LOGGER.warn("[COLD_TIERING] no task scheduler: batches run only through run()");
 		}
 		else if (!ColdTieringProperties.NO_SCHEDULE.equals(cron)) {
+			this.unschedule(table, batch);
 			task = scheduler.schedule(() -> this.runScheduled(table, batch), new CronTrigger(cron));
-			this.scheduled.put(batch.keySuffix(table.getId()), cron);
+			synchronized (this.tasks) {
+				this.scheduled.put(batch.keySuffix(table.getId()), cron);
+				this.tasks.put(batch.keySuffix(table.getId()), task);
+			}
 			ColdTieringBatchServiceComponent.LOGGER.info("[COLD_TIERING] table={} batch={} scheduled: {}", table.getId(), batch, cron);
 		}
 		return task;
+	}
+
+	/**
+	 * Cancels the schedule of one batch of one table, if any.
+	 *
+	 * @param table Table.
+	 * @param batch Batch.
+	 */
+	public void unschedule(
+			final TieredTable table,
+			final TieringBatch batch) {
+		synchronized (this.tasks) {
+			final ScheduledFuture<?> task = this.tasks.remove(batch.keySuffix(table.getId()));
+			this.scheduled.remove(batch.keySuffix(table.getId()));
+			if (task != null) {
+				task.cancel(false);
+			}
+		}
+	}
+
+	/**
+	 * Cancels every schedule.
+	 */
+	public void cancelAll() {
+		synchronized (this.tasks) {
+			for (final ScheduledFuture<?> task : this.tasks.values()) {
+				task.cancel(false);
+			}
+			this.tasks.clear();
+			this.scheduled.clear();
+		}
 	}
 
 	/**
@@ -273,7 +311,9 @@ public class ColdTieringBatchServiceComponent implements SmartInitializingSingle
 	 * @return The schedules.
 	 */
 	public Map<String, String> getScheduled() {
-		return Map.copyOf(this.scheduled);
+		synchronized (this.tasks) {
+			return Map.copyOf(this.scheduled);
+		}
 	}
 
 	/**

@@ -10,7 +10,6 @@ import java.util.Set;
 import org.coldis.library.exception.IntegrationException;
 import org.coldis.library.model.SimpleMessage;
 import org.coldis.library.service.tiering.repository.HotTierRepository;
-import org.coldis.library.service.tiering.repository.TieredRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.SmartInitializingSingleton;
@@ -22,7 +21,9 @@ import jakarta.persistence.IdClass;
 
 /**
  * The tiered tables (one {@link TieredTable} bean each), validated against the database and the
- * properties at startup so a wrong definition fails the boot, not the first upload. With
+ * properties at startup so a wrong definition fails the boot, not the first upload; each
+ * definition gets its column types bound, so the repositories read them from the definition and
+ * never come back here. With
  * {@code create-schema=true} the lifecycle columns and the eviction index are created first
  * (tests).
  */
@@ -54,11 +55,8 @@ public class TieredTableRegistry implements SmartInitializingSingleton {
 	/** Tables by entity class. */
 	private final Map<Class<?>, TieredTable> tablesByEntity = new HashMap<>();
 
-	/** Column types by table id. */
-	private final Map<String, Map<String, String>> columnTypesById = new HashMap<>();
-
 	/** Whether every definition is registered. */
-	private Boolean isInitialized = false;
+	private volatile Boolean isInitialized = false;
 
 	/**
 	 * Fails when a column is missing.
@@ -92,11 +90,11 @@ public class TieredTableRegistry implements SmartInitializingSingleton {
 					throw new IntegrationException(new SimpleMessage("coldTiering.table.id.class.missing", new Object[] { table.getId(), entityClass.getName() }));
 				}
 				for (final String property : table.getKeyProperties()) {
-					TieredRepository.fieldOf(idClass.value(), property);
+					TieredEntityKeys.fieldOf(idClass.value(), property);
 				}
 			}
 			for (final String property : table.getKeyProperties()) {
-				TieredRepository.fieldOf(entityClass, property);
+				TieredEntityKeys.fieldOf(entityClass, property);
 			}
 		}
 	}
@@ -163,8 +161,8 @@ public class TieredTableRegistry implements SmartInitializingSingleton {
 		}
 		final Rehydration rehydration = this.properties.of(table).getRehydration();
 		TieredTableRegistry.validate(table, columnTypes, this.hotTierRepository.nullableColumns(table.getTableName()), rehydration);
+		table.bindColumnTypes(columnTypes);
 		this.tablesById.put(table.getId(), table);
-		this.columnTypesById.put(table.getId(), columnTypes);
 		if (table.getEntityClass() != null) {
 			this.tablesByEntity.put(table.getEntityClass(), table);
 		}
@@ -173,14 +171,18 @@ public class TieredTableRegistry implements SmartInitializingSingleton {
 	}
 
 	/**
-	 * Registers every definition once.
+	 * Registers every definition once (at startup; a call before that registers them then).
 	 */
-	private synchronized void initialize() {
+	private void initialize() {
 		if (!this.isInitialized) {
-			for (final TieredTable table : this.definitions) {
-				this.register(table);
+			synchronized (this) {
+				if (!this.isInitialized) {
+					for (final TieredTable table : this.definitions) {
+						this.register(table);
+					}
+					this.isInitialized = true;
+				}
 			}
-			this.isInitialized = true;
 		}
 	}
 
@@ -229,18 +231,6 @@ public class TieredTableRegistry implements SmartInitializingSingleton {
 		this.initialize();
 		return Optional.ofNullable(this.tablesByEntity.get(entityClass))
 				.orElseThrow(() -> new IntegrationException(new SimpleMessage("coldTiering.table.unbound", new Object[] { entityClass.getName() })));
-	}
-
-	/**
-	 * The column types of a table.
-	 *
-	 * @param  table Table.
-	 * @return       The types by column.
-	 */
-	public Map<String, String> getColumnTypes(
-			final TieredTable table) {
-		this.initialize();
-		return this.columnTypesById.get(table.getId());
 	}
 
 }

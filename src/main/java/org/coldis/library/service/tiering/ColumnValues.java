@@ -5,10 +5,12 @@ import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
 import java.sql.ResultSet;
 import java.sql.SQLException;
+import java.time.Instant;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.OffsetDateTime;
 import java.time.ZoneId;
+import java.time.ZonedDateTime;
 import java.time.ZoneOffset;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
@@ -93,6 +95,69 @@ public final class ColumnValues {
 			case java.sql.Date date -> date.toLocalDate().toString();
 			default -> value.toString();
 		};
+	}
+
+	/**
+	 * A consumer's value (an entity field, an id property) as the object of the column's SQL type:
+	 * a {@code timestamptz} column mapped as {@code LocalDateTime}, {@code Instant} or
+	 * {@code ZonedDateTime} becomes an {@code OffsetDateTime}; a {@code timestamp} column mapped
+	 * as {@code OffsetDateTime} becomes a {@code LocalDateTime}.
+	 *
+	 * @param  dataType SQL type.
+	 * @param  value    Consumer's value.
+	 * @return          The column value.
+	 */
+	public static Object toColumnValue(
+			final String dataType,
+			final Object value) {
+		Object columnValue = value;
+		if (ColumnValues.TIMESTAMPTZ.equals(dataType)) {
+			columnValue = switch (value) {
+				case LocalDateTime moment -> moment.atZone(ZoneId.systemDefault()).toOffsetDateTime();
+				case Instant moment -> moment.atOffset(ZoneOffset.UTC);
+				case ZonedDateTime moment -> moment.toOffsetDateTime();
+				case java.sql.Timestamp moment -> moment.toLocalDateTime().atZone(ZoneId.systemDefault()).toOffsetDateTime();
+				default -> value;
+			};
+		}
+		else if (ColumnValues.TIMESTAMP.equals(dataType)) {
+			columnValue = switch (value) {
+				case OffsetDateTime moment -> moment.atZoneSameInstant(ZoneId.systemDefault()).toLocalDateTime();
+				case ZonedDateTime moment -> moment.withZoneSameInstant(ZoneId.systemDefault()).toLocalDateTime();
+				case Instant moment -> LocalDateTime.ofInstant(moment, ZoneId.systemDefault());
+				default -> value;
+			};
+		}
+		return columnValue;
+	}
+
+	/**
+	 * A column value as the Java type an entity maps the column with (the inverse of
+	 * {@link #toColumnValue(String, Object)}), for JPQL parameters.
+	 *
+	 * @param  value  Column value.
+	 * @param  target Entity field type.
+	 * @return        The value of the target type.
+	 */
+	public static Object toJavaValue(
+			final Object value,
+			final Class<?> target) {
+		Object javaValue = value;
+		if (value instanceof final OffsetDateTime moment) {
+			if (LocalDateTime.class.equals(target)) {
+				javaValue = moment.atZoneSameInstant(ZoneId.systemDefault()).toLocalDateTime();
+			}
+			else if (Instant.class.equals(target)) {
+				javaValue = moment.toInstant();
+			}
+			else if (ZonedDateTime.class.equals(target)) {
+				javaValue = moment.atZoneSameInstant(ZoneId.systemDefault());
+			}
+		}
+		else if ((value instanceof final LocalDateTime moment) && OffsetDateTime.class.equals(target)) {
+			javaValue = moment.atZone(ZoneId.systemDefault()).toOffsetDateTime();
+		}
+		return javaValue;
 	}
 
 	/**

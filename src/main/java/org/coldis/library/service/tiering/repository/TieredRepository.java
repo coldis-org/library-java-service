@@ -1,6 +1,5 @@
 package org.coldis.library.service.tiering.repository;
 
-import java.lang.reflect.Field;
 import java.time.LocalDateTime;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -15,13 +14,12 @@ import org.coldis.library.service.tiering.ColdTieringProperties;
 import org.coldis.library.service.tiering.ColumnValues;
 import org.coldis.library.service.tiering.ObjectKeyStrategy;
 import org.coldis.library.service.tiering.PayloadCodec;
+import org.coldis.library.service.tiering.TieredEntityKeys;
 import org.coldis.library.service.tiering.TieredRowKey;
 import org.coldis.library.service.tiering.TieredTable;
-import org.coldis.library.service.tiering.TieredTableRegistry;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Repository;
-import org.springframework.util.ReflectionUtils;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -34,7 +32,8 @@ import jakarta.persistence.TypedQuery;
  * Tiered access to a table's rows, composed from the hot tier (JPA entity reads, the native
  * statements of {@link HotTierRepository}) and the cold tier ({@link ColdStorageRepository} under
  * the derived object keys): no policy here, every call does what its name says whatever the
- * flags. {@code ColdTieringServiceComponent} decides when to call what.
+ * flags, and everything it needs about a table is on the {@link TieredTable} definition.
+ * {@code ColdTieringServiceComponent} decides when to call what.
  */
 @Repository
 @ConditionalOnProperty(
@@ -46,9 +45,8 @@ public class TieredRepository {
 	/** JSON reader of archived rows. */
 	private static final ObjectMapper OBJECT_MAPPER = ObjectMapperHelper.createMapper();
 
-	/** Registry. */
-	@Autowired
-	private TieredTableRegistry registry;
+	/** JPQL parameter prefix of key properties. */
+	private static final String KEY_PARAMETER_PREFIX = "key_";
 
 	/** Properties (key prefix). */
 	@Autowired
@@ -75,25 +73,8 @@ public class TieredRepository {
 	private EntityManager entityManager;
 
 	/**
-	 * A field of a class, by name.
-	 *
-	 * @param  type Class.
-	 * @param  name Field name.
-	 * @return      The field, accessible.
-	 */
-	public static Field fieldOf(
-			final Class<?> type,
-			final String name) {
-		final Field field = ReflectionUtils.findField(type, name);
-		if (field == null) {
-			throw new IntegrationException(new SimpleMessage("coldTiering.key.property.missing", new Object[] { type.getName(), name }));
-		}
-		ReflectionUtils.makeAccessible(field);
-		return field;
-	}
-
-	/**
-	 * The row key of a table from column values (any JDBC-compatible objects).
+	 * The row key of a table from column values (any JDBC-compatible objects, or the Java types an
+	 * entity maps the columns with).
 	 *
 	 * @param  table  Table.
 	 * @param  values Key column values.
@@ -108,7 +89,7 @@ public class TieredRepository {
 			if (value == null) {
 				throw new IntegrationException(new SimpleMessage("coldTiering.key.incomplete", new Object[] { table.getId(), column }));
 			}
-			formatted.put(column, ColumnValues.format(value));
+			formatted.put(column, ColumnValues.format(ColumnValues.toColumnValue(table.getColumnTypes().get(column), value)));
 		}
 		return new TieredRowKey(table.getId(), formatted);
 	}
@@ -130,8 +111,25 @@ public class TieredRepository {
 		}
 		else {
 			for (int position = 0; position < table.getKeyColumns().size(); position++) {
-				values.put(table.getKeyColumns().get(position), ReflectionUtils.getField(TieredRepository.fieldOf(id.getClass(), table.getKeyProperties().get(position)), id));
+				values.put(table.getKeyColumns().get(position), TieredEntityKeys.valueOf(id, table.getKeyProperties().get(position)));
 			}
+		}
+		return this.keyOf(table, values);
+	}
+
+	/**
+	 * The row key of a hot entity.
+	 *
+	 * @param  table  Table.
+	 * @param  entity Entity.
+	 * @return        The key.
+	 */
+	public TieredRowKey keyOfEntity(
+			final TieredTable table,
+			final Object entity) {
+		final Map<String, Object> values = new LinkedHashMap<>();
+		for (int position = 0; position < table.getKeyColumns().size(); position++) {
+			values.put(table.getKeyColumns().get(position), TieredEntityKeys.valueOf(entity, table.getKeyProperties().get(position)));
 		}
 		return this.keyOf(table, values);
 	}
@@ -146,46 +144,49 @@ public class TieredRepository {
 	public String objectKeyOf(
 			final TieredTable table,
 			final TieredRowKey key) {
-		return this.objectKeyStrategy.keyOf(this.properties.getPrefix(), table, ColumnValues.toSegments(table, this.registry.getColumnTypes(table), key.values()),
+		return this.objectKeyStrategy.keyOf(this.properties.getPrefix(), table, ColumnValues.toSegments(table, table.getColumnTypes(), key.values()),
 				this.codec.extension());
 	}
 
 	/**
 	 * The hot entity matching column values, newest first by the last key column, on or before a
-	 * moment.
+	 * bound. Parameters are bound with the Java type the entity maps each column with.
 	 *
 	 * @param  <Type>       Entity type.
 	 * @param  table        Table.
 	 * @param  entityType   Entity type.
-	 * @param  columnValues Key column values to match (JDBC objects), by column.
-	 * @param  asOf         Upper bound of the last key column, or null.
+	 * @param  columnValues Key column values to match (column objects), by column.
+	 * @param  upperBound   Upper bound of the last key column (column object), or null.
 	 * @return              The entity, or empty.
 	 */
 	private <Type> Optional<Type> findHot(
 			final TieredTable table,
 			final Class<Type> entityType,
 			final Map<String, Object> columnValues,
-			final Object asOf) {
+			final Object upperBound) {
 		final List<String> keyColumns = table.getKeyColumns();
-		final String lastProperty = table.getKeyProperties().get(keyColumns.size() - 1);
+		final List<String> keyProperties = table.getKeyProperties();
+		final String lastProperty = keyProperties.get(keyColumns.size() - 1);
 		final StringBuilder jpql = new StringBuilder("SELECT entity FROM ").append(entityType.getName()).append(" entity WHERE 1 = 1");
 		for (int position = 0; position < keyColumns.size(); position++) {
 			if (columnValues.containsKey(keyColumns.get(position))) {
-				jpql.append(" AND entity.").append(table.getKeyProperties().get(position)).append(" = :p").append(position);
+				jpql.append(" AND entity.").append(keyProperties.get(position)).append(" = :").append(TieredRepository.KEY_PARAMETER_PREFIX)
+						.append(keyProperties.get(position));
 			}
 		}
-		if (asOf != null) {
-			jpql.append(" AND entity.").append(lastProperty).append(" <= :asOf");
+		if (upperBound != null) {
+			jpql.append(" AND entity.").append(lastProperty).append(" <= :upperBound");
 		}
 		jpql.append(" ORDER BY entity.").append(lastProperty).append(" DESC");
 		final TypedQuery<Type> query = this.entityManager.createQuery(jpql.toString(), entityType).setMaxResults(1);
 		for (int position = 0; position < keyColumns.size(); position++) {
 			if (columnValues.containsKey(keyColumns.get(position))) {
-				query.setParameter("p" + position, columnValues.get(keyColumns.get(position)));
+				query.setParameter(TieredRepository.KEY_PARAMETER_PREFIX + keyProperties.get(position), ColumnValues
+						.toJavaValue(columnValues.get(keyColumns.get(position)), TieredEntityKeys.fieldOf(entityType, keyProperties.get(position)).getType()));
 			}
 		}
-		if (asOf != null) {
-			query.setParameter("asOf", asOf);
+		if (upperBound != null) {
+			query.setParameter("upperBound", ColumnValues.toJavaValue(upperBound, TieredEntityKeys.fieldOf(entityType, lastProperty).getType()));
 		}
 		return query.getResultList().stream().findFirst();
 	}
@@ -203,7 +204,7 @@ public class TieredRepository {
 			final TieredTable table,
 			final Class<Type> entityType,
 			final TieredRowKey key) {
-		return this.findHot(table, entityType, ColumnValues.parseKey(table, this.registry.getColumnTypes(table), key), null);
+		return this.findHot(table, entityType, ColumnValues.parseKey(table, table.getColumnTypes(), key), null);
 	}
 
 	/**
@@ -212,7 +213,7 @@ public class TieredRepository {
 	 * @param  <Type>     Entity type.
 	 * @param  table      Table.
 	 * @param  entityType Entity type.
-	 * @param  keyPrefix  Values of every key column but the last (JDBC objects), by column.
+	 * @param  keyPrefix  Values of every key column but the last, by column.
 	 * @param  asOf       Upper bound of the last key column, or null for the newest.
 	 * @return            The entity, or empty.
 	 */
@@ -221,26 +222,13 @@ public class TieredRepository {
 			final Class<Type> entityType,
 			final Map<String, Object> keyPrefix,
 			final LocalDateTime asOf) {
-		final String lastType = this.registry.getColumnTypes(table).get(table.getLastKeyColumn());
-		return this.findHot(table, entityType, keyPrefix, asOf == null ? null : ColumnValues.parse(lastType, ColumnValues.ofMoment(lastType, asOf)));
-	}
-
-	/**
-	 * The row key of a hot entity.
-	 *
-	 * @param  table  Table.
-	 * @param  entity Entity.
-	 * @return        The key.
-	 */
-	public TieredRowKey keyOfEntity(
-			final TieredTable table,
-			final Object entity) {
-		final Map<String, Object> values = new LinkedHashMap<>();
-		for (int position = 0; position < table.getKeyColumns().size(); position++) {
-			values.put(table.getKeyColumns().get(position),
-					ReflectionUtils.getField(TieredRepository.fieldOf(entity.getClass(), table.getKeyProperties().get(position)), entity));
-		}
-		return this.keyOf(table, values);
+		final Map<String, String> columnTypes = table.getColumnTypes();
+		final Map<String, Object> columnValues = new LinkedHashMap<>();
+		keyPrefix.forEach((
+				column,
+				value) -> columnValues.put(column, ColumnValues.toColumnValue(columnTypes.get(column), value)));
+		final String lastType = columnTypes.get(table.getLastKeyColumn());
+		return this.findHot(table, entityType, columnValues, asOf == null ? null : ColumnValues.parse(lastType, ColumnValues.ofMoment(lastType, asOf)));
 	}
 
 	/**
@@ -270,11 +258,11 @@ public class TieredRepository {
 			final TieredTable table,
 			final Map<String, Object> keyPrefix,
 			final LocalDateTime asOf) {
-		final Map<String, String> columnTypes = this.registry.getColumnTypes(table);
+		final Map<String, String> columnTypes = table.getColumnTypes();
 		final Map<String, String> formatted = new LinkedHashMap<>();
 		keyPrefix.forEach((
 				column,
-				value) -> formatted.put(column, ColumnValues.format(value)));
+				value) -> formatted.put(column, ColumnValues.format(ColumnValues.toColumnValue(columnTypes.get(column), value))));
 		final List<String> segments = ColumnValues.toSegments(table, columnTypes, formatted);
 		if (segments.size() != (table.getKeyColumns().size() - 1)) {
 			throw new IntegrationException(new SimpleMessage("coldTiering.key.prefix.incomplete", new Object[] { table.getId() }));
@@ -310,7 +298,7 @@ public class TieredRepository {
 			final TieredTable table,
 			final ColdRow coldRow,
 			final LocalDateTime now) {
-		final Map<String, String> columnTypes = this.registry.getColumnTypes(table);
+		final Map<String, String> columnTypes = table.getColumnTypes();
 		final JsonNode row;
 		try {
 			row = TieredRepository.OBJECT_MAPPER.readTree(coldRow.rowJson());
@@ -324,7 +312,7 @@ public class TieredRepository {
 				throw new IntegrationException(new SimpleMessage("coldTiering.cold.row.key.mismatch", new Object[] { table.getId(), column }));
 			}
 		}
-		return this.hotTierRepository.rehydrate(table, columnTypes, coldRow.key(), coldRow.rowJson(), now);
+		return this.hotTierRepository.rehydrate(table, coldRow.key(), coldRow.rowJson(), now);
 	}
 
 	/**
@@ -336,7 +324,7 @@ public class TieredRepository {
 	public void delete(
 			final TieredTable table,
 			final TieredRowKey key) {
-		this.hotTierRepository.delete(table, this.registry.getColumnTypes(table), key);
+		this.hotTierRepository.delete(table, key);
 		this.coldStorageRepository.delete(this.objectKeyOf(table, key));
 	}
 

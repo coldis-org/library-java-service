@@ -2,23 +2,25 @@ package org.coldis.library.service.tiering;
 
 import java.util.List;
 
-import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Component;
 
 /**
- * Default layout: {@code <prefix><tableId>/<segment 1>/.../<segment n-1>/<segment n><extension>}.
+ * Default layout ({@code org.coldis.library.service.tiering.object-key-strategy=path}):
+ * {@code <prefix><tableId>/<segment 1>/.../<segment n-1>/<segment n><extension>}. A consumer
+ * plugs its own by setting the property to another name and declaring its
+ * {@link ObjectKeyStrategy} bean.
  */
 @Component
-@ConditionalOnMissingBean(
-		value = ObjectKeyStrategy.class,
-		ignored = PathObjectKeyStrategy.class
-)
 @ConditionalOnProperty(
-		name = ColdTieringProperties.ENABLED_PROPERTY,
-		matchIfMissing = false
+		name = ColdTieringProperties.PREFIX + ".object-key-strategy",
+		havingValue = PathObjectKeyStrategy.NAME,
+		matchIfMissing = true
 )
 public class PathObjectKeyStrategy implements ObjectKeyStrategy {
+
+	/** Property value selecting this layout. */
+	public static final String NAME = "path";
 
 	/**
 	 * @see ObjectKeyStrategy#prefixOf(String, TieredTable, List)
