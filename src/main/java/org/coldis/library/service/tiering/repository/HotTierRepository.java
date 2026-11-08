@@ -360,16 +360,19 @@ public class HotTierRepository {
 			final TieredRowKey cursor,
 			final Long limit) {
 		final MapSqlParameterSource parameters = new MapSqlParameterSource("limit", limit);
-		final List<String> cursorValues = new ArrayList<>();
-		for (final String column : table.getKeyColumns()) {
-			cursorValues.add(":" + HotTierRepository.KEY_PARAMETER_PREFIX + column);
-			parameters.addValue(HotTierRepository.KEY_PARAMETER_PREFIX + column,
-					cursor == null ? ColumnValues.lowest(table.getColumnTypes().get(column)) : ColumnValues.parse(table.getColumnTypes().get(column), cursor.values().get(column)));
+		final StringBuilder sql = new StringBuilder("SELECT ").append(String.join(", ", table.getKeyColumns())).append(" FROM ").append(table.getTableName())
+				.append(" WHERE (").append(table.getArchivedAtColumn()).append(" IS NULL OR ").append(table.getArchivedAtColumn()).append(" < ")
+				.append(table.getWatermarkColumn()).append(')');
+		if (cursor != null) {
+			final List<String> cursorValues = new ArrayList<>();
+			for (final String column : table.getKeyColumns()) {
+				cursorValues.add(":" + HotTierRepository.KEY_PARAMETER_PREFIX + column);
+				parameters.addValue(HotTierRepository.KEY_PARAMETER_PREFIX + column, ColumnValues.parse(table.getColumnTypes().get(column), cursor.values().get(column)));
+			}
+			sql.append(" AND ").append(HotTierRepository.keyTuple(table)).append(" > (").append(String.join(", ", cursorValues)).append(')');
 		}
-		final String sql = "SELECT " + String.join(", ", table.getKeyColumns()) + " FROM " + table.getTableName() + " WHERE " + HotTierRepository.keyTuple(table) + " > ("
-				+ String.join(", ", cursorValues) + ") AND (" + table.getArchivedAtColumn() + " IS NULL OR " + table.getArchivedAtColumn() + " < "
-				+ table.getWatermarkColumn() + ") ORDER BY " + String.join(", ", table.getKeyColumns()) + " LIMIT :limit";
-		return this.jdbcTemplate.query(sql, parameters, (
+		sql.append(" ORDER BY ").append(String.join(", ", table.getKeyColumns())).append(" LIMIT :limit");
+		return this.jdbcTemplate.query(sql.toString(), parameters, (
 				resultSet,
 				rowNumber) -> {
 			final Map<String, String> values = new LinkedHashMap<>();

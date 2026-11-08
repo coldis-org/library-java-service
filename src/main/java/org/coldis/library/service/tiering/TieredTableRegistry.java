@@ -128,12 +128,18 @@ public class TieredTableRegistry implements SmartInitializingSingleton {
 		if (nullable.contains(table.getWatermarkColumn())) {
 			throw new IntegrationException(new SimpleMessage("coldTiering.table.watermark.nullable", new Object[] { table.getId(), table.getWatermarkColumn() }));
 		}
+		if (!ColumnValues.TEMPORAL_TYPES.contains(columnTypes.get(table.getWatermarkColumn()))) {
+			throw new IntegrationException(new SimpleMessage("coldTiering.table.watermark.type.invalid", new Object[] { table.getId(), table.getWatermarkColumn() }));
+		}
 		TieredTableRegistry.requireColumn(table, columnTypes, table.getArchivedAtColumn());
 		if (table.isTouching()) {
 			TieredTableRegistry.requireColumn(table, columnTypes, table.getLastAccessedColumn());
 		}
 		if (table.getTtlClock() == TtlClock.COLUMN) {
 			TieredTableRegistry.requireColumn(table, columnTypes, table.getClockColumn());
+			if (!ColumnValues.TEMPORAL_TYPES.contains(columnTypes.get(table.getClockColumn()))) {
+				throw new IntegrationException(new SimpleMessage("coldTiering.table.clock.type.invalid", new Object[] { table.getId(), table.getClockColumn() }));
+			}
 		}
 		if (table.isVersioned() && !ColumnValues.TEMPORAL_TYPES.contains(columnTypes.get(table.getLastKeyColumn()))) {
 			throw new IntegrationException(new SimpleMessage("coldTiering.table.version.type.invalid", new Object[] { table.getId(), table.getLastKeyColumn() }));

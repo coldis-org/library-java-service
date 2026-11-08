@@ -214,7 +214,8 @@ public class ColdTieringServiceComponent {
 			isUploaded = true;
 			final Integer marked = this.hotTierRepository.markArchived(table, key, hotRow.get().watermark());
 			if (marked == 0) {
-				ColdTieringServiceComponent.LOGGER.warn("[COLD_TIERING_UPLOAD] table={} a row was rewritten during its archive; left for its own upload or the backfill",
+				ColdTieringServiceComponent.LOGGER.error(
+						"[COLD_TIERING_UPLOAD] table={} archive mark did not match the uploaded watermark (the row is locked, so a round-trip mismatch of its value); the row stays unarchived",
 						table.getId());
 			}
 		}

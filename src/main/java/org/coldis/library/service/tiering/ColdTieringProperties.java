@@ -374,7 +374,7 @@ public class ColdTieringProperties {
 
 	}
 
-	/** Storage: {@code s3} or {@code memory}. */
+	/** Storage: {@code s3}, {@code folder} or {@code memory}. */
 	private String storage = "s3";
 
 	/** Whether the schema is created at startup (tests). */

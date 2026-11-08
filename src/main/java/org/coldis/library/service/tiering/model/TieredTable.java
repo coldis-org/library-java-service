@@ -68,28 +68,6 @@ public class TieredTable implements ColdTable {
 	private Map<String, String> columnTypes;
 
 	/**
-	 * Constructor.
-	 *
-	 * @param id         Id.
-	 * @param tableName  Hot table name.
-	 * @param keyColumns Key columns, in primary key order.
-	 */
-	public TieredTable(
-			final String id,
-			final String tableName,
-			final List<String> keyColumns) {
-		this.id = Objects.requireNonNull(id);
-		this.tableName = TieredTable.identifier(tableName);
-		this.keyColumns = List.copyOf(Objects.requireNonNull(keyColumns));
-		if (this.keyColumns.isEmpty()) {
-			throw new IntegrationException(new SimpleMessage("coldTiering.table.key.empty", new Object[] { id }));
-		}
-		for (final String keyColumn : this.keyColumns) {
-			TieredTable.identifier(keyColumn);
-		}
-	}
-
-	/**
 	 * Checks a SQL identifier before it reaches generated SQL.
 	 *
 	 * @param  name Name.
@@ -123,6 +101,28 @@ public class TieredTable implements ColdTable {
 			}
 		}
 		return property.toString();
+	}
+
+	/**
+	 * Constructor.
+	 *
+	 * @param id         Id.
+	 * @param tableName  Hot table name.
+	 * @param keyColumns Key columns, in primary key order.
+	 */
+	public TieredTable(
+			final String id,
+			final String tableName,
+			final List<String> keyColumns) {
+		this.id = Objects.requireNonNull(id);
+		this.tableName = TieredTable.identifier(tableName);
+		this.keyColumns = List.copyOf(Objects.requireNonNull(keyColumns));
+		if (this.keyColumns.isEmpty()) {
+			throw new IntegrationException(new SimpleMessage("coldTiering.table.key.empty", new Object[] { id }));
+		}
+		for (final String keyColumn : this.keyColumns) {
+			TieredTable.identifier(keyColumn);
+		}
 	}
 
 	/**
