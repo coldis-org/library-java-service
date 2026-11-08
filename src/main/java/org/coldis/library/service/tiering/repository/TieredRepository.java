@@ -309,7 +309,7 @@ public class TieredRepository {
 		}
 		for (final String column : table.getKeyColumns()) {
 			final JsonNode value = row.get(column);
-			if ((value == null) || value.isNull() || !ColumnValues.same(columnTypes.get(column), value.asText(), coldRow.key().values().get(column))) {
+			if ((value == null) || value.isNull() || !ColumnValues.isSameValue(columnTypes.get(column), value.asText(), coldRow.key().values().get(column))) {
 				throw new IntegrationException(new SimpleMessage("coldTiering.cold.row.key.mismatch", new Object[] { table.getId(), column }));
 			}
 		}

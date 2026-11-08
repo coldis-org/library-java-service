@@ -157,6 +157,15 @@ public final class ColumnValues {
 		else if ((value instanceof final LocalDateTime moment) && OffsetDateTime.class.equals(target)) {
 			javaValue = moment.atZone(ZoneId.systemDefault()).toOffsetDateTime();
 		}
+		else if ((value instanceof final Number number) && (Long.class.equals(target) || Long.TYPE.equals(target))) {
+			javaValue = number.longValue();
+		}
+		else if ((value instanceof final Number number) && (Integer.class.equals(target) || Integer.TYPE.equals(target))) {
+			javaValue = number.intValue();
+		}
+		else if ((value instanceof final Number number) && (Short.class.equals(target) || Short.TYPE.equals(target))) {
+			javaValue = number.shortValue();
+		}
 		return javaValue;
 	}
 
@@ -190,7 +199,7 @@ public final class ColumnValues {
 	 * @param  second   Second value (string form).
 	 * @return          Whether they are the same value.
 	 */
-	public static Boolean same(
+	public static Boolean isSameValue(
 			final String dataType,
 			final String first,
 			final String second) {

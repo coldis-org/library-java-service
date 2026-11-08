@@ -159,8 +159,8 @@ public class TieredTableRegistry implements SmartInitializingSingleton {
 		}
 		Map<String, String> columnTypes = this.hotTierRepository.columnTypes(table.getTableName());
 		if (this.properties.getCreateSchema() && !columnTypes.isEmpty()) {
-			for (final String statement : ColdTieringSchema.statements(table, false)) {
-				this.hotTierRepository.execute(statement);
+			for (final String statement : ColdTieringSchema.statements(table, columnTypes.get(table.getWatermarkColumn()), false)) {
+				this.hotTierRepository.executeDdl(statement);
 			}
 			columnTypes = this.hotTierRepository.columnTypes(table.getTableName());
 		}
@@ -169,6 +169,9 @@ public class TieredTableRegistry implements SmartInitializingSingleton {
 		table.bindColumnTypes(columnTypes);
 		this.tablesById.put(table.getId(), table);
 		if (table.getEntityClass() != null) {
+			if (this.tablesByEntity.containsKey(table.getEntityClass())) {
+				throw new IntegrationException(new SimpleMessage("coldTiering.table.entity.duplicate", new Object[] { table.getId(), table.getEntityClass().getName() }));
+			}
 			this.tablesByEntity.put(table.getEntityClass(), table);
 		}
 		TieredTableRegistry.LOGGER.info("[COLD_TIERING] table={} registered: hot={} clock={} versioned={} rehydration={}", table.getId(), table.getTableName(),

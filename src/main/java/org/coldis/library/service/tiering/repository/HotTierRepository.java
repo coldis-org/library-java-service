@@ -168,7 +168,7 @@ public class HotTierRepository {
 	 *
 	 * @param statement Statement.
 	 */
-	public void execute(
+	public void executeDdl(
 			final String statement) {
 		this.jdbcTemplate.getJdbcOperations().execute(statement);
 	}
@@ -321,7 +321,7 @@ public class HotTierRepository {
 	public Boolean existsEvictable(
 			final TieredTable table,
 			final LocalDateTime before) {
-		final String sql = "SELECT EXISTS (SELECT 1 FROM " + table.getTableName() + " WHERE " + HotTierRepository.evictablePredicate(table) + ")";
+		final String sql = "SELECT EXISTS (SELECT 1 FROM " + table.getTableName() + " WHERE " + HotTierRepository.evictablePredicate(table) + " LIMIT 1 FOR UPDATE SKIP LOCKED)";
 		return this.jdbcTemplate.queryForObject(sql, new MapSqlParameterSource("before", before), Boolean.class);
 	}
 

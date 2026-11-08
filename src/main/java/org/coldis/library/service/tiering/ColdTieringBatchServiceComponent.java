@@ -117,8 +117,7 @@ public class ColdTieringBatchServiceComponent implements SmartInitializingSingle
 	 * @return           The next chunk, or empty.
 	 */
 	@Transactional(
-			propagation = Propagation.REQUIRED,
-			readOnly = true
+			propagation = Propagation.REQUIRED
 	)
 	public List<EvictionChunk> findNextEvictionChunk(
 			final EvictionChunk lastChunk,
@@ -248,35 +247,6 @@ public class ColdTieringBatchServiceComponent implements SmartInitializingSingle
 	}
 
 	/**
-	 * Schedules one batch of one table when its cron is set.
-	 *
-	 * @param  table Table.
-	 * @param  batch Batch.
-	 * @param  cron  Cron; {@link ColdTieringProperties#NO_SCHEDULE} for none.
-	 * @return       The scheduled task, or null when there is no cron or no scheduler.
-	 */
-	public ScheduledFuture<?> schedule(
-			final TieredTable table,
-			final TieringBatch batch,
-			final String cron) {
-		ScheduledFuture<?> task = null;
-		final TaskScheduler scheduler = this.taskScheduler.getIfAvailable();
-		if (scheduler == null) {
-			ColdTieringBatchServiceComponent.LOGGER.warn("[COLD_TIERING] no task scheduler: batches run only through run()");
-		}
-		else if (!ColdTieringProperties.NO_SCHEDULE.equals(cron)) {
-			this.unschedule(table, batch);
-			task = scheduler.schedule(() -> this.runScheduled(table, batch), new CronTrigger(cron));
-			synchronized (this.tasks) {
-				this.scheduled.put(batch.keySuffix(table.getId()), cron);
-				this.tasks.put(batch.keySuffix(table.getId()), task);
-			}
-			ColdTieringBatchServiceComponent.LOGGER.info("[COLD_TIERING] table={} batch={} scheduled: {}", table.getId(), batch, cron);
-		}
-		return task;
-	}
-
-	/**
 	 * Cancels the schedule of one batch of one table, if any.
 	 *
 	 * @param table Table.
@@ -292,6 +262,35 @@ public class ColdTieringBatchServiceComponent implements SmartInitializingSingle
 				task.cancel(false);
 			}
 		}
+	}
+
+	/**
+	 * Schedules one batch of one table when its cron is set.
+	 *
+	 * @param  table Table.
+	 * @param  batch Batch.
+	 * @param  cron  Cron; {@link ColdTieringProperties#NO_SCHEDULE} for none.
+	 * @return       The scheduled task, or null when there is no cron or no scheduler.
+	 */
+	public ScheduledFuture<?> schedule(
+			final TieredTable table,
+			final TieringBatch batch,
+			final String cron) {
+		ScheduledFuture<?> task = null;
+		this.unschedule(table, batch);
+		final TaskScheduler scheduler = this.taskScheduler.getIfAvailable();
+		if (scheduler == null) {
+			ColdTieringBatchServiceComponent.LOGGER.warn("[COLD_TIERING] no task scheduler: batches run only through run()");
+		}
+		else if (!ColdTieringProperties.NO_SCHEDULE.equals(cron)) {
+			task = scheduler.schedule(() -> this.runScheduled(table, batch), new CronTrigger(cron));
+			synchronized (this.tasks) {
+				this.scheduled.put(batch.keySuffix(table.getId()), cron);
+				this.tasks.put(batch.keySuffix(table.getId()), task);
+			}
+			ColdTieringBatchServiceComponent.LOGGER.info("[COLD_TIERING] table={} batch={} scheduled: {}", table.getId(), batch, cron);
+		}
+		return task;
 	}
 
 	/**

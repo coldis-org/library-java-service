@@ -255,7 +255,7 @@ the cold tier: a locked read or an internal lookup must never cost a `GET`.
 
 ### Schema
 
-The consumer owns the DDL (Flyway). `ColdTieringSchema.statements(table, concurrently)` returns
+The consumer owns the DDL (Flyway). `ColdTieringSchema.statements(table, watermarkType, concurrently)` returns (the added columns take the watermark column's type, so the eviction index's `COALESCE` never mixes `timestamp` and `timestamptz`)
 it; `create-schema=true` runs it at startup (tests; `IF NOT EXISTS` only):
 
 Flyway and `CREATE INDEX CONCURRENTLY`: the eviction index must be built outside a transaction.

@@ -23,16 +23,21 @@ public final class ColdTieringSchema {
 	/**
 	 * DDL of the lifecycle columns.
 	 *
-	 * @param  table Table.
-	 * @return       The statement.
+	 * @param  table         Table.
+	 * @param  watermarkType SQL type of the watermark column ({@code information_schema}'s
+	 *                           {@code data_type}): the added columns take it, so the eviction
+	 *                           index's {@code COALESCE} mixes no {@code timestamp} with
+	 *                           {@code timestamptz} (a session-time-zone cast is not immutable).
+	 * @return               The statement.
 	 */
 	public static String columnsStatement(
-			final TieredTable table) {
+			final TieredTable table,
+			final String watermarkType) {
 		final StringBuilder alter = new StringBuilder("ALTER TABLE ").append(table.getTableName());
 		if (table.isTouching()) {
-			alter.append(" ADD COLUMN IF NOT EXISTS ").append(table.getLastAccessedColumn()).append(" TIMESTAMPTZ,");
+			alter.append(" ADD COLUMN IF NOT EXISTS ").append(table.getLastAccessedColumn()).append(' ').append(watermarkType).append(',');
 		}
-		alter.append(" ADD COLUMN IF NOT EXISTS ").append(table.getArchivedAtColumn()).append(" TIMESTAMPTZ");
+		alter.append(" ADD COLUMN IF NOT EXISTS ").append(table.getArchivedAtColumn()).append(' ').append(watermarkType);
 		return alter.toString();
 	}
 
@@ -54,15 +59,17 @@ public final class ColdTieringSchema {
 	/**
 	 * Every statement a table needs, in order.
 	 *
-	 * @param  table        Table.
-	 * @param  concurrently Whether the eviction index is built {@code CONCURRENTLY}.
-	 * @return              The statements.
+	 * @param  table         Table.
+	 * @param  watermarkType SQL type of the watermark column.
+	 * @param  concurrently  Whether the eviction index is built {@code CONCURRENTLY}.
+	 * @return               The statements.
 	 */
 	public static List<String> statements(
 			final TieredTable table,
+			final String watermarkType,
 			final Boolean concurrently) {
 		final List<String> statements = new ArrayList<>();
-		statements.add(ColdTieringSchema.columnsStatement(table));
+		statements.add(ColdTieringSchema.columnsStatement(table, watermarkType));
 		statements.add(ColdTieringSchema.evictionIndexStatement(table, concurrently));
 		return statements;
 	}

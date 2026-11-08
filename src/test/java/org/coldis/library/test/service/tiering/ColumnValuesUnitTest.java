@@ -8,6 +8,7 @@ import java.time.ZoneId;
 import java.util.List;
 import java.util.Map;
 
+import org.coldis.library.service.tiering.ColdTieringSchema;
 import org.coldis.library.service.tiering.model.ColumnValues;
 import org.coldis.library.service.tiering.model.PathObjectKeyStrategy;
 import org.coldis.library.service.tiering.model.TieredTable;
@@ -39,7 +40,7 @@ public class ColumnValuesUnitTest {
 		for (final String value : ordered) {
 			final String segment = ColumnValues.toSegment(dataType, value);
 			Assertions.assertFalse(segment.contains("/"), segment);
-			Assertions.assertTrue(ColumnValues.same(dataType, value, ColumnValues.fromSegment(dataType, segment)), segment);
+			Assertions.assertTrue(ColumnValues.isSameValue(dataType, value, ColumnValues.fromSegment(dataType, segment)), segment);
 			if (keepsOrder && (previous != null)) {
 				Assertions.assertTrue(previous.compareTo(segment) < 0, previous + " < " + segment);
 			}
@@ -75,8 +76,8 @@ public class ColumnValuesUnitTest {
 		Assertions.assertInstanceOf(OffsetDateTime.class, column);
 		Assertions.assertEquals(local, ColumnValues.toJavaValue(column, LocalDateTime.class));
 		Assertions.assertEquals(local.toLocalDate(), LocalDate.parse(ColumnValues.ofMoment(ColumnValues.DATE, local)));
-		Assertions.assertTrue(ColumnValues.same(ColumnValues.TIMESTAMPTZ, "2026-01-10T12:00-03:00", "2026-01-10T15:00Z"));
-		Assertions.assertFalse(ColumnValues.same("bigint", "1", "2"));
+		Assertions.assertTrue(ColumnValues.isSameValue(ColumnValues.TIMESTAMPTZ, "2026-01-10T12:00-03:00", "2026-01-10T15:00Z"));
+		Assertions.assertFalse(ColumnValues.isSameValue("bigint", "1", "2"));
 		Assertions.assertEquals(local, ((OffsetDateTime) ColumnValues.parse(ColumnValues.TIMESTAMPTZ, ColumnValues.ofMoment(ColumnValues.TIMESTAMPTZ, local)))
 				.atZoneSameInstant(ZoneId.systemDefault()).toLocalDateTime());
 	}
@@ -118,6 +119,20 @@ public class ColumnValuesUnitTest {
 			storage.reset();
 			Files.deleteIfExists(storage.getRoot());
 		}
+	}
+
+	/**
+	 * The schema helper gives the added columns the watermark's type, so the eviction index never
+	 * mixes {@code timestamp} with {@code timestamptz}.
+	 */
+	@Test
+	public void testSchemaColumnsFollowTheWatermarkType() {
+		final TieredTable table = new TieredTable("schema-table", "schema_table", List.of("id"));
+		final String withoutZone = ColdTieringSchema.columnsStatement(table, "timestamp without time zone");
+		Assertions.assertTrue(withoutZone.contains("last_accessed_at timestamp without time zone"), withoutZone);
+		Assertions.assertTrue(withoutZone.contains("archived_at timestamp without time zone"), withoutZone);
+		final String withZone = ColdTieringSchema.columnsStatement(table, "timestamp with time zone");
+		Assertions.assertTrue(withZone.contains("archived_at timestamp with time zone"), withZone);
 	}
 
 }

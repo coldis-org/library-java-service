@@ -162,7 +162,7 @@ public class TieredSnapshot implements Serializable {
 	 * @return The last update.
 	 */
 	@Column(
-			columnDefinition = "TIMESTAMPTZ",
+			columnDefinition = "TIMESTAMP",
 			nullable = false
 	)
 	public LocalDateTime getUpdatedAt() {
@@ -184,7 +184,7 @@ public class TieredSnapshot implements Serializable {
 	 *
 	 * @return The last access.
 	 */
-	@Column(columnDefinition = "TIMESTAMPTZ")
+	@Column(columnDefinition = "TIMESTAMP")
 	public LocalDateTime getLastAccessedAt() {
 		return this.lastAccessedAt;
 	}
@@ -204,7 +204,7 @@ public class TieredSnapshot implements Serializable {
 	 *
 	 * @return The archive moment.
 	 */
-	@Column(columnDefinition = "TIMESTAMPTZ")
+	@Column(columnDefinition = "TIMESTAMP")
 	public LocalDateTime getArchivedAt() {
 		return this.archivedAt;
 	}
