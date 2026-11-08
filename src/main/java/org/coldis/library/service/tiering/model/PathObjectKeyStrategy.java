@@ -23,12 +23,12 @@ public class PathObjectKeyStrategy implements ObjectKeyStrategy {
 	public static final String NAME = "path";
 
 	/**
-	 * @see ObjectKeyStrategy#prefixOf(String, TieredTable, List)
+	 * @see ObjectKeyStrategy#prefixOf(String, ColdTable, List)
 	 */
 	@Override
 	public String prefixOf(
 			final String prefix,
-			final TieredTable table,
+			final ColdTable table,
 			final List<String> segments) {
 		final StringBuilder key = new StringBuilder(prefix).append(table.getId()).append('/');
 		for (final String segment : segments) {
@@ -38,12 +38,12 @@ public class PathObjectKeyStrategy implements ObjectKeyStrategy {
 	}
 
 	/**
-	 * @see ObjectKeyStrategy#keyOf(String, TieredTable, List, String)
+	 * @see ObjectKeyStrategy#keyOf(String, ColdTable, List, String)
 	 */
 	@Override
 	public String keyOf(
 			final String prefix,
-			final TieredTable table,
+			final ColdTable table,
 			final List<String> segments,
 			final String extension) {
 		return this.prefixOf(prefix, table, segments.subList(0, segments.size() - 1)) + segments.get(segments.size() - 1) + extension;

@@ -23,7 +23,7 @@ public interface ObjectKeyStrategy {
 	 */
 	String keyOf(
 			String prefix,
-			TieredTable table,
+			ColdTable table,
 			List<String> segments,
 			String extension);
 
@@ -37,7 +37,7 @@ public interface ObjectKeyStrategy {
 	 */
 	String prefixOf(
 			String prefix,
-			TieredTable table,
+			ColdTable table,
 			List<String> segments);
 
 	/**

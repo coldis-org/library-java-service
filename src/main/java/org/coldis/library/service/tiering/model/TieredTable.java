@@ -14,7 +14,7 @@ import org.coldis.library.model.SimpleMessage;
  * are generated from). The tunables (TTL, flags, chunk sizes, crons) are properties under
  * {@code org.coldis.library.service.tiering.table.<id>.}. A consumer declares one bean per table.
  */
-public class TieredTable {
+public class TieredTable implements ColdTable {
 
 	/** Default watermark column. */
 	public static final String DEFAULT_WATERMARK_COLUMN = "updated_at";
@@ -130,6 +130,7 @@ public class TieredTable {
 	 *
 	 * @return The id.
 	 */
+	@Override
 	public String getId() {
 		return this.id;
 	}
@@ -139,6 +140,7 @@ public class TieredTable {
 	 *
 	 * @return The table name.
 	 */
+	@Override
 	public String getTableName() {
 		return this.tableName;
 	}
@@ -148,6 +150,7 @@ public class TieredTable {
 	 *
 	 * @return The key columns.
 	 */
+	@Override
 	public List<String> getKeyColumns() {
 		return this.keyColumns;
 	}
