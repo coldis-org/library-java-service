@@ -33,6 +33,7 @@
 		<project.config.swagger.scope>compile</project.config.swagger.scope>
 		<project.config.source.test.fork-count>3</project.config.source.test.fork-count>
 		<project.config.source.test.retry-and-fail-fast.max-attempts>3</project.config.source.test.retry-and-fail-fast.max-attempts>
+		<aws.sdk.version>2.55.11</aws.sdk.version>
 	</properties>
 	
 	<scm>
@@ -77,6 +78,13 @@
 			<groupId>org.coldis.library</groupId>
 			<artifactId>persistence</artifactId>
 			<version>2.0.61</version>
+			<optional>true</optional>
+		</dependency>
+		<!-- Cold storage tiering, S3 cold tier: the consumer declares the SDK (and its S3 client bean). -->
+		<dependency>
+			<groupId>software.amazon.awssdk</groupId>
+			<artifactId>s3</artifactId>
+			<version>${aws.sdk.version}</version>
 			<optional>true</optional>
 		</dependency>
 
