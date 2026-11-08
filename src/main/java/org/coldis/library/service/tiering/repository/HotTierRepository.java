@@ -1,5 +1,8 @@
 package org.coldis.library.service.tiering.repository;
 
+import jakarta.persistence.EntityManager;
+import jakarta.persistence.PersistenceContext;
+
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Timestamp;
@@ -17,6 +20,7 @@ import org.coldis.library.service.tiering.model.ColdTieringPropertyNames;
 import org.coldis.library.service.tiering.model.TieredRowKey;
 import org.coldis.library.service.tiering.model.TieredTable;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
 import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
@@ -52,6 +56,10 @@ public class HotTierRepository {
 	/** JDBC template. */
 	@Autowired
 	private NamedParameterJdbcTemplate jdbcTemplate;
+
+	/** Entity manager, flushed before the write hook so its update sees (and is not overwritten by) the caller's pending JPA write. */
+	@PersistenceContext
+	private EntityManager entityManager;
 
 	/**
 	 * {@code k1 = :key_k1 AND k2 = :key_k2}.
@@ -218,6 +226,9 @@ public class HotTierRepository {
 			final TieredTable table,
 			final TieredRowKey key,
 			final LocalDateTime now) {
+		if (TransactionSynchronizationManager.isActualTransactionActive()) {
+			this.entityManager.flush();
+		}
 		final String sql = "UPDATE " + table.getTableName() + " SET " + table.getArchivedAtColumn() + " = NULL"
 				+ (table.isTouching() ? ", " + table.getLastAccessedColumn() + " = :now" : "") + " WHERE " + HotTierRepository.keyPredicate(table);
 		return this.jdbcTemplate.update(sql, HotTierRepository.keyParameters(ColumnValues.parseKey(table, table.getColumnTypes(), key)).addValue("now", now));

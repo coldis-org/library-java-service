@@ -203,7 +203,7 @@ lists the consumer's columns. Object metadata: `table`, `updated-at` (the waterm
 | Rehydration | per table, `Rehydration.INSERT` or `NONE`, definition default overridden by `table.<id>.rehydration`; `INSERT` needs the `LAST_ACCESS` clock (a rehydrated row must be able to expire by access), rejected otherwise at registration | yes | — |
 | Payload codec | `PayloadCodec` (`encode`, `decode`, `extension`, `contentType`); `payload-codec=gzip-json` selects the default; a consumer sets the property to another name and declares its own bean | yes | Parquet for window tiering |
 | Object key layout | `ObjectKeyStrategy` (`keyOf`, `prefixOf`, `lastSegmentOf`); `object-key-strategy=path` selects the default layout above; a consumer sets the property to another name and declares its own bean | yes | hashed segments |
-| Cold storage | `ColdStorageRepository` (`store`, `load` → empty on 404, `list` every page, `delete`): `S3ColdStorageRepository` on the consumer's `S3Client` bean (production; the unique one, or the `@Primary` one when the consumer has several); `FolderColdStorageRepository` (local folder: key → relative path, atomic write through a temporary file and a move, metadata in a `.meta` sidecar, lexicographic listing) and `InMemoryColdStorageRepository`, both library-provided test and local-run support, kept on purpose | yes | — |
+| Cold storage | `ColdStorageRepository` (`store`, `load` → empty on 404, `list` every page, `delete`): `S3ColdStorageRepository` on the consumer's `S3Client` bean (production; the one named `coldTieringS3Client` when the consumer has several, else the unique or `@Primary` one); `FolderColdStorageRepository` (local folder: key → relative path, atomic write through a temporary file and a move, metadata in a `.meta` sidecar, lexicographic listing) and `InMemoryColdStorageRepository`, both library-provided test and local-run support, kept on purpose | yes | — |
 | Scheduling | `ColdTieringBatchServiceComponent`: one `CronTrigger` per table and batch on the `TaskScheduler`, `-` disables, `run(tableId, batch)` on demand, `schedule`/`unschedule`/`cancelAll` and `getScheduled()` | yes | export batch (window) |
 | Tiered reads | on the component, by entity class: `findByIdTiered`, `findColdRow`, `findNewestTiered` → `TieredHit` (hot entity or cold row); `delete(key)` removes both tiers | yes | — |
 
@@ -258,6 +258,12 @@ the cold tier: a locked read or an internal lookup must never cost a `GET`.
 The consumer owns the DDL (Flyway). `ColdTieringSchema.statements(table, concurrently)` returns
 it; `create-schema=true` runs it at startup (tests; `IF NOT EXISTS` only):
 
+Flyway and `CREATE INDEX CONCURRENTLY`: the eviction index must be built outside a transaction.
+Put it in its own migration with a `V<n>__….sql.conf` holding `executeInTransaction=false`, and set
+`spring.flyway.postgresql.transactional-lock=false`: Flyway's default transactional advisory lock
+keeps a transaction open on its lock connection, and the concurrent build waits on it until the
+lock timeout (found by the first consumer, data-gathering).
+
 ```sql
 ALTER TABLE <hot> ADD COLUMN IF NOT EXISTS last_accessed_at TIMESTAMPTZ,   -- LAST_ACCESS only
                   ADD COLUMN IF NOT EXISTS archived_at TIMESTAMPTZ;
@@ -273,7 +279,7 @@ entity and its `@IdClass`) and fails the boot otherwise.
 
 ### Write, archive, read, touch, eviction, backfill
 
-- **Write**: the consumer's JPA save, then `afterWrite(key)` in the same transaction:
+- **Write**: the consumer's JPA save, then `afterWrite(key)` in the same transaction (the library flushes the persistence context first, so its update applies to the row just written and the consumer's flush cannot overwrite it with stale lifecycle values):
   `UPDATE hot SET archived_at = NULL[, last_accessed_at = now] WHERE key`, and the key posted to
   `cold-tiering/upload` after the commit.
 - **Archive** (`archive(key)`, upload listener and backfill EXECUTE, `REQUIRED`): `SELECT
@@ -317,7 +323,7 @@ entity and its `@IdClass`) and fails the boot otherwise.
 ### Dependency and wiring
 
 `software.amazon.awssdk:s3` is `<optional>` in this pom (`aws.sdk.version`, 2.55.11); the
-consumer declares the SDK and exposes an `S3Client` bean (unique, or `@Primary` among several);
+consumer declares the SDK and exposes an `S3Client` bean (unique; or, among several, one named `coldTieringS3Client` — no need to make it `@Primary` and take over the consumer's other clients);
 `ColdTieringS3Configuration` is `@ConditionalOnClass(S3Client.class)`. The upload runs under the
 hot row's `FOR UPDATE` lock inside the `long-timeout` transaction, so the consumer's `S3Client`
 must have call and attempt timeouts well below that (a hung PUT otherwise holds the row lock for
@@ -335,7 +341,7 @@ Global, `org.coldis.library.service.tiering.`:
 | `storage` | `s3` | `s3`, `folder` (local runs and tests) or `memory` (tests) |
 | `payload-codec` / `object-key-strategy` | `gzip-json` / `path` | Which codec and layout bean is active; another value with a consumer bean plugs a custom one |
 | `folder.root` | `${java.io.tmpdir}/cold-tiering` | Root directory of the folder storage |
-| `s3.bucket` | — | The bucket; the client is the consumer's `S3Client` bean (unique or `@Primary`) |
+| `s3.bucket` | — | The bucket; the client is the consumer's `S3Client` bean named `coldTieringS3Client` when present, else its unique (or `@Primary`) one |
 | `prefix` | `cold-tiering/` | Key prefix |
 | `create-schema` | `false` | Run the DDL at startup (tests) |
 | `upload.concurrency` / `touch.concurrency` | `1-4` / `1-2` | JMS listeners per instance |
