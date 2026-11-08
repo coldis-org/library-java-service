@@ -1,5 +1,6 @@
 package org.coldis.library.test.service.tiering;
 
+import java.nio.file.Files;
 import java.time.Duration;
 import java.time.LocalDateTime;
 import java.util.HashMap;
@@ -13,7 +14,7 @@ import org.coldis.library.service.batch.BatchService;
 import org.coldis.library.service.tiering.ColdRow;
 import org.coldis.library.service.tiering.ColdTieringBatchServiceComponent;
 import org.coldis.library.service.tiering.ColdTieringServiceComponent;
-import org.coldis.library.service.tiering.InMemoryColdStorageRepository;
+import org.coldis.library.service.tiering.FolderColdStorageRepository;
 import org.coldis.library.service.tiering.TieredRowKey;
 import org.coldis.library.service.tiering.TieringBatch;
 import org.coldis.library.test.StartTestWithContainerExtension;
@@ -34,7 +35,7 @@ import org.springframework.transaction.annotation.Transactional;
 /**
  * Cold tiering: write-through, eviction, cold reads with and without rehydration, backfill,
  * "newest on or before" reads and the library-owned scheduling, through consumer repositories in
- * another package.
+ * another package, on the local-folder cold storage.
  */
 @TestWithContainer(reuse = true)
 @ExtendWith(StartTestWithContainerExtension.class)
@@ -52,9 +53,9 @@ public class ColdTieringServiceTest extends ContainerTestHelper {
 	@Autowired
 	private ColdTieringBatchServiceComponent batchServiceComponent;
 
-	/** Cold storage. */
+	/** Cold storage (a local folder under the temporary directory). */
 	@Autowired
-	private InMemoryColdStorageRepository coldStorage;
+	private FolderColdStorageRepository coldStorage;
 
 	/** Snapshot repository. */
 	@Autowired
@@ -191,6 +192,8 @@ public class ColdTieringServiceTest extends ContainerTestHelper {
 		final String objectKey = this.tieringServiceComponent.objectKeyOf(this.rowKey(key));
 		Assertions.assertEquals("cold-tiering/tiered-snapshot/owner-1/2026-01-10T12:00:00.000000.json.gz", objectKey);
 		Assertions.assertTrue(this.coldStorage.load(objectKey).isPresent());
+		Assertions.assertTrue(Files.isRegularFile(this.coldStorage.getRoot().resolve(objectKey)));
+		Assertions.assertTrue(Files.readString(this.coldStorage.getRoot().resolve(objectKey + FolderColdStorageRepository.METADATA_SUFFIX)).contains("table=tiered-snapshot"));
 
 		// Past the TTL and the safety margin, the archived row is evicted.
 		TestHelper.moveClockBy(Duration.ofDays(20));
@@ -261,7 +264,7 @@ public class ColdTieringServiceTest extends ContainerTestHelper {
 		for (final TieredSnapshotKey key : keys) {
 			this.waitArchived(key);
 		}
-		Assertions.assertEquals(keys.size(), this.coldStorage.count());
+		Assertions.assertEquals(keys.size(), this.coldStorage.list("cold-tiering/tiered-snapshot/").size());
 	}
 
 	/**

@@ -181,7 +181,7 @@ lists the consumer's columns. Object metadata: `table`, `updated-at` (the waterm
 | Rehydration | per table, `Rehydration.INSERT` or `NONE`, definition default overridden by `table.<id>.rehydration` | yes | — |
 | Payload codec | `PayloadCodec` (`encode`, `decode`, `extension`, `contentType`); default gzip JSON, replaced by declaring another bean | yes | Parquet for window tiering |
 | Object key layout | `ObjectKeyStrategy` (`keyOf`, `prefixOf`, `lastSegmentOf`); default path layout above | yes | hashed segments |
-| Cold storage | `ColdStorageRepository` (`store`, `load` → empty on 404, `list` every page): `S3ColdStorageRepository` on the consumer's `S3Client` bean, `InMemoryColdStorageRepository` | yes | — |
+| Cold storage | `ColdStorageRepository` (`store`, `load` → empty on 404, `list` every page): `S3ColdStorageRepository` on the consumer's `S3Client` bean, `FolderColdStorageRepository` (local folder: key → relative path, atomic write through a temporary file and a move, metadata in a `.meta` sidecar, lexicographic listing), `InMemoryColdStorageRepository` | yes | — |
 | Scheduling | `ColdTieringBatchServiceComponent`: one `CronTrigger` per table and batch on the `TaskScheduler`, `-` disables, `run(tableId, batch)` on demand | yes | export batch (window) |
 | Tiered reads | `TieredRepository<T, ID>` fragment: `findByIdTiered`, `findColdRow`, `findNewestTiered`; `findById` itself not overridden | yes | — |
 
@@ -299,7 +299,8 @@ Global, `org.coldis.library.service.tiering.`:
 | Property | Default | Meaning |
 |---|---|---|
 | `org.coldis.configuration.service.cold-tiering-enabled` | `false` | Creates the beans, listeners and schedules |
-| `storage` | `s3` | `s3` or `memory` (tests) |
+| `storage` | `s3` | `s3`, `folder` (local runs and tests) or `memory` (tests) |
+| `folder.root` | `${java.io.tmpdir}/cold-tiering` | Root directory of the folder storage |
 | `s3.client-bean`, `s3.bucket` | `s3Client`, — | The consumer's client bean and the bucket |
 | `prefix` | `cold-tiering/` | Key prefix |
 | `create-schema` | `false` | Run the DDL at startup (tests) |
@@ -327,7 +328,8 @@ Slack messages per batch key. Micrometer counters are not built yet (open questi
 ## Testing
 
 `ColdTieringServiceTest` (`src/test/java/org/coldis/library/test/service/tiering/`), on
-`ContainerTestHelper` (Postgres, Redis, Artemis), one Spring context, no Mockito, `storage=memory`,
+`ContainerTestHelper` (Postgres, Redis, Artemis), one Spring context, no Mockito, `storage=folder` under
+`java.io.tmpdir` (the file, its `.meta` sidecar and the listing are asserted),
 `create-schema=true`, crons `-` except the archive table's eviction (`* * * * * *`, proves the
 library schedules). Two consumer-side fixtures in the test package: `TieredSnapshot`
 (`@IdClass` owner + `cached_at`, JSONB payload, `LAST_ACCESS`, versioned, `INSERT`) and
@@ -340,7 +342,8 @@ chunks; `findNewestTiered` over hot and cold snapshots (newest, as-of, before th
 owner); the `NONE` table: archived, evicted by the scheduled batch (batch record present),
 `findByIdTiered` empty, `findColdRow` holds the row, hot table stays empty.
 
-An S3 adapter test against LocalStack is not written (open question 3).
+`S3ColdStorageRepository` itself has no test in this library (no LocalStack): it is covered by the
+first consumer's tests, the folder storage exercises the same interface contract.
 
 ## Migration path
 
@@ -377,22 +380,27 @@ key layout `goal=<goal>/date=<day>/part-0.parquet` kept, rehydration none; its
 row in the partition is unarchived or recently accessed; rehydration into a default partition
 evicted by row delete), then the two full tables as row-tiered, versioned, `INSERT`.
 
+## Decisions
+
+- No index table, object keys derived from the primary key, whole-row objects, the SDK's
+  checksums for integrity (2026-11-08).
+- Business ids in object keys (the tax id as a path segment) are accepted for now; a keyed-HMAC
+  segment layout is a later improvement through `ObjectKeyStrategy`, not v1.
+- The S3 client is the consumer's bean; the library builds none.
+- No LocalStack in this library: the tests run on the folder storage; the S3 adapter is covered
+  by the first consumer's tests.
+- Rehydration is per table (`INSERT` / `NONE`), the log service uses `NONE`.
+- Table structure in a bean, tunables in properties; reads through the default-method fragment.
+
 ## Open questions
 
-1. **Business ids in object keys.** The default layout puts the tax id in the path. The reference
-   avoided that on purpose (keys show up in listings, inventories, access logs). Decide before
-   step 2: accept it (bucket policies and access logging), or build the keyed-HMAC segment
-   strategy (the extension point exists; a hashed prefix still supports `LIST` for "newest on or
-   before").
-2. **`LIST` cost of "newest on or before"** on keys with many versions (one Boa Vista CPF has at
+1. **`LIST` cost of "newest on or before"** on keys with many versions (one Boa Vista CPF has at
    most a few hundred snapshots: one page). A `start-after` optimisation from the ceiling is
    possible later.
-3. **S3 adapter test**: add a LocalStack test of `S3ColdStorageRepository` (the log service's
-   image, `localstack/localstack:4.4.0`) in this library, or trust the first consumer's tests.
-4. **Micrometer metrics** (`cold.tiering.read{tier}`, `upload{result}`, `evicted`,
+2. **Micrometer metrics** (`cold.tiering.read{tier}`, `upload{result}`, `evicted`,
    `unarchived.rows`): names proposed, not built.
-5. **Negative integer keys** break the fixed-width ordering of the default layout (only matters
+3. **Negative integer keys** break the fixed-width ordering of the default layout (only matters
    for versioned tables with a signed numeric version).
-6. **Default partition for `PARTITION_DROP` with rehydration** (step 4): add one to
+4. **Default partition for `PARTITION_DROP` with rehydration** (step 4): add one to
    `boa_vista_report_full`, or rehydrate into a separate table.
-7. **Log service move (step 3)**: worth it, or does only the row tiering move to the library?
+5. **Log service move (step 3)**: worth it, or does only the row tiering move to the library?
