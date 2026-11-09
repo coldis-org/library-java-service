@@ -220,8 +220,9 @@ public class ColdTieringServiceComponent {
 	}
 
 	/**
-	 * Archives a row in the caller's transaction (the upload listener, for write-through and
-	 * backfill requests): under the row's lock, uploads the whole row to its derived key and marks
+	 * Archives a row in the caller's transaction (the upload listener for write-through requests,
+	 * the backfill listener for backfill requests): under the row's lock, uploads the whole row to
+	 * its derived key and marks
 	 * the hot row archived at the watermark uploaded, if it was not rewritten meanwhile. The lock is
 	 * what orders concurrent archives of one key, since every one of them writes the same object:
 	 * the holder reads the current content, so an object is never overwritten with older content.

@@ -375,7 +375,9 @@ public class ColdTieringServiceTest extends ContainerTestHelper {
 		this.tieringServiceComponent.requestArchive(this.rowKey(barrierKey));
 		this.waitArchived(barrierKey);
 
+		// The sentinel survives: the duplicate uploaded nothing.
 		Assertions.assertTrue(Arrays.equals(sentinel, this.coldStorage.load(objectKey).orElseThrow()));
+		// The mark is kept (not cleared); this alone would not catch a re-upload, which writes the same mark.
 		Assertions.assertEquals(archivedAt, this.snapshotRepository.findById(key).orElseThrow().getArchivedAt());
 		Assertions.assertFalse(this.tieringServiceComponent.archive(this.rowKey(key)));
 	}
