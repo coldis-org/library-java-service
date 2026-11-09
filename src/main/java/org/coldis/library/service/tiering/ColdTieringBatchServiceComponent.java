@@ -34,7 +34,7 @@ import org.springframework.transaction.annotation.Transactional;
 /**
  * Batches of the cold tiering on the {@link BatchService}, scheduled by the library: for every
  * registered table, the eviction of archived rows past the TTL and the backfill that requests the
- * archive of every row whose current content is not in the cold tier (enqueued to the upload
+ * archive of every row whose current content is not in the cold tier (enqueued to the backfill
  * queue, archived by its listener one row per transaction). One cron per table and batch
  * ({@code -} for none); every instance schedules, the batch service keeps one run active (a start
  * while one is active continues it); each chunk is its own transaction.
@@ -171,7 +171,7 @@ public class ColdTieringBatchServiceComponent implements SmartInitializingSingle
 	}
 
 	/**
-	 * Backfill EXECUTE: enqueues one key to the upload queue; its listener archives the row in its
+	 * Backfill EXECUTE: enqueues one key to the backfill queue; its listener archives the row in its
 	 * own transaction (idempotent, so a key enqueued twice is harmless).
 	 *
 	 * @param key Row key.

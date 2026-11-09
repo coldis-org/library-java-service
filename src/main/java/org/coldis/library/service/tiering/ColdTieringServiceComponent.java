@@ -44,8 +44,11 @@ import org.springframework.transaction.annotation.Transactional;
 )
 public class ColdTieringServiceComponent {
 
-	/** Upload queue (write-through and backfill). */
+	/** Write-through upload queue. */
 	private static final String UPLOAD_QUEUE = "cold-tiering/upload";
+
+	/** Backfill archive queue: its own, so write-through uploads never wait behind a backfill. */
+	private static final String BACKFILL_QUEUE = "cold-tiering/backfill";
 
 	/** Touch queue. */
 	private static final String TOUCH_QUEUE = "cold-tiering/touch";
@@ -92,18 +95,29 @@ public class ColdTieringServiceComponent {
 	private JmsTemplateHelper jmsTemplateHelper;
 
 	/**
-	 * Posts a row key to a queue.
+	 * Posts a row key to a queue after the commit when inside a transaction, so the consumer never
+	 * reads the row before the write is visible.
 	 *
-	 * @param queue       Queue.
-	 * @param key         Row key.
-	 * @param afterCommit Whether to send after the commit when inside a transaction (so the consumer
-	 *                        never reads the row before the write is visible), or now.
+	 * @param queue Queue.
+	 * @param key   Row key.
 	 */
-	private void send(
+	private void sendAfterCommit(
 			final String queue,
-			final TieredRowKey key,
-			final Boolean afterCommit) {
-		this.jmsTemplateHelper.send(this.jmsTemplate, new JmsMessage<Serializable>().withDestination(queue).withMessage(key).withAfterCommit(afterCommit));
+			final TieredRowKey key) {
+		this.jmsTemplateHelper.send(this.jmsTemplate, new JmsMessage<Serializable>().withDestination(queue).withMessage(key).withAfterCommit(true));
+	}
+
+	/**
+	 * Posts a row key to a queue without deferring it to a commit callback (the JMS template's own
+	 * session transaction, if any, still decides when the broker releases it).
+	 *
+	 * @param queue Queue.
+	 * @param key   Row key.
+	 */
+	private void sendNow(
+			final String queue,
+			final TieredRowKey key) {
+		this.jmsTemplateHelper.send(this.jmsTemplate, new JmsMessage<Serializable>().withDestination(queue).withMessage(key).withAfterCommit(false));
 	}
 
 	/**
@@ -122,7 +136,7 @@ public class ColdTieringServiceComponent {
 			final LocalDateTime staleBefore = DateTimeHelper.getCurrentLocalDateTime().minus(tableProperties.getTouchThreshold());
 			final Optional<LocalDateTime> clock = this.hotTierRepository.clock(table, key);
 			if (clock.isPresent() && clock.get().isBefore(staleBefore)) {
-				this.send(ColdTieringServiceComponent.TOUCH_QUEUE, key, true);
+				this.sendAfterCommit(ColdTieringServiceComponent.TOUCH_QUEUE, key);
 			}
 		}
 	}
@@ -186,21 +200,23 @@ public class ColdTieringServiceComponent {
 		final TieredTable table = this.registry.getTable(key.tableId());
 		if (this.properties.of(table).getEnabled()) {
 			this.hotTierRepository.afterWrite(table, key, DateTimeHelper.getCurrentLocalDateTime());
-			this.send(ColdTieringServiceComponent.UPLOAD_QUEUE, key, true);
+			this.sendAfterCommit(ColdTieringServiceComponent.UPLOAD_QUEUE, key);
 		}
 	}
 
 	/**
-	 * Requests the archive of a row through the upload queue, sent now: the backfill's request, not
-	 * tied to a business write's commit. The upload listener archives it in its own transaction;
-	 * a duplicate request (a restarted run, a key also written meanwhile) is harmless, since
-	 * {@link #archive(TieredRowKey)} uploads nothing for content already archived.
+	 * Requests the archive of a row through the backfill queue: the backfill's request, not tied to
+	 * a business write, so not deferred to a commit callback (a session-transacted JMS template
+	 * still releases it when its transaction commits). The backfill listener archives it in its
+	 * own transaction; a duplicate request (a restarted run re-enqueueing pending keys, a key also
+	 * written meanwhile) is harmless, since {@link #archive(TieredRowKey)} uploads nothing for
+	 * content already archived.
 	 *
 	 * @param key Row key.
 	 */
 	public void requestArchive(
 			final TieredRowKey key) {
-		this.send(ColdTieringServiceComponent.UPLOAD_QUEUE, key, false);
+		this.sendNow(ColdTieringServiceComponent.BACKFILL_QUEUE, key);
 	}
 
 	/**
@@ -223,7 +239,7 @@ public class ColdTieringServiceComponent {
 		Boolean isUploaded = false;
 		final TieredTable table = this.registry.getTable(key.tableId());
 		final Optional<HotRow> hotRow = this.hotTierRepository.lockForArchive(table, key);
-		if (hotRow.isPresent() && !hotRow.get().archived()) {
+		if (hotRow.isPresent() && !hotRow.get().isArchived()) {
 			this.coldStorageRepository.store(this.tieredRepository.objectKeyOf(table, key), this.codec.encode(hotRow.get().rowJson()),
 					Map.of(ColdTieringServiceComponent.TABLE_METADATA, table.getId(), ColdTieringServiceComponent.UPDATED_AT_METADATA, hotRow.get().watermark(),
 							ColdStorageRepository.CONTENT_TYPE_METADATA, this.codec.contentType()));
@@ -240,8 +256,7 @@ public class ColdTieringServiceComponent {
 	}
 
 	/**
-	 * Upload consumer (write-through and backfill requests): one row per message, in its own
-	 * transaction, so the row lock covers only that row's upload.
+	 * Write-through upload consumer: one row per message, in its own transaction.
 	 *
 	 * @param key Row key.
 	 */
@@ -255,6 +270,26 @@ public class ColdTieringServiceComponent {
 			timeoutString = "${org.coldis.library.service.transaction.long-timeout}"
 	)
 	public void upload(
+			final TieredRowKey key) {
+		this.archive(key);
+	}
+
+	/**
+	 * Backfill archive consumer: one row per message, in its own transaction, so the row lock
+	 * covers only that row's upload; its concurrency sets the backfill's throughput.
+	 *
+	 * @param key Row key.
+	 */
+	@JmsListener(
+			destination = ColdTieringServiceComponent.BACKFILL_QUEUE,
+			concurrency = "${" + ColdTieringProperties.PREFIX + ".backfill.concurrency:1}",
+			containerFactory = "${org.coldis.library.service.batch.container-factory:jmsListenerContainerFactory}"
+	)
+	@Transactional(
+			propagation = Propagation.REQUIRED,
+			timeoutString = "${org.coldis.library.service.transaction.long-timeout}"
+	)
+	public void archiveBackfill(
 			final TieredRowKey key) {
 		this.archive(key);
 	}

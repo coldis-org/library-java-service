@@ -11,8 +11,8 @@ A reusable feature of this library that turns any Postgres table whose rows are 
 object key is **derived from the row's primary key**, so a cold read is one `GET` and a "newest on
 or before" read is one `LIST` on a prefix: no index table. The object holds the **whole row**
 (`row_to_json`), so rehydration (`json_populate_record`) needs nothing else. Rows are archived on
-write (asynchronously, after the commit) and by a backfill batch that enqueues the keys to the same
-upload queue; a row leaves Postgres only after
+write (asynchronously, after the commit) and by a backfill batch that enqueues the keys to its own
+queue, archived the same way; a row leaves Postgres only after
 S3 confirmed its *current* content; a cold read rehydrates the row for another TTL window when the
 table says so (`INSERT`), or serves it cold only (`NONE`, the log service). Two
 eviction strategies: **row delete** (chunked, on the coldis `BatchService`) and **partition drop**
@@ -121,7 +121,7 @@ TieredTable bean per hot table ───────► TieredTableRegistry (val
 JPA save of the hot row, then           ColdTieringServiceComponent (policy only)
   tiering.afterWrite(key) ────────────►   afterWrite (table enabled?) → HotTierRepository.afterWrite,
                                            upload request after commit (JMS cold-tiering/upload)
-                                          upload listener → archive(key): lockForArchive, store,
+                                          upload and backfill listeners → archive(key): lockForArchive, store,
                                            markArchived at the uploaded watermark
                                           touch listener → HotTierRepository.touch
 tiering.findByIdTiered(Entity.class, id)  hot? touch if stale : cold-read and INSERT? load + rehydrate
@@ -131,7 +131,7 @@ tiering.findNewestTiered(Entity.class,    newest hot vs newest cold key; cold wi
 tiering.delete(key)                       both tiers
                                         ColdTieringBatchServiceComponent (BatchService, CronTrigger per
                                           table and batch): backfill (enqueues keys to
-                                          cold-tiering/upload), eviction
+                                          cold-tiering/backfill), eviction
                                         ── repository package (access only, no policy, no component) ──
                                         TieredRepository: keyOf, objectKeyOf, findHot / findNewestHot
                                           (JPQL), loadCold (GET + decode), findNewestColdKey (LIST +
@@ -284,8 +284,8 @@ entity and its `@IdClass`) and fails the boot otherwise.
 - **Write**: the consumer's JPA save, then `afterWrite(key)` in the same transaction (the library flushes the persistence context first, so its update applies to the row just written and the consumer's flush cannot overwrite it with stale lifecycle values):
   `UPDATE hot SET archived_at = NULL[, last_accessed_at = now] WHERE key`, and the key posted to
   `cold-tiering/upload` after the commit.
-- **Archive** (`archive(key)`, the upload listener, one message per row, each in its own
-  `REQUIRED` transaction, for write-through and backfill requests alike): `SELECT updated_at,
+- **Archive** (`archive(key)`, the upload listener for write-through requests and the backfill
+  listener for backfill requests, one message per row, each in its own `REQUIRED` transaction): `SELECT updated_at,
   row_to_json(hot), archived_at >= updated_at … FOR UPDATE` (missing, or its current content
   already archived → nothing to do); encode; `PUT` to the derived key; `UPDATE hot SET archived_at = :watermark WHERE key AND updated_at = :watermark`,
   the watermark being the value read and uploaded, not the wall clock (0 rows → the rewrite's own
@@ -303,14 +303,19 @@ entity and its `@IdClass`) and fails the boot otherwise.
   (EvalPlanQual re-check) is kept. Works on partitioned tables (keys, not `ctid`).
 - **Backfill** (`BatchExecutor<TieredRowKey>`, *queued*): GET = keys after the cursor with
   `archived_at IS NULL OR archived_at < updated_at`, row-value comparison on the key in key order;
-  EXECUTE = `enqueueKey`, which sends the key to `cold-tiering/upload` right away (not after a
-  commit: it is not tied to a business write). The upload listener archives it, one row per
-  transaction, so a row's lock covers only its own upload and the batch chunk holds no row lock.
+  EXECUTE = `enqueueKey`, which sends the key to `cold-tiering/backfill`, a queue of its own so
+  write-through uploads (`cold-tiering/upload`) never wait behind a backfill. The send is not
+  deferred to a commit callback (it is not tied to a business write; a session-transacted JMS
+  template still releases it at its transaction's commit). The backfill listener archives it, one
+  row per transaction, so a row's lock covers only its own upload and the batch chunk holds no row
+  lock.
   The keyset cursor never selects again a key enqueued earlier in the run, archived yet or not.
   Resumes from the batch record after a restart; a run restarted from scratch (expired, or the
   record cleaned) re-enqueues the keys not archived yet, which is harmless: a duplicate request
-  finds the content archived and uploads nothing. Throughput is set by the consumers
-  (`upload.concurrency`), the enqueue rate by `chunk-size` / `delay-between-chunks` (*Sizing the
+  finds the content archived and uploads nothing. A run's FINISH therefore means "every key
+  enqueued", not "every row archived": the backfill queue may still hold keys, and the row's
+  `archived_at` (or the next run's empty GET) is what confirms the archive. Throughput is set by
+  the consumers (`backfill.concurrency`), the enqueue rate by `chunk-size` / `delay-between-chunks` (*Sizing the
   backfill*).
 - **Scheduling**: at startup, for every registered table and each batch whose cron is not `-`,
   a `CronTrigger` task on the `TaskScheduler` calls `batchService.start(executor, false, false)`
@@ -358,7 +363,7 @@ Global, `org.coldis.library.service.tiering.`:
 | `s3.bucket` | — | The bucket; the client is the consumer's `S3Client` bean named `coldTieringS3Client` when present, else its unique (or `@Primary`) one |
 | `prefix` | `cold-tiering/` | Key prefix |
 | `create-schema` | `false` | Run the DDL at startup (tests) |
-| `upload.concurrency` / `touch.concurrency` | `1` / `1-2` | JMS listeners per instance; the upload listeners archive write-through and backfill requests, so they set the backfill's throughput |
+| `upload.concurrency` / `backfill.concurrency` / `touch.concurrency` | `1` / `1` / `1-2` | JMS listeners per instance: write-through uploads (`cold-tiering/upload`), backfill archives (`cold-tiering/backfill`, they set the backfill's throughput), touches |
 | `defaults.*` | below | Values every table inherits |
 
 Per table, `defaults.` or `table.<tableId>.` (the bean gives the structure, the properties the
@@ -375,12 +380,12 @@ tunables):
 
 #### Sizing the backfill
 
-The backfill only enqueues; the upload listeners archive. Match the enqueue rate to what the
+The backfill only enqueues; the backfill listeners archive. Match the enqueue rate to what the
 consumers drain:
 
 `chunk-size / delay-between-chunks ≈ consumers × 1 / per-row latency`
 
-with consumers = `upload.concurrency` × instances and the per-row latency that of one archive
+with consumers = `backfill.concurrency` × instances and the per-row latency that of one archive
 (lock, `row_to_json`, gzip, `PUT`, mark: ~30 ms in production). Enqueueing faster only grows the
 queue, which is bounded by what the broker holds (a backlog of 1 M small messages is fine), not by
 the database: no row is locked while its key waits. The defaults suit one consumer: `1000` keys
@@ -389,14 +394,18 @@ every `PT30S` ≈ 33 keys/s ≈ one consumer at ~30 ms per row, ~2.9 M rows a da
 per table, e.g.:
 
 ```properties
-org.coldis.library.service.tiering.upload.concurrency=8-16
+org.coldis.library.service.tiering.backfill.concurrency=8-16
 org.coldis.library.service.tiering.table.<tableId>.backfill.chunk-size=5000
 org.coldis.library.service.tiering.table.<tableId>.backfill.delay-between-chunks=PT5S
 ```
 
 ≈ 1,000 keys/s enqueued, drained by 16 listeners per instance across a few instances at ~30 ms
-per row. Write-through uploads share the queue, so a large backlog delays them by its length (they
-are not needed for correctness: eviction waits for the archive).
+per row. Raise `backfill.concurrency` together with the backfill rate: a rate above what the
+consumers drain only grows the backlog. Write-through uploads have their own queue and consumers,
+so a backfill backlog never delays them. Alert on the depth and the oldest message's age of
+`cold-tiering/backfill` and `cold-tiering/upload` (a growing backfill queue means the rate
+outpaces the consumers; a growing upload queue means write-through lags, and eviction waits for
+it).
 
 ### Observability
 
@@ -421,7 +430,8 @@ eviction deletes it and keeps a never-archived row and one rewritten without the
 object for the former) → `findByIdTiered` rehydrates with the original `updated_at` → a read past
 the threshold touches → object removed → empty; a rewrite after the archive is re-archived before
 eviction, and `delete` clears both tiers; the backfill enqueues seeded rows in chunks, each key
-once, and the upload listener archives them all; a duplicate archive request of an archived row
+once, and the backfill listener archives them all, as it does a key enqueued through the
+deprecated `archiveKey` delegate (runs persisted before the upgrade); a duplicate archive request of an archived row
 uploads nothing (a sentinel object stays in place, the mark is unchanged); a backfill start while a
 run is active (slowed by a runtime table override) keeps its start, cursor and count;
 `findNewestTiered` over hot and cold snapshots (newest, as-of, before the first, unknown owner);
@@ -485,7 +495,7 @@ evicted by row delete), then the two full tables as row-tiered, versioned, `INSE
 - Rehydration is per table (`INSERT` / `NONE`), the log service uses `NONE`.
 - Table structure in a bean, tunables in properties; access logic in the repository package, policy
   in the component, reads on the component by entity class (no repository fragment).
-- The backfill enqueues keys to the upload queue instead of archiving inline in the chunk's
+- The backfill enqueues keys to its own queue (`cold-tiering/backfill`) instead of archiving inline in the chunk's
   transaction: inline archiving ran one row at a time (~26 rows/s in production) and held every
   row lock of a chunk until it committed; queued, the listeners set the throughput and each lock
   covers one row (2026-11-09).

@@ -323,12 +323,14 @@ public class ColdTieringServiceTest extends ContainerTestHelper {
 
 	/**
 	 * The backfill enqueues rows written without the hook, across chunks, each key once (the cursor
-	 * never selects a key enqueued earlier in the run, archived or not yet), and the upload listener
-	 * archives every one.
+	 * never selects a key enqueued earlier in the run, archived or not yet), and the backfill
+	 * listener archives every one; the deprecated delegate that runs persisted by earlier versions
+	 * still name enqueues too.
 	 *
 	 * @throws Exception If the test fails.
 	 */
 	@Test
+	@SuppressWarnings("deprecation")
 	@DisplayName("Snapshot: the backfill enqueues every unarchived row once and the listener archives it")
 	public void testBackfill() throws Exception {
 		final List<TieredSnapshotKey> keys = this.seedUnarchived();
@@ -340,6 +342,12 @@ public class ColdTieringServiceTest extends ContainerTestHelper {
 		Assertions.assertTrue(TestHelper.waitUntilValid(this::snapshotBackfillRecord, batchRecord -> (batchRecord != null) && batchRecord.isFinished(),
 				TestHelper.REGULAR_WAIT * 4, TestHelper.SHORT_WAIT));
 		Assertions.assertEquals(Long.valueOf(keys.size()), this.snapshotBackfillRecord().getLastProcessedCount());
+
+		// A run persisted before the upgrade still names the old delegate: it enqueues as well.
+		final TieredSnapshotKey legacyKey = new TieredSnapshotKey("owner-9", LocalDateTime.of(2026, 1, 6, 0, 0));
+		this.seed(new TieredSnapshot(legacyKey.getOwnerId(), legacyKey.getCachedAt(), new HashMap<>(Map.of("marker", "legacy"))));
+		this.batchServiceComponent.archiveKey(this.rowKey(legacyKey));
+		this.waitArchived(legacyKey);
 	}
 
 	/**
@@ -359,7 +367,8 @@ public class ColdTieringServiceTest extends ContainerTestHelper {
 		final byte[] sentinel = new byte[] { 1 };
 		this.coldStorage.store(objectKey, sentinel, Map.of());
 
-		// The duplicate, then an unarchived row as a barrier: one consumer takes them in order.
+		// The duplicate, then an unarchived row as a barrier, both on the backfill queue: its single
+		// consumer (pinned in the test properties) takes them in order.
 		this.tieringServiceComponent.requestArchive(this.rowKey(key));
 		final TieredSnapshotKey barrierKey = new TieredSnapshotKey("owner-8", LocalDateTime.of(2026, 3, 2, 12, 0));
 		this.seed(new TieredSnapshot(barrierKey.getOwnerId(), barrierKey.getCachedAt(), new HashMap<>(Map.of("marker", "barrier"))));

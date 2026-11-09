@@ -45,10 +45,10 @@ public class HotTierRepository {
 	 *
 	 * @param watermark Watermark value when read (string form; the archive mark takes it).
 	 * @param rowJson   The whole row as JSON.
-	 * @param archived  Whether the cold tier already holds this content (archive mark at or after
-	 *                      the watermark): a duplicate archive request has nothing to upload.
+	 * @param isArchived Whether the cold tier already holds this content (archive mark at or after
+	 *                       the watermark): a duplicate archive request has nothing to upload.
 	 */
-	public record HotRow(String watermark, String rowJson, Boolean archived) {
+	public record HotRow(String watermark, String rowJson, Boolean isArchived) {
 
 	}
 
