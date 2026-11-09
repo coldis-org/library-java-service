@@ -1,5 +1,7 @@
 package org.coldis.library.service.http;
 
+import java.util.Objects;
+
 import org.apache.catalina.connector.Connector;
 import org.apache.coyote.AbstractProtocol;
 import org.coldis.library.service.ServiceConfiguration;
@@ -66,18 +68,26 @@ public class RequestThreadsFloorCustomizer implements WebServerFactoryCustomizer
 	}
 
 	/**
-	 * Whether the request-thread cap comes from the library defaults. Spring uses
-	 * the first property source, in precedence order, that holds the property.
+	 * Whether the request-thread cap is the library default. Spring uses the first
+	 * property source, in precedence order, that holds the property; the cap is
+	 * the default when that source holds the same value as the library defaults.
+	 * Values are compared rather than sources because a library a service depends
+	 * on may load {@code service.properties} again under another name: Spring
+	 * gives that copy precedence over the library defaults, and its value is still
+	 * the default. A cap the service sets to the default's own value counts as the
+	 * default.
 	 *
 	 * @param  propertySources Property sources, in precedence order.
-	 * @return                 Whether the cap comes from the library defaults.
+	 * @return                 Whether the cap is the library default.
 	 */
 	public static Boolean isMaxThreadsFromLibraryDefaults(
 			final PropertySources propertySources) {
+		final PropertySource<?> libraryDefaults = propertySources.get(ServiceConfiguration.LIBRARY_DEFAULTS_PROPERTY_SOURCE);
 		final PropertySource<?> capSource = propertySources.stream()
 				.filter(propertySource -> !ConfigurationPropertySources.isAttachedConfigurationPropertySource(propertySource))
 				.filter(propertySource -> propertySource.containsProperty(RequestThreadsFloorCustomizer.MAX_THREADS_PROPERTY)).findFirst().orElse(null);
-		return (capSource != null) && ServiceConfiguration.LIBRARY_DEFAULTS_PROPERTY_SOURCE.equals(capSource.getName());
+		return (libraryDefaults != null) && (capSource != null) && Objects.equals(capSource.getProperty(RequestThreadsFloorCustomizer.MAX_THREADS_PROPERTY),
+				libraryDefaults.getProperty(RequestThreadsFloorCustomizer.MAX_THREADS_PROPERTY));
 	}
 
 	/**

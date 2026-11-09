@@ -9,7 +9,10 @@ import org.coldis.library.service.http.RequestThreadsFloorCustomizer;
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.springframework.boot.test.context.TestConfiguration;
 import org.springframework.boot.web.embedded.tomcat.TomcatServletWebServerFactory;
+import org.springframework.context.annotation.AnnotationConfigApplicationContext;
+import org.springframework.context.annotation.PropertySource;
 import org.springframework.core.env.MapPropertySource;
 import org.springframework.core.env.MutablePropertySources;
 import org.springframework.core.env.StandardEnvironment;
@@ -21,6 +24,17 @@ import org.springframework.core.env.SystemEnvironmentPropertySource;
  */
 @DisplayName("RequestThreadsFloorCustomizer — floor for the default request-thread cap")
 public class RequestThreadsFloorCustomizerUnitTest {
+
+	/**
+	 * Configuration that loads the library defaults again, without a name, as a
+	 * library a service depends on may do. Spring processes it after the
+	 * library's own configuration, so its copy takes precedence over the named
+	 * library defaults.
+	 */
+	@TestConfiguration(proxyBeanMethods = false)
+	@PropertySource("classpath:service.properties")
+	static class ReloadedLibraryDefaultsConfiguration {
+	}
 
 	/**
 	 * Creates a connector with the given request-thread cap.
@@ -130,6 +144,33 @@ public class RequestThreadsFloorCustomizerUnitTest {
 		propertySources.addLast(new MapPropertySource("applicationConfig", Map.of("other.property", "value")));
 		propertySources.addLast(this.createLibraryDefaults());
 		Assertions.assertTrue(RequestThreadsFloorCustomizer.isMaxThreadsFromLibraryDefaults(propertySources));
+	}
+
+	/**
+	 * Tests that the library defaults loaded again under another name still count
+	 * as the default. The copy takes precedence over the library's named source,
+	 * so the cap Spring uses is read from the copy.
+	 */
+	@Test
+	@DisplayName("a cap from the library defaults loaded again under another name is the default")
+	public void testCapFromReloadedLibraryDefaults() {
+		try (AnnotationConfigApplicationContext context = new AnnotationConfigApplicationContext(ServiceConfiguration.class,
+				ReloadedLibraryDefaultsConfiguration.class)) {
+			final MutablePropertySources propertySources = context.getEnvironment().getPropertySources();
+			Assertions.assertNotEquals(ServiceConfiguration.LIBRARY_DEFAULTS_PROPERTY_SOURCE,
+					propertySources.stream().filter(propertySource -> propertySource.containsProperty(RequestThreadsFloorCustomizer.MAX_THREADS_PROPERTY))
+							.map(propertySource -> propertySource.getName()).findFirst().orElse(null));
+			Assertions.assertTrue(RequestThreadsFloorCustomizer.isMaxThreadsFromLibraryDefaults(propertySources));
+		}
+	}
+
+	/** Tests that the default's value, without the library defaults, is not the default. */
+	@Test
+	@DisplayName("the default's value without the library defaults is not the default")
+	public void testDefaultValueWithoutLibraryDefaults() {
+		final MutablePropertySources propertySources = new MutablePropertySources();
+		propertySources.addLast(new MapPropertySource("applicationConfig", Map.of(RequestThreadsFloorCustomizer.MAX_THREADS_PROPERTY, "${AVAILABLE_CPUS_5X:16}")));
+		Assertions.assertFalse(RequestThreadsFloorCustomizer.isMaxThreadsFromLibraryDefaults(propertySources));
 	}
 
 	/** Tests that a cap the service sets in its own properties is not the default. */
