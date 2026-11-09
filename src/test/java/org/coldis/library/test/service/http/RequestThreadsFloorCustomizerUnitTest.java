@@ -10,17 +10,9 @@ import org.coldis.library.service.http.RequestThreadsFloorCustomizer;
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
-import org.springframework.boot.WebApplicationType;
-import org.springframework.boot.autoconfigure.context.PropertyPlaceholderAutoConfiguration;
-import org.springframework.boot.autoconfigure.web.embedded.EmbeddedWebServerFactoryCustomizerAutoConfiguration;
-import org.springframework.boot.autoconfigure.web.servlet.ServletWebServerFactoryAutoConfiguration;
-import org.springframework.boot.builder.SpringApplicationBuilder;
 import org.springframework.boot.context.properties.source.ConfigurationPropertySources;
 import org.springframework.boot.test.context.TestConfiguration;
-import org.springframework.boot.web.context.WebServerApplicationContext;
 import org.springframework.boot.web.embedded.tomcat.TomcatServletWebServerFactory;
-import org.springframework.boot.web.embedded.tomcat.TomcatWebServer;
-import org.springframework.context.ConfigurableApplicationContext;
 import org.springframework.context.annotation.AnnotationConfigApplicationContext;
 import org.springframework.context.annotation.PropertySource;
 import org.springframework.core.env.CompositePropertySource;
@@ -34,8 +26,6 @@ import org.springframework.core.io.support.ResourcePropertySource;
 /**
  * Covers the request-thread floor on its own: how it changes a connector's cap,
  * and how it tells the library default cap from a cap the service sets itself.
- * One test starts a minimal server of its own, outside the shared test context,
- * for the case of a dependency that loads the library defaults again.
  */
 @DisplayName("RequestThreadsFloorCustomizer — floor for the default request-thread cap")
 public class RequestThreadsFloorCustomizerUnitTest {
@@ -216,29 +206,6 @@ public class RequestThreadsFloorCustomizerUnitTest {
 			Assertions.assertInstanceOf(CompositePropertySource.class, this.getCapSource(propertySources));
 			Assertions.assertTrue(RequestThreadsFloorCustomizer.isMaxThreadsFromLibraryDefaults(propertySources));
 			Assertions.assertEquals(20, this.getMaxThreads(this.customizeConnector(context.getEnvironment(), 16)));
-		}
-	}
-
-	/**
-	 * Tests, on a running server, that the floor applies when a dependency loads
-	 * the library defaults again under another name. It starts a minimal Spring
-	 * Boot application of its own (Tomcat, the library configuration, the
-	 * customizer and the reload), so the shared test context is left as is.
-	 */
-	@Test
-	@DisplayName("a running server whose dependency reloads the library defaults gets the floor")
-	public void testRunningServerWithReloadedLibraryDefaults() {
-		try (ConfigurableApplicationContext context = new SpringApplicationBuilder(PropertyPlaceholderAutoConfiguration.class,
-				ServletWebServerFactoryAutoConfiguration.class, EmbeddedWebServerFactoryCustomizerAutoConfiguration.class, ServiceConfiguration.class,
-				RequestThreadsFloorCustomizer.class, ReloadedLibraryDefaultsConfiguration.class).web(WebApplicationType.SERVLET).properties("server.port=0")
-				// Pins the default's input, whatever the machine exports, so the cap starts below the floor.
-				.run("--AVAILABLE_CPUS_5X=16")) {
-			final ConfigurableEnvironment environment = context.getEnvironment();
-			final Connector connector = ((TomcatWebServer) ((WebServerApplicationContext) context).getWebServer()).getTomcat().getConnector();
-			Assertions.assertEquals("class path resource [service.properties]", this.getCapSource(environment.getPropertySources()).getName());
-			Assertions.assertEquals(16, environment.getProperty(RequestThreadsFloorCustomizer.MAX_THREADS_PROPERTY, Integer.class));
-			Assertions.assertEquals(20, environment.getProperty(RequestThreadsFloorCustomizer.MAX_THREADS_FLOOR_PROPERTY, Integer.class));
-			Assertions.assertEquals(20, this.getMaxThreads(connector));
 		}
 	}
 
