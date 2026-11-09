@@ -33,10 +33,11 @@ import org.springframework.transaction.annotation.Transactional;
 
 /**
  * Batches of the cold tiering on the {@link BatchService}, scheduled by the library: for every
- * registered table, the eviction of archived rows past the TTL and the backfill that archives
- * every row whose current content is not in the cold tier. One cron per table and batch
- * ({@code -} for none); every instance schedules, the batch service keeps one run active; each
- * chunk is its own transaction.
+ * registered table, the eviction of archived rows past the TTL and the backfill that requests the
+ * archive of every row whose current content is not in the cold tier (enqueued to the upload
+ * queue, archived by its listener one row per transaction). One cron per table and batch
+ * ({@code -} for none); every instance schedules, the batch service keeps one run active (a start
+ * while one is active continues it); each chunk is its own transaction.
  */
 @Component(ColdTieringBatchServiceComponent.BEAN_NAME)
 @ConditionalOnProperty(
@@ -151,7 +152,8 @@ public class ColdTieringBatchServiceComponent implements SmartInitializingSingle
 	/**
 	 * Backfill GET: the next unarchived keys after the cursor, in key order; empty ends the run.
 	 *
-	 * @param  lastKey   Last key archived (cursor), null on the first call.
+	 * @param  lastKey   Last key enqueued (cursor: a key enqueued in this run is never selected
+	 *                       again), null on the first call.
 	 * @param  size      Keys per call.
 	 * @param  arguments Batch arguments (table).
 	 * @return           The next keys.
@@ -169,17 +171,27 @@ public class ColdTieringBatchServiceComponent implements SmartInitializingSingle
 	}
 
 	/**
-	 * Backfill EXECUTE: archives one row (idempotent).
+	 * Backfill EXECUTE: enqueues one key to the upload queue; its listener archives the row in its
+	 * own transaction (idempotent, so a key enqueued twice is harmless).
 	 *
 	 * @param key Row key.
 	 */
-	@Transactional(
-			propagation = Propagation.REQUIRED,
-			timeoutString = "${org.coldis.library.service.transaction.long-timeout}"
-	)
+	public void enqueueKey(
+			final TieredRowKey key) {
+		this.tieringServiceComponent.requestArchive(key);
+	}
+
+	/**
+	 * Backfill EXECUTE of runs persisted by earlier versions (their batch record names this
+	 * delegate until the next start replaces it): enqueues, as {@link #enqueueKey(TieredRowKey)}.
+	 *
+	 * @param      key Row key.
+	 * @deprecated     Use {@link #enqueueKey(TieredRowKey)}.
+	 */
+	@Deprecated
 	public void archiveKey(
 			final TieredRowKey key) {
-		this.tieringServiceComponent.archive(key);
+		this.enqueueKey(key);
 	}
 
 	/**
@@ -200,7 +212,7 @@ public class ColdTieringBatchServiceComponent implements SmartInitializingSingle
 			final Class<?> itemType = batch == TieringBatch.EVICTION ? EvictionChunk.class : TieredRowKey.class;
 			final Long size = batch == TieringBatch.EVICTION ? 1L : batchProperties.getChunkSize();
 			final Map<BatchAction, String> delegates = batch == TieringBatch.EVICTION ? Map.of(BatchAction.GET, "findNextEvictionChunk", BatchAction.EXECUTE, "evictChunk")
-					: Map.of(BatchAction.GET, "findNextKeysToArchive", BatchAction.EXECUTE, "archiveKey");
+					: Map.of(BatchAction.GET, "findNextKeysToArchive", BatchAction.EXECUTE, "enqueueKey");
 			final BatchExecutor<Object> executor = BatchExecutor.withFixedRate(itemType.getName(), batch.keySuffix(table.getId()), size,
 					batchProperties.getDelayBetweenChunks(), batchProperties.getFinishWithin(), ColdTieringBatchServiceComponent.BEAN_NAME, new HashMap<>(delegates),
 					new HashMap<>(Map.of(ColdTieringBatchServiceComponent.TABLE_ARGUMENT, table.getId())));

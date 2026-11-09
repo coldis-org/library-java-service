@@ -3,6 +3,7 @@ package org.coldis.library.test.service.tiering;
 import java.nio.file.Files;
 import java.time.Duration;
 import java.time.LocalDateTime;
+import java.util.Arrays;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -10,10 +11,14 @@ import java.util.Optional;
 import java.util.concurrent.ScheduledFuture;
 
 import org.coldis.library.helper.DateTimeHelper;
+import org.coldis.library.persistence.keyvalue.KeyValue;
 import org.coldis.library.persistence.keyvalue.KeyValueServiceComponent;
+import org.coldis.library.service.batch.BatchExecutor;
 import org.coldis.library.service.batch.BatchService;
 import org.coldis.library.service.tiering.model.ColdRow;
 import org.coldis.library.service.tiering.ColdTieringBatchServiceComponent;
+import org.coldis.library.service.tiering.ColdTieringProperties;
+import org.coldis.library.service.tiering.ColdTieringProperties.TableProperties;
 import org.coldis.library.service.tiering.ColdTieringServiceComponent;
 import org.coldis.library.service.tiering.TieredHit;
 import org.coldis.library.service.tiering.model.TieredRowKey;
@@ -79,6 +84,14 @@ public class ColdTieringServiceTest extends ContainerTestHelper {
 	/** Event repository. */
 	@Autowired
 	private TieredEventRepository eventRepository;
+
+	/** Tiering properties (one test slows a run down by overriding a table at runtime). */
+	@Autowired
+	private ColdTieringProperties properties;
+
+	/** Batch service. */
+	@Autowired
+	private BatchService batchService;
 
 	/**
 	 * Clean state.
@@ -283,24 +296,117 @@ public class ColdTieringServiceTest extends ContainerTestHelper {
 	}
 
 	/**
-	 * The backfill archives rows written without the hook, resuming across chunks.
+	 * The snapshot table's backfill batch record.
 	 *
-	 * @throws Exception If the test fails.
+	 * @return The record, or null when none.
 	 */
-	@Test
-	@DisplayName("Snapshot: the backfill archives every unarchived row")
-	public void testBackfill() throws Exception {
+	private BatchExecutor<?> snapshotBackfillRecord() {
+		return (BatchExecutor<?>) this.keyValueService.getRepository()
+				.findById(BatchService.BATCH_KEY_PREFIX + TieringBatch.BACKFILL.keySuffix(ColdTieringTestConfiguration.SNAPSHOT_TABLE)).map(KeyValue::getValue)
+				.orElse(null);
+	}
+
+	/**
+	 * Seeds snapshots without the hook (rows only the backfill finds), one per key.
+	 *
+	 * @return The keys, in key order.
+	 */
+	private List<TieredSnapshotKey> seedUnarchived() {
 		final List<TieredSnapshotKey> keys = List.of(new TieredSnapshotKey("owner-3", LocalDateTime.of(2026, 1, 1, 0, 0)),
 				new TieredSnapshotKey("owner-3", LocalDateTime.of(2026, 1, 2, 0, 0)), new TieredSnapshotKey("owner-4", LocalDateTime.of(2026, 1, 3, 0, 0)),
 				new TieredSnapshotKey("owner-5", LocalDateTime.of(2026, 1, 4, 0, 0)), new TieredSnapshotKey("owner-6", LocalDateTime.of(2026, 1, 5, 0, 0)));
 		for (final TieredSnapshotKey key : keys) {
 			this.seed(new TieredSnapshot(key.getOwnerId(), key.getCachedAt(), new HashMap<>(Map.of("marker", key.getOwnerId()))));
 		}
+		return keys;
+	}
+
+	/**
+	 * The backfill enqueues rows written without the hook, across chunks, each key once (the cursor
+	 * never selects a key enqueued earlier in the run, archived or not yet), and the upload listener
+	 * archives every one.
+	 *
+	 * @throws Exception If the test fails.
+	 */
+	@Test
+	@DisplayName("Snapshot: the backfill enqueues every unarchived row once and the listener archives it")
+	public void testBackfill() throws Exception {
+		final List<TieredSnapshotKey> keys = this.seedUnarchived();
 		Assertions.assertTrue(this.batchServiceComponent.run(ColdTieringTestConfiguration.SNAPSHOT_TABLE, TieringBatch.BACKFILL));
 		for (final TieredSnapshotKey key : keys) {
 			this.waitArchived(key);
 		}
 		Assertions.assertEquals(keys.size(), this.coldStorage.list("cold-tiering/tiered-snapshot/").size());
+		Assertions.assertTrue(TestHelper.waitUntilValid(this::snapshotBackfillRecord, batchRecord -> (batchRecord != null) && batchRecord.isFinished(),
+				TestHelper.REGULAR_WAIT * 4, TestHelper.SHORT_WAIT));
+		Assertions.assertEquals(Long.valueOf(keys.size()), this.snapshotBackfillRecord().getLastProcessedCount());
+	}
+
+	/**
+	 * A duplicate archive request for content already archived uploads nothing and leaves the row
+	 * archived at the same watermark.
+	 *
+	 * @throws Exception If the test fails.
+	 */
+	@Test
+	@DisplayName("Snapshot: a duplicate archive request of an archived row uploads nothing")
+	public void testDuplicateArchiveRequest() throws Exception {
+		final TieredSnapshotKey key = this.write(new TieredSnapshot("owner-8", LocalDateTime.of(2026, 3, 1, 12, 0), new HashMap<>(Map.of("marker", "once"))));
+		this.waitArchived(key);
+		final LocalDateTime archivedAt = this.snapshotRepository.findById(key).orElseThrow().getArchivedAt();
+		// A sentinel in place of the object: any new upload would replace it.
+		final String objectKey = this.tieringServiceComponent.objectKeyOf(this.rowKey(key));
+		final byte[] sentinel = new byte[] { 1 };
+		this.coldStorage.store(objectKey, sentinel, Map.of());
+
+		// The duplicate, then an unarchived row as a barrier: one consumer takes them in order.
+		this.tieringServiceComponent.requestArchive(this.rowKey(key));
+		final TieredSnapshotKey barrierKey = new TieredSnapshotKey("owner-8", LocalDateTime.of(2026, 3, 2, 12, 0));
+		this.seed(new TieredSnapshot(barrierKey.getOwnerId(), barrierKey.getCachedAt(), new HashMap<>(Map.of("marker", "barrier"))));
+		this.tieringServiceComponent.requestArchive(this.rowKey(barrierKey));
+		this.waitArchived(barrierKey);
+
+		Assertions.assertTrue(Arrays.equals(sentinel, this.coldStorage.load(objectKey).orElseThrow()));
+		Assertions.assertEquals(archivedAt, this.snapshotRepository.findById(key).orElseThrow().getArchivedAt());
+		Assertions.assertFalse(this.tieringServiceComponent.archive(this.rowKey(key)));
+	}
+
+	/**
+	 * A start while a run is active continues that run instead of starting another one: same
+	 * start, same cursor and count, no key enqueued ahead of the run's own pace.
+	 *
+	 * @throws Exception If the test fails.
+	 */
+	@Test
+	@DisplayName("Snapshot: a backfill start while a run is active does not start a parallel run")
+	public void testBackfillNoParallelRun() throws Exception {
+		final List<TieredSnapshotKey> keys = this.seedUnarchived();
+		// A long pause between chunks keeps the run active after its first chunk.
+		final TableProperties slowTable = new TableProperties();
+		slowTable.getBackfill().setDelayBetweenChunks(Duration.ofMinutes(10));
+		this.properties.getTable().put(ColdTieringTestConfiguration.SNAPSHOT_TABLE, slowTable);
+		try {
+			Assertions.assertTrue(this.batchServiceComponent.run(ColdTieringTestConfiguration.SNAPSHOT_TABLE, TieringBatch.BACKFILL));
+			Assertions.assertTrue(TestHelper.waitUntilValid(this::snapshotBackfillRecord,
+					batchRecord -> (batchRecord != null) && Long.valueOf(2).equals(batchRecord.getLastProcessedCount()), TestHelper.REGULAR_WAIT * 4, TestHelper.SHORT_WAIT));
+			final LocalDateTime startedAt = this.snapshotBackfillRecord().getLastStartedAt();
+			this.waitArchived(keys.get(0));
+			this.waitArchived(keys.get(1));
+
+			// The second start (an hourly cron on any instance) joins the active run.
+			Assertions.assertTrue(this.batchServiceComponent.run(ColdTieringTestConfiguration.SNAPSHOT_TABLE, TieringBatch.BACKFILL));
+			Thread.sleep(TestHelper.REGULAR_WAIT);
+			final BatchExecutor<?> batchRecord = this.snapshotBackfillRecord();
+			Assertions.assertEquals(startedAt, batchRecord.getLastStartedAt());
+			Assertions.assertEquals(Long.valueOf(2), batchRecord.getLastProcessedCount());
+			Assertions.assertFalse(batchRecord.isFinished());
+			Assertions.assertNull(this.snapshotRepository.findById(keys.get(2)).orElseThrow().getArchivedAt());
+			Assertions.assertEquals(2, this.coldStorage.list("cold-tiering/tiered-snapshot/").size());
+		}
+		finally {
+			this.properties.getTable().remove(ColdTieringTestConfiguration.SNAPSHOT_TABLE);
+			this.batchService.cancel(TieringBatch.BACKFILL.keySuffix(ColdTieringTestConfiguration.SNAPSHOT_TABLE));
+		}
 	}
 
 	/**

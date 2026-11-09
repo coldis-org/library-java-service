@@ -44,7 +44,7 @@ import org.springframework.transaction.annotation.Transactional;
 )
 public class ColdTieringServiceComponent {
 
-	/** Write-through upload queue. */
+	/** Upload queue (write-through and backfill). */
 	private static final String UPLOAD_QUEUE = "cold-tiering/upload";
 
 	/** Touch queue. */
@@ -92,16 +92,18 @@ public class ColdTieringServiceComponent {
 	private JmsTemplateHelper jmsTemplateHelper;
 
 	/**
-	 * Posts a row key to a queue, after the commit when inside a transaction, so the consumer never
-	 * reads the row before the write is visible.
+	 * Posts a row key to a queue.
 	 *
-	 * @param queue Queue.
-	 * @param key   Row key.
+	 * @param queue       Queue.
+	 * @param key         Row key.
+	 * @param afterCommit Whether to send after the commit when inside a transaction (so the consumer
+	 *                        never reads the row before the write is visible), or now.
 	 */
 	private void send(
 			final String queue,
-			final TieredRowKey key) {
-		this.jmsTemplateHelper.send(this.jmsTemplate, new JmsMessage<Serializable>().withDestination(queue).withMessage(key).withAfterCommit(true));
+			final TieredRowKey key,
+			final Boolean afterCommit) {
+		this.jmsTemplateHelper.send(this.jmsTemplate, new JmsMessage<Serializable>().withDestination(queue).withMessage(key).withAfterCommit(afterCommit));
 	}
 
 	/**
@@ -120,7 +122,7 @@ public class ColdTieringServiceComponent {
 			final LocalDateTime staleBefore = DateTimeHelper.getCurrentLocalDateTime().minus(tableProperties.getTouchThreshold());
 			final Optional<LocalDateTime> clock = this.hotTierRepository.clock(table, key);
 			if (clock.isPresent() && clock.get().isBefore(staleBefore)) {
-				this.send(ColdTieringServiceComponent.TOUCH_QUEUE, key);
+				this.send(ColdTieringServiceComponent.TOUCH_QUEUE, key, true);
 			}
 		}
 	}
@@ -184,19 +186,33 @@ public class ColdTieringServiceComponent {
 		final TieredTable table = this.registry.getTable(key.tableId());
 		if (this.properties.of(table).getEnabled()) {
 			this.hotTierRepository.afterWrite(table, key, DateTimeHelper.getCurrentLocalDateTime());
-			this.send(ColdTieringServiceComponent.UPLOAD_QUEUE, key);
+			this.send(ColdTieringServiceComponent.UPLOAD_QUEUE, key, true);
 		}
 	}
 
 	/**
-	 * Archives a row in the caller's transaction (write-through upload and backfill): under the
-	 * row's lock, uploads the whole row to its derived key and marks the hot row archived at the
-	 * watermark uploaded, if it was not rewritten meanwhile. The lock is what orders concurrent
-	 * archives of one key, since every one of them writes the same object: the holder reads the
-	 * current content, so an object is never overwritten with older content.
+	 * Requests the archive of a row through the upload queue, sent now: the backfill's request, not
+	 * tied to a business write's commit. The upload listener archives it in its own transaction;
+	 * a duplicate request (a restarted run, a key also written meanwhile) is harmless, since
+	 * {@link #archive(TieredRowKey)} uploads nothing for content already archived.
+	 *
+	 * @param key Row key.
+	 */
+	public void requestArchive(
+			final TieredRowKey key) {
+		this.send(ColdTieringServiceComponent.UPLOAD_QUEUE, key, false);
+	}
+
+	/**
+	 * Archives a row in the caller's transaction (the upload listener, for write-through and
+	 * backfill requests): under the row's lock, uploads the whole row to its derived key and marks
+	 * the hot row archived at the watermark uploaded, if it was not rewritten meanwhile. The lock is
+	 * what orders concurrent archives of one key, since every one of them writes the same object:
+	 * the holder reads the current content, so an object is never overwritten with older content.
+	 * A row whose current content is already archived is left alone (a duplicate request).
 	 *
 	 * @param  key Row key.
-	 * @return     Whether an object was written (false: the row is not hot).
+	 * @return     Whether an object was written (false: the row is not hot, or already archived).
 	 */
 	@Transactional(
 			propagation = Propagation.REQUIRED,
@@ -207,7 +223,7 @@ public class ColdTieringServiceComponent {
 		Boolean isUploaded = false;
 		final TieredTable table = this.registry.getTable(key.tableId());
 		final Optional<HotRow> hotRow = this.hotTierRepository.lockForArchive(table, key);
-		if (hotRow.isPresent()) {
+		if (hotRow.isPresent() && !hotRow.get().archived()) {
 			this.coldStorageRepository.store(this.tieredRepository.objectKeyOf(table, key), this.codec.encode(hotRow.get().rowJson()),
 					Map.of(ColdTieringServiceComponent.TABLE_METADATA, table.getId(), ColdTieringServiceComponent.UPDATED_AT_METADATA, hotRow.get().watermark(),
 							ColdStorageRepository.CONTENT_TYPE_METADATA, this.codec.contentType()));
@@ -224,13 +240,14 @@ public class ColdTieringServiceComponent {
 	}
 
 	/**
-	 * Write-through upload consumer.
+	 * Upload consumer (write-through and backfill requests): one row per message, in its own
+	 * transaction, so the row lock covers only that row's upload.
 	 *
 	 * @param key Row key.
 	 */
 	@JmsListener(
 			destination = ColdTieringServiceComponent.UPLOAD_QUEUE,
-			concurrency = "${" + ColdTieringProperties.PREFIX + ".upload.concurrency:1-4}",
+			concurrency = "${" + ColdTieringProperties.PREFIX + ".upload.concurrency:1}",
 			containerFactory = "${org.coldis.library.service.batch.container-factory:jmsListenerContainerFactory}"
 	)
 	@Transactional(
