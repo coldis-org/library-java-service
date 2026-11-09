@@ -13,6 +13,7 @@ import org.springframework.boot.test.context.TestConfiguration;
 import org.springframework.boot.web.embedded.tomcat.TomcatServletWebServerFactory;
 import org.springframework.context.annotation.AnnotationConfigApplicationContext;
 import org.springframework.context.annotation.PropertySource;
+import org.springframework.core.env.ConfigurableEnvironment;
 import org.springframework.core.env.MapPropertySource;
 import org.springframework.core.env.MutablePropertySources;
 import org.springframework.core.env.StandardEnvironment;
@@ -79,7 +80,7 @@ public class RequestThreadsFloorCustomizerUnitTest {
 	 * @return             The connector, after the customizers ran.
 	 */
 	private Connector customizeConnector(
-			final StandardEnvironment environment,
+			final ConfigurableEnvironment environment,
 			final Integer maxThreads) {
 		final TomcatServletWebServerFactory factory = new TomcatServletWebServerFactory();
 		new RequestThreadsFloorCustomizer(environment, 20).customize(factory);
@@ -161,6 +162,7 @@ public class RequestThreadsFloorCustomizerUnitTest {
 					propertySources.stream().filter(propertySource -> propertySource.containsProperty(RequestThreadsFloorCustomizer.MAX_THREADS_PROPERTY))
 							.map(propertySource -> propertySource.getName()).findFirst().orElse(null));
 			Assertions.assertTrue(RequestThreadsFloorCustomizer.isMaxThreadsFromLibraryDefaults(propertySources));
+			Assertions.assertEquals(20, this.getMaxThreads(this.customizeConnector(context.getEnvironment(), 16)));
 		}
 	}
 
@@ -170,6 +172,27 @@ public class RequestThreadsFloorCustomizerUnitTest {
 	public void testDefaultValueWithoutLibraryDefaults() {
 		final MutablePropertySources propertySources = new MutablePropertySources();
 		propertySources.addLast(new MapPropertySource("applicationConfig", Map.of(RequestThreadsFloorCustomizer.MAX_THREADS_PROPERTY, "${AVAILABLE_CPUS_5X:16}")));
+		Assertions.assertFalse(RequestThreadsFloorCustomizer.isMaxThreadsFromLibraryDefaults(propertySources));
+	}
+
+	/** Tests that a cap the service sets to the default's own expression is still the service's. */
+	@Test
+	@DisplayName("a cap the service sets to the default's own expression is not the default")
+	public void testCapSetToDefaultExpression() {
+		final MutablePropertySources propertySources = new MutablePropertySources();
+		propertySources.addLast(new MapPropertySource("applicationConfig",
+				Map.of(RequestThreadsFloorCustomizer.MAX_THREADS_PROPERTY, "${AVAILABLE_CPUS_5X:16}", "other.property", "value")));
+		propertySources.addLast(this.createLibraryDefaults());
+		Assertions.assertFalse(RequestThreadsFloorCustomizer.isMaxThreadsFromLibraryDefaults(propertySources));
+	}
+
+	/** Tests that a cap the service sets to the number the default resolves to is still the service's. */
+	@Test
+	@DisplayName("a cap the service sets to the number the default resolves to is not the default")
+	public void testCapSetToDefaultResolvedValue() {
+		final MutablePropertySources propertySources = new MutablePropertySources();
+		propertySources.addLast(new MapPropertySource("applicationConfig", Map.of(RequestThreadsFloorCustomizer.MAX_THREADS_PROPERTY, "16")));
+		propertySources.addLast(this.createLibraryDefaults());
 		Assertions.assertFalse(RequestThreadsFloorCustomizer.isMaxThreadsFromLibraryDefaults(propertySources));
 	}
 

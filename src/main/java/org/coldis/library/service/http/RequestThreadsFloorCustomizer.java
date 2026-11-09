@@ -68,17 +68,18 @@ public class RequestThreadsFloorCustomizer implements WebServerFactoryCustomizer
 	}
 
 	/**
-	 * Whether the request-thread cap is the library default. Spring uses the first
-	 * property source, in precedence order, that holds the property; the cap is
-	 * the default when that source holds the same value as the library defaults.
-	 * Values are compared rather than sources because a library a service depends
-	 * on may load {@code service.properties} again under another name: Spring
-	 * gives that copy precedence over the library defaults, and its value is still
-	 * the default. A cap the service sets to the default's own value counts as the
-	 * default.
+	 * Whether the request-thread cap comes from the library defaults. Spring uses
+	 * the first property source, in precedence order, that holds the property;
+	 * the cap comes from the library defaults when that source is the library
+	 * defaults or a copy of them. A library a service depends on may load
+	 * {@code service.properties} again under another name, and Spring gives that
+	 * copy precedence over the library defaults. A copy is recognised by holding
+	 * exactly the library defaults' content, compared as loaded, before
+	 * placeholders resolve. So a cap the service sets itself is used as is, even
+	 * when it is the default's own expression or resolves to the same number.
 	 *
 	 * @param  propertySources Property sources, in precedence order.
-	 * @return                 Whether the cap is the library default.
+	 * @return                 Whether the cap comes from the library defaults.
 	 */
 	public static Boolean isMaxThreadsFromLibraryDefaults(
 			final PropertySources propertySources) {
@@ -86,8 +87,7 @@ public class RequestThreadsFloorCustomizer implements WebServerFactoryCustomizer
 		final PropertySource<?> capSource = propertySources.stream()
 				.filter(propertySource -> !ConfigurationPropertySources.isAttachedConfigurationPropertySource(propertySource))
 				.filter(propertySource -> propertySource.containsProperty(RequestThreadsFloorCustomizer.MAX_THREADS_PROPERTY)).findFirst().orElse(null);
-		return (libraryDefaults != null) && (capSource != null) && Objects.equals(capSource.getProperty(RequestThreadsFloorCustomizer.MAX_THREADS_PROPERTY),
-				libraryDefaults.getProperty(RequestThreadsFloorCustomizer.MAX_THREADS_PROPERTY));
+		return (libraryDefaults != null) && (capSource != null) && Objects.equals(capSource.getSource(), libraryDefaults.getSource());
 	}
 
 	/**
