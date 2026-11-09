@@ -161,6 +161,20 @@ public class DataInstaller implements ApplicationListener<ApplicationReadyEvent>
 	}
 
 	/**
+	 * Gets the service operation URL with a single address: the first of multiple addresses (as
+	 * "http://a,http://b,/path") followed by the path.
+	 *
+	 * @param  serviceOperationUrl Service operation URL, possibly with multiple addresses.
+	 * @return                     The service operation URL with a single address.
+	 */
+	private String getActualServiceOperationUrl(
+			final String serviceOperationUrl) {
+		final String[] splitServiceOperationUrl = serviceOperationUrl.split(",");
+		return (splitServiceOperationUrl.length > 1) ? splitServiceOperationUrl[0] + splitServiceOperationUrl[splitServiceOperationUrl.length - 1]
+				: splitServiceOperationUrl[0];
+	}
+
+	/**
 	 * Gets the service operation URL.
 	 *
 	 * @param  serviceOperationBaseUrl Service operation base URL.
@@ -175,14 +189,8 @@ public class DataInstaller implements ApplicationListener<ApplicationReadyEvent>
 			final String[] searchProperties,
 			final Map<String, Object> dataObject) {
 
-		// Removes multiple addresses from the URL.
-		final String[] splitServiceOperationBaseUrl = serviceOperationBaseUrl.split(",");
-		final String actualServiceOperationBaseUrl = (splitServiceOperationBaseUrl.length > 1)
-				? splitServiceOperationBaseUrl[0] + splitServiceOperationBaseUrl[splitServiceOperationBaseUrl.length - 1]
-				: splitServiceOperationBaseUrl[0];
-
 		// Service operation URL.
-		final StringBuffer serviceOperationUrl = new StringBuffer(actualServiceOperationBaseUrl);
+		final StringBuffer serviceOperationUrl = new StringBuffer(this.getActualServiceOperationUrl(serviceOperationBaseUrl));
 		// If the search uses parameter strategy.
 		if (DataInstallerSearchStrategy.PARAMETER.equals(searchStrategy)) {
 			// Appends the search context.
@@ -343,7 +351,7 @@ public class DataInstaller implements ApplicationListener<ApplicationReadyEvent>
 				if (existentDataObject == null) {
 					// Tries to create the object.
 					try {
-						serviceClient.executeOperation(dataSetMetadata.getServiceOperationUrl(), HttpMethod.POST, null, dataObject, null,
+						serviceClient.executeOperation(this.getActualServiceOperationUrl(dataSetMetadata.getServiceOperationUrl()), HttpMethod.POST, null, dataObject, null,
 								new ParameterizedTypeReference<Void>() {});
 						DataInstaller.LOGGER.debug("Object '" + this.serializeForLog(dataObject) + "' created.");
 						createdObjects++;
