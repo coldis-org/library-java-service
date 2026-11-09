@@ -1,5 +1,6 @@
 package org.coldis.library.test.service.http;
 
+import java.io.IOException;
 import java.util.Map;
 
 import org.apache.catalina.connector.Connector;
@@ -20,6 +21,7 @@ import org.springframework.core.env.MapPropertySource;
 import org.springframework.core.env.MutablePropertySources;
 import org.springframework.core.env.StandardEnvironment;
 import org.springframework.core.env.SystemEnvironmentPropertySource;
+import org.springframework.core.io.support.ResourcePropertySource;
 
 /**
  * Covers the request-thread floor on its own: how it changes a connector's cap,
@@ -216,17 +218,47 @@ public class RequestThreadsFloorCustomizerUnitTest {
 		Assertions.assertFalse(RequestThreadsFloorCustomizer.isMaxThreadsFromLibraryDefaults(propertySources));
 	}
 
-	/** Tests that a cap the service sets to the default's own expression is still the service's. */
+	/**
+	 * Tests that a cap the service sets to the default's own expression is still
+	 * the service's, against the library's real defaults file.
+	 *
+	 * @throws IOException If the library defaults cannot be read.
+	 */
 	@Test
 	@DisplayName("a cap the service sets to the default's own expression is not the default")
-	public void testCapSetToDefaultExpression() {
+	public void testCapSetToDefaultExpression() throws IOException {
 		final MutablePropertySources propertySources = new MutablePropertySources();
-		// The service's other properties are what make its source differ from the
-		// library defaults (here a one-key stand-in), so it is not a copy of them.
-		propertySources.addLast(new MapPropertySource("applicationConfig",
-				Map.of(RequestThreadsFloorCustomizer.MAX_THREADS_PROPERTY, "${AVAILABLE_CPUS_5X:16}", "other.property", "value")));
-		propertySources.addLast(this.createLibraryDefaults());
+		propertySources.addLast(new MapPropertySource("applicationConfig", Map.of(RequestThreadsFloorCustomizer.MAX_THREADS_PROPERTY, "${AVAILABLE_CPUS_5X:16}")));
+		propertySources.addLast(new ResourcePropertySource(ServiceConfiguration.LIBRARY_DEFAULTS_PROPERTY_SOURCE, "classpath:service.properties"));
+		Assertions.assertEquals("${AVAILABLE_CPUS_5X:16}", propertySources.get(ServiceConfiguration.LIBRARY_DEFAULTS_PROPERTY_SOURCE)
+				.getProperty(RequestThreadsFloorCustomizer.MAX_THREADS_PROPERTY));
 		Assertions.assertFalse(RequestThreadsFloorCustomizer.isMaxThreadsFromLibraryDefaults(propertySources));
+	}
+
+	/** Tests that a cap the service sets in a composite source is still the service's. */
+	@Test
+	@DisplayName("a cap the service sets in a composite source is not the default, and is kept")
+	public void testCapFromServiceCompositeSource() {
+		final CompositePropertySource serviceConfig = new CompositePropertySource("serviceConfig");
+		serviceConfig.addPropertySource(new MapPropertySource("service", Map.of(RequestThreadsFloorCustomizer.MAX_THREADS_PROPERTY, "8", "other.property", "value")));
+		final StandardEnvironment environment = new StandardEnvironment();
+		environment.getPropertySources().addFirst(serviceConfig);
+		environment.getPropertySources().addLast(this.createLibraryDefaults());
+		Assertions.assertFalse(RequestThreadsFloorCustomizer.isMaxThreadsFromLibraryDefaults(environment.getPropertySources()));
+		Assertions.assertEquals(8, this.getMaxThreads(this.customizeConnector(environment, 8)));
+	}
+
+	/** Tests that a copy still counts as the default when the library defaults are themselves a composite source. */
+	@Test
+	@DisplayName("a copy of the library defaults is the default when they are a composite source")
+	public void testCapFromCopyOfCompositeLibraryDefaults() {
+		final CompositePropertySource libraryDefaults = new CompositePropertySource(ServiceConfiguration.LIBRARY_DEFAULTS_PROPERTY_SOURCE);
+		libraryDefaults.addPropertySource(new MapPropertySource("service.properties", Map.of(RequestThreadsFloorCustomizer.MAX_THREADS_PROPERTY, "${AVAILABLE_CPUS_5X:16}")));
+		final MutablePropertySources propertySources = new MutablePropertySources();
+		propertySources.addFirst(
+				new MapPropertySource("class path resource [service.properties]", Map.of(RequestThreadsFloorCustomizer.MAX_THREADS_PROPERTY, "${AVAILABLE_CPUS_5X:16}")));
+		propertySources.addLast(libraryDefaults);
+		Assertions.assertTrue(RequestThreadsFloorCustomizer.isMaxThreadsFromLibraryDefaults(propertySources));
 	}
 
 	/** Tests that a cap the service sets to the number the default resolves to is still the service's. */
