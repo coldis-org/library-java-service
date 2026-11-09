@@ -231,14 +231,14 @@ public class RequestThreadsFloorCustomizerUnitTest {
 		try (ConfigurableApplicationContext context = new SpringApplicationBuilder(PropertyPlaceholderAutoConfiguration.class,
 				ServletWebServerFactoryAutoConfiguration.class, EmbeddedWebServerFactoryCustomizerAutoConfiguration.class, ServiceConfiguration.class,
 				RequestThreadsFloorCustomizer.class, ReloadedLibraryDefaultsConfiguration.class).web(WebApplicationType.SERVLET).properties("server.port=0")
-				.run()) {
+				// Pins the default's input, whatever the machine exports, so the cap starts below the floor.
+				.run("--AVAILABLE_CPUS_5X=16")) {
 			final ConfigurableEnvironment environment = context.getEnvironment();
-			final Integer configuredMaxThreads = environment.getProperty(RequestThreadsFloorCustomizer.MAX_THREADS_PROPERTY, Integer.class);
-			final Integer maxThreadsFloor = environment.getProperty(RequestThreadsFloorCustomizer.MAX_THREADS_FLOOR_PROPERTY, Integer.class);
 			final Connector connector = ((TomcatWebServer) ((WebServerApplicationContext) context).getWebServer()).getTomcat().getConnector();
 			Assertions.assertEquals("class path resource [service.properties]", this.getCapSource(environment.getPropertySources()).getName());
-			Assertions.assertEquals(20, maxThreadsFloor);
-			Assertions.assertEquals(Math.max(configuredMaxThreads, maxThreadsFloor), this.getMaxThreads(connector));
+			Assertions.assertEquals(16, environment.getProperty(RequestThreadsFloorCustomizer.MAX_THREADS_PROPERTY, Integer.class));
+			Assertions.assertEquals(20, environment.getProperty(RequestThreadsFloorCustomizer.MAX_THREADS_FLOOR_PROPERTY, Integer.class));
+			Assertions.assertEquals(20, this.getMaxThreads(connector));
 		}
 	}
 
