@@ -74,9 +74,8 @@ public class RequestThreadsFloorCustomizer implements WebServerFactoryCustomizer
 	 * composite source, the first nested source that holds the cap.
 	 *
 	 * @param  propertySource Property source, possibly composite. May be null.
-	 * @return                The source itself when it is not composite, even if
-	 *                            it does not hold the cap; for a composite, the
-	 *                            first nested source that holds the cap, or null.
+	 * @return                The source that holds the cap, or null when there is
+	 *                            none.
 	 */
 	private static PropertySource<?> getMaxThreadsHolder(
 			final PropertySource<?> propertySource) {
@@ -86,7 +85,7 @@ public class RequestThreadsFloorCustomizer implements WebServerFactoryCustomizer
 					.filter(nestedPropertySource -> nestedPropertySource.containsProperty(RequestThreadsFloorCustomizer.MAX_THREADS_PROPERTY)).findFirst()
 					.orElse(null);
 		}
-		return holder;
+		return ((holder != null) && holder.containsProperty(RequestThreadsFloorCustomizer.MAX_THREADS_PROPERTY)) ? holder : null;
 	}
 
 	/**

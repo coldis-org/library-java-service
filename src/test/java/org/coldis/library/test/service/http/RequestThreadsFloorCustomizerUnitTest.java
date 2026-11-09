@@ -235,12 +235,18 @@ public class RequestThreadsFloorCustomizerUnitTest {
 		Assertions.assertFalse(RequestThreadsFloorCustomizer.isMaxThreadsFromLibraryDefaults(propertySources));
 	}
 
-	/** Tests that a cap the service sets in a composite source is still the service's. */
+	/**
+	 * Tests that a cap the service sets in a composite source is still the
+	 * service's, even when a copy of the library defaults follows it in the same
+	 * composite: Spring reads the cap from the first nested source that holds it.
+	 */
 	@Test
 	@DisplayName("a cap the service sets in a composite source is not the default, and is kept")
 	public void testCapFromServiceCompositeSource() {
 		final CompositePropertySource serviceConfig = new CompositePropertySource("serviceConfig");
 		serviceConfig.addPropertySource(new MapPropertySource("service", Map.of(RequestThreadsFloorCustomizer.MAX_THREADS_PROPERTY, "8", "other.property", "value")));
+		serviceConfig.addPropertySource(
+				new MapPropertySource("class path resource [service.properties]", Map.of(RequestThreadsFloorCustomizer.MAX_THREADS_PROPERTY, "${AVAILABLE_CPUS_5X:16}")));
 		final StandardEnvironment environment = new StandardEnvironment();
 		environment.getPropertySources().addFirst(serviceConfig);
 		environment.getPropertySources().addLast(this.createLibraryDefaults());
@@ -248,15 +254,19 @@ public class RequestThreadsFloorCustomizerUnitTest {
 		Assertions.assertEquals(8, this.getMaxThreads(this.customizeConnector(environment, 8)));
 	}
 
-	/** Tests that a copy still counts as the default when the library defaults are themselves a composite source. */
+	/**
+	 * Tests that a copy still counts as the default when the library defaults are
+	 * themselves a composite source, both loaded from the real file.
+	 *
+	 * @throws IOException If the library defaults cannot be read.
+	 */
 	@Test
 	@DisplayName("a copy of the library defaults is the default when they are a composite source")
-	public void testCapFromCopyOfCompositeLibraryDefaults() {
+	public void testCapFromCopyOfCompositeLibraryDefaults() throws IOException {
 		final CompositePropertySource libraryDefaults = new CompositePropertySource(ServiceConfiguration.LIBRARY_DEFAULTS_PROPERTY_SOURCE);
-		libraryDefaults.addPropertySource(new MapPropertySource("service.properties", Map.of(RequestThreadsFloorCustomizer.MAX_THREADS_PROPERTY, "${AVAILABLE_CPUS_5X:16}")));
+		libraryDefaults.addPropertySource(new ResourcePropertySource("service.properties", "classpath:service.properties"));
 		final MutablePropertySources propertySources = new MutablePropertySources();
-		propertySources.addFirst(
-				new MapPropertySource("class path resource [service.properties]", Map.of(RequestThreadsFloorCustomizer.MAX_THREADS_PROPERTY, "${AVAILABLE_CPUS_5X:16}")));
+		propertySources.addFirst(new ResourcePropertySource("classpath:service.properties"));
 		propertySources.addLast(libraryDefaults);
 		Assertions.assertTrue(RequestThreadsFloorCustomizer.isMaxThreadsFromLibraryDefaults(propertySources));
 	}
