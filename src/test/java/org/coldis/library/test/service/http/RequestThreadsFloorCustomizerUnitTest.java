@@ -9,10 +9,12 @@ import org.coldis.library.service.http.RequestThreadsFloorCustomizer;
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.springframework.boot.context.properties.source.ConfigurationPropertySources;
 import org.springframework.boot.test.context.TestConfiguration;
 import org.springframework.boot.web.embedded.tomcat.TomcatServletWebServerFactory;
 import org.springframework.context.annotation.AnnotationConfigApplicationContext;
 import org.springframework.context.annotation.PropertySource;
+import org.springframework.core.env.CompositePropertySource;
 import org.springframework.core.env.ConfigurableEnvironment;
 import org.springframework.core.env.MapPropertySource;
 import org.springframework.core.env.MutablePropertySources;
@@ -35,6 +37,28 @@ public class RequestThreadsFloorCustomizerUnitTest {
 	@TestConfiguration(proxyBeanMethods = false)
 	@PropertySource("classpath:service.properties")
 	static class ReloadedLibraryDefaultsConfiguration {
+	}
+
+	/**
+	 * A second configuration that loads the library defaults again, without a
+	 * name. Spring merges both unnamed copies into one composite source.
+	 */
+	@TestConfiguration(proxyBeanMethods = false)
+	@PropertySource("classpath:service.properties")
+	static class ReloadedLibraryDefaultsAgainConfiguration {
+	}
+
+	/**
+	 * Gets the property source Spring reads the cap from: the first one, in
+	 * precedence order, that holds it, skipping Spring Boot's attached source.
+	 *
+	 * @param  propertySources Property sources, in precedence order.
+	 * @return                 The property source the cap is read from.
+	 */
+	private org.springframework.core.env.PropertySource<?> getCapSource(
+			final MutablePropertySources propertySources) {
+		return propertySources.stream().filter(propertySource -> !ConfigurationPropertySources.isAttachedConfigurationPropertySource(propertySource))
+				.filter(propertySource -> propertySource.containsProperty(RequestThreadsFloorCustomizer.MAX_THREADS_PROPERTY)).findFirst().orElse(null);
 	}
 
 	/**
@@ -150,17 +174,34 @@ public class RequestThreadsFloorCustomizerUnitTest {
 	/**
 	 * Tests that the library defaults loaded again under another name still count
 	 * as the default. The copy takes precedence over the library's named source,
-	 * so the cap Spring uses is read from the copy.
+	 * so the cap Spring uses is read from the copy. Spring Boot's attached source
+	 * is added, as in a running service.
 	 */
 	@Test
 	@DisplayName("a cap from the library defaults loaded again under another name is the default")
 	public void testCapFromReloadedLibraryDefaults() {
 		try (AnnotationConfigApplicationContext context = new AnnotationConfigApplicationContext(ServiceConfiguration.class,
 				ReloadedLibraryDefaultsConfiguration.class)) {
+			ConfigurationPropertySources.attach(context.getEnvironment());
 			final MutablePropertySources propertySources = context.getEnvironment().getPropertySources();
-			Assertions.assertNotEquals(ServiceConfiguration.LIBRARY_DEFAULTS_PROPERTY_SOURCE,
-					propertySources.stream().filter(propertySource -> propertySource.containsProperty(RequestThreadsFloorCustomizer.MAX_THREADS_PROPERTY))
-							.map(propertySource -> propertySource.getName()).findFirst().orElse(null));
+			Assertions.assertEquals("class path resource [service.properties]", this.getCapSource(propertySources).getName());
+			Assertions.assertTrue(RequestThreadsFloorCustomizer.isMaxThreadsFromLibraryDefaults(propertySources));
+			Assertions.assertEquals(20, this.getMaxThreads(this.customizeConnector(context.getEnvironment(), 16)));
+		}
+	}
+
+	/**
+	 * Tests that several copies of the library defaults, which Spring merges into
+	 * one composite source, still count as the default.
+	 */
+	@Test
+	@DisplayName("a cap from several copies of the library defaults merged into one source is the default")
+	public void testCapFromMergedReloadedLibraryDefaults() {
+		try (AnnotationConfigApplicationContext context = new AnnotationConfigApplicationContext(ServiceConfiguration.class,
+				ReloadedLibraryDefaultsConfiguration.class, ReloadedLibraryDefaultsAgainConfiguration.class)) {
+			ConfigurationPropertySources.attach(context.getEnvironment());
+			final MutablePropertySources propertySources = context.getEnvironment().getPropertySources();
+			Assertions.assertInstanceOf(CompositePropertySource.class, this.getCapSource(propertySources));
 			Assertions.assertTrue(RequestThreadsFloorCustomizer.isMaxThreadsFromLibraryDefaults(propertySources));
 			Assertions.assertEquals(20, this.getMaxThreads(this.customizeConnector(context.getEnvironment(), 16)));
 		}
@@ -180,6 +221,8 @@ public class RequestThreadsFloorCustomizerUnitTest {
 	@DisplayName("a cap the service sets to the default's own expression is not the default")
 	public void testCapSetToDefaultExpression() {
 		final MutablePropertySources propertySources = new MutablePropertySources();
+		// The service's other properties are what make its source differ from the
+		// library defaults (here a one-key stand-in), so it is not a copy of them.
 		propertySources.addLast(new MapPropertySource("applicationConfig",
 				Map.of(RequestThreadsFloorCustomizer.MAX_THREADS_PROPERTY, "${AVAILABLE_CPUS_5X:16}", "other.property", "value")));
 		propertySources.addLast(this.createLibraryDefaults());
