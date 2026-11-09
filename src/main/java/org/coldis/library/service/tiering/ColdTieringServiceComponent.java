@@ -47,6 +47,9 @@ public class ColdTieringServiceComponent {
 	/** Write-through upload queue. */
 	private static final String UPLOAD_QUEUE = "cold-tiering/upload";
 
+	/** Backfill archive queue: its own, so write-through uploads never wait behind a backfill. */
+	private static final String BACKFILL_QUEUE = "cold-tiering/backfill";
+
 	/** Touch queue. */
 	private static final String TOUCH_QUEUE = "cold-tiering/touch";
 
@@ -92,16 +95,29 @@ public class ColdTieringServiceComponent {
 	private JmsTemplateHelper jmsTemplateHelper;
 
 	/**
-	 * Posts a row key to a queue, after the commit when inside a transaction, so the consumer never
+	 * Posts a row key to a queue after the commit when inside a transaction, so the consumer never
 	 * reads the row before the write is visible.
 	 *
 	 * @param queue Queue.
 	 * @param key   Row key.
 	 */
-	private void send(
+	private void sendAfterCommit(
 			final String queue,
 			final TieredRowKey key) {
 		this.jmsTemplateHelper.send(this.jmsTemplate, new JmsMessage<Serializable>().withDestination(queue).withMessage(key).withAfterCommit(true));
+	}
+
+	/**
+	 * Posts a row key to a queue without deferring it to a commit callback (the JMS template's own
+	 * session transaction, if any, still decides when the broker releases it).
+	 *
+	 * @param queue Queue.
+	 * @param key   Row key.
+	 */
+	private void sendNow(
+			final String queue,
+			final TieredRowKey key) {
+		this.jmsTemplateHelper.send(this.jmsTemplate, new JmsMessage<Serializable>().withDestination(queue).withMessage(key).withAfterCommit(false));
 	}
 
 	/**
@@ -120,7 +136,7 @@ public class ColdTieringServiceComponent {
 			final LocalDateTime staleBefore = DateTimeHelper.getCurrentLocalDateTime().minus(tableProperties.getTouchThreshold());
 			final Optional<LocalDateTime> clock = this.hotTierRepository.clock(table, key);
 			if (clock.isPresent() && clock.get().isBefore(staleBefore)) {
-				this.send(ColdTieringServiceComponent.TOUCH_QUEUE, key);
+				this.sendAfterCommit(ColdTieringServiceComponent.TOUCH_QUEUE, key);
 			}
 		}
 	}
@@ -184,19 +200,36 @@ public class ColdTieringServiceComponent {
 		final TieredTable table = this.registry.getTable(key.tableId());
 		if (this.properties.of(table).getEnabled()) {
 			this.hotTierRepository.afterWrite(table, key, DateTimeHelper.getCurrentLocalDateTime());
-			this.send(ColdTieringServiceComponent.UPLOAD_QUEUE, key);
+			this.sendAfterCommit(ColdTieringServiceComponent.UPLOAD_QUEUE, key);
 		}
 	}
 
 	/**
-	 * Archives a row in the caller's transaction (write-through upload and backfill): under the
-	 * row's lock, uploads the whole row to its derived key and marks the hot row archived at the
-	 * watermark uploaded, if it was not rewritten meanwhile. The lock is what orders concurrent
-	 * archives of one key, since every one of them writes the same object: the holder reads the
-	 * current content, so an object is never overwritten with older content.
+	 * Requests the archive of a row through the backfill queue: the backfill's request, not tied to
+	 * a business write, so not deferred to a commit callback (a session-transacted JMS template
+	 * still releases it when its transaction commits). The backfill listener archives it in its
+	 * own transaction; a duplicate request (a restarted run re-enqueueing pending keys, a key also
+	 * written meanwhile) is harmless, since {@link #archive(TieredRowKey)} uploads nothing for
+	 * content already archived.
+	 *
+	 * @param key Row key.
+	 */
+	public void requestArchive(
+			final TieredRowKey key) {
+		this.sendNow(ColdTieringServiceComponent.BACKFILL_QUEUE, key);
+	}
+
+	/**
+	 * Archives a row in the caller's transaction (the upload listener for write-through requests,
+	 * the backfill listener for backfill requests): under the row's lock, uploads the whole row to
+	 * its derived key and marks
+	 * the hot row archived at the watermark uploaded, if it was not rewritten meanwhile. The lock is
+	 * what orders concurrent archives of one key, since every one of them writes the same object:
+	 * the holder reads the current content, so an object is never overwritten with older content.
+	 * A row whose current content is already archived is left alone (a duplicate request).
 	 *
 	 * @param  key Row key.
-	 * @return     Whether an object was written (false: the row is not hot).
+	 * @return     Whether an object was written (false: the row is not hot, or already archived).
 	 */
 	@Transactional(
 			propagation = Propagation.REQUIRED,
@@ -207,7 +240,7 @@ public class ColdTieringServiceComponent {
 		Boolean isUploaded = false;
 		final TieredTable table = this.registry.getTable(key.tableId());
 		final Optional<HotRow> hotRow = this.hotTierRepository.lockForArchive(table, key);
-		if (hotRow.isPresent()) {
+		if (hotRow.isPresent() && !hotRow.get().isArchived()) {
 			this.coldStorageRepository.store(this.tieredRepository.objectKeyOf(table, key), this.codec.encode(hotRow.get().rowJson()),
 					Map.of(ColdTieringServiceComponent.TABLE_METADATA, table.getId(), ColdTieringServiceComponent.UPDATED_AT_METADATA, hotRow.get().watermark(),
 							ColdStorageRepository.CONTENT_TYPE_METADATA, this.codec.contentType()));
@@ -224,13 +257,13 @@ public class ColdTieringServiceComponent {
 	}
 
 	/**
-	 * Write-through upload consumer.
+	 * Write-through upload consumer: one row per message, in its own transaction.
 	 *
 	 * @param key Row key.
 	 */
 	@JmsListener(
 			destination = ColdTieringServiceComponent.UPLOAD_QUEUE,
-			concurrency = "${" + ColdTieringProperties.PREFIX + ".upload.concurrency:1-4}",
+			concurrency = "${" + ColdTieringProperties.PREFIX + ".upload.concurrency:1}",
 			containerFactory = "${org.coldis.library.service.batch.container-factory:jmsListenerContainerFactory}"
 	)
 	@Transactional(
@@ -238,6 +271,26 @@ public class ColdTieringServiceComponent {
 			timeoutString = "${org.coldis.library.service.transaction.long-timeout}"
 	)
 	public void upload(
+			final TieredRowKey key) {
+		this.archive(key);
+	}
+
+	/**
+	 * Backfill archive consumer: one row per message, in its own transaction, so the row lock
+	 * covers only that row's upload; its concurrency sets the backfill's throughput.
+	 *
+	 * @param key Row key.
+	 */
+	@JmsListener(
+			destination = ColdTieringServiceComponent.BACKFILL_QUEUE,
+			concurrency = "${" + ColdTieringProperties.PREFIX + ".backfill.concurrency:1}",
+			containerFactory = "${org.coldis.library.service.batch.container-factory:jmsListenerContainerFactory}"
+	)
+	@Transactional(
+			propagation = Propagation.REQUIRED,
+			timeoutString = "${org.coldis.library.service.transaction.long-timeout}"
+	)
+	public void archiveBackfill(
 			final TieredRowKey key) {
 		this.archive(key);
 	}

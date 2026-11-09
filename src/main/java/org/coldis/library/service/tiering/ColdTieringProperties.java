@@ -165,7 +165,7 @@ public class ColdTieringProperties {
 			resolved.chunkSize = Objects.requireNonNullElse(this.chunkSize, Objects.requireNonNullElse(defaults.chunkSize, 1_000L));
 			resolved.delayBetweenChunks = Objects.requireNonNullElse(this.delayBetweenChunks,
 					Objects.requireNonNullElse(defaults.delayBetweenChunks, Duration.ofSeconds(1)));
-			resolved.finishWithin = Objects.requireNonNullElse(this.finishWithin, Objects.requireNonNullElse(defaults.finishWithin, Duration.ofMinutes(55)));
+			resolved.finishWithin = Objects.requireNonNullElse(this.finishWithin, Objects.requireNonNullElse(defaults.finishWithin, Duration.ofDays(1)));
 			return resolved;
 		}
 
