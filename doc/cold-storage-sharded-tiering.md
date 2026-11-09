@@ -86,8 +86,7 @@ consumer                                       library (org.coldis.library.servi
 PartitionTieredTable bean per table ─────────► TieredTableRegistry (+ partitioned-table checks)
 loader, when a delivery is loaded:
   tiering.partitionLoaded(tableId, moment) ──► PartitionTieringServiceComponent: upsert the partition
-validator, when its verdict is recorded:         record (LOADED, loaded_at); releasePartition sets
-  tiering.releasePartition(tableId, moment)      released_at (the sweep waits for it)
+                                                 record (LOADED, loaded_at: the start of the hold)
                                                ColdTieringBatchServiceComponent: EXPORT batch (cron per
                                                  table): GET = next LOADED/STALE partition past its quiet
                                                  period, EXECUTE = boundaries pass, then enqueue the shards
@@ -100,7 +99,7 @@ tiering.findByIdTiered / findNewestTiered /    ColdTieringServiceComponent dispa
   findAllByKeysTiered (new)                      PARTITION → PartitionTieredRepository (manifest, index,
                                                  range GET, block decode) then HotTierRepository.rehydrate
                                                ColdTieringBatchServiceComponent: PARTITION_SWEEP batch
-                                                 (VERIFIED, released, loaded_at + ttl + margin < now →
+                                                 (VERIFIED, past the hold and the TTL →
                                                  one paced pass in heap order: delete expired, mark kept),
                                                  EVICTION batch (step 1's row delete, unchanged: the
                                                  rehydrated and touched rows as they expire)
@@ -129,7 +128,7 @@ Model (`tiering.model`):
 | `ShardBoundaryStrategy` SPI | `EquiDepthShardBoundaryStrategy(targetShards)` (default: cut a shard every `target` rows during the key pass, below), `PrefixShardBoundaryStrategy(digits)` (fixed prefixes, for a key known to be uniform; not the default, see the distribution above). Selected by `table.<id>.export.shard-strategy` |
 | `BlockCodec` SPI | `compress(byte[])`, `decompress(byte[], expectedLength)`, `name()`; built-in `gzip` (JDK, the default); `zstd` (`com.github.luben:zstd-jni`, `<optional>` in this pom, `@ConditionalOnClass`) selected by property when the consumer adds the dependency; the index names the codec, so a partition exported with one is readable after the default changes |
 | `PartitionManifest`, `ShardIndex`, `BlockEntry` | Records of the formats below, with `formatVersion`; Jackson, through the existing `GzipJsonPayloadCodec` for the bytes |
-| `PartitionArchive` | The DB record: `tableId`, `partitionName`, `rangeFrom`, `rangeTo`, `state`, timestamps (`loadedAt`, `releasedAt`, `exportStartedAt`, `exportedAt`, `verifiedAt`, `sweptAt`), `shardCount`, `shardsDone`, `rowCount`, `sizeBytes`, `formatVersion`, `manifestKey`, `sweepCursor`, `sweepDeleted`, `sweepKept` |
+| `PartitionArchive` | The DB record: `tableId`, `partitionName`, `rangeFrom`, `rangeTo`, `state`, timestamps (`loadedAt`, `exportStartedAt`, `exportedAt`, `verifiedAt`, `sweptAt`), `shardCount`, `shardsDone`, `rowCount`, `sizeBytes`, `formatVersion`, `manifestKey`, `sweepCursor`, `sweepDeleted`, `sweepKept` |
 | `PartitionArchiveState { LOADED, EXPORTING, VERIFIED, STALE }` | The guard. Only `VERIFIED` may be swept and read cold (`STALE` is read cold too, see *Reprocess*); a row may be deleted only in a `VERIFIED` partition and only when the export covers it (`updated_at <= exported_at`) |
 | `TieredRowKey`, `ColdRow`, `TieredHit` | Unchanged, reused |
 
@@ -147,7 +146,7 @@ Policy (`tiering`):
 
 | Type | Role |
 |---|---|
-| `PartitionTieringServiceComponent` | `partitionLoaded(tableId, momentInPartition)` (the consumer's signal); `releasePartition(tableId, momentInPartition)` (the consumer's "verdict recorded" signal); `computeBoundaries(table, partition)`; `exportShard(ShardExportRequest)` (JMS listener on `cold-tiering/export`, `export.concurrency`); `finishPartition(table, partition)` (manifest, verification, state); `markStale(tableId, momentInPartition)` |
+| `PartitionTieringServiceComponent` | `partitionLoaded(tableId, momentInPartition)` (the consumer's signal, starts the hold); `computeBoundaries(table, partition)`; `exportShard(ShardExportRequest)` (JMS listener on `cold-tiering/export`, `export.concurrency`); `finishPartition(table, partition)` (manifest, verification, state); `markStale(tableId, momentInPartition)` |
 | `ColdTieringServiceComponent` (extended) | `findByIdTiered` and `findNewestTiered` dispatch on `ArchiveUnit`; new `findFirstTiered(Entity.class, keyPrefix, after, upTo)`, `findTimelineTiered(Entity.class, keyPrefix, asOf) → List<TieredHit>`, `findAllByKeysTiered(Entity.class, Collection<id>) → List<TieredHit>`; `afterWrite` on a `PARTITION` table only touches (no upload request); `delete(key)` on a `PARTITION` table deletes the hot row only and throws if the partition is archived (a cold row cannot be deleted alone from a shard; business deletes do not exist on these tables) |
 | `ColdTieringBatchServiceComponent` (extended) | `TieringBatch.EXPORT` and `TieringBatch.PARTITION_SWEEP`; the row `EVICTION` on a `PARTITION` table runs step 1's `evictExpired` on the parent (the partitioned eviction index prunes to the partitions with warm rows); `BACKFILL` is rejected at registration for `PARTITION` tables (the export is the backfill) |
 | `ColdTieringSchema` (extended) | `partitionArchiveStatements()` (the record table); `statements(table, …)` for a `PARTITION` table emits the columns on the parent and the eviction index as a partitioned index (parent `ONLY`, one `CONCURRENTLY` per leaf, `ATTACH PARTITION`), see *Schema* |
@@ -167,8 +166,8 @@ Properties, under `org.coldis.library.service.tiering.`:
 | `table.<id>.export.block-size` / `page-size` / `key-page-size` / `part-size` | `1MB` (compressed, 256 KB–4 MB) / `2000` rows / `1000000` keys / `16MB` | Block cut when the compressed frame reaches the size; rows per keyset page of the data pass; keys per page of the boundaries pass; multipart part |
 | `table.<id>.export.verify-sample-every` | `50000` | One row in every N written is read back through the cold path after the shard completes |
 | `table.<id>.partition-sweep.{enabled,cron,chunk-blocks,delay-between-chunks,finish-within}` | `false`, `0 0 22 * * *`, `1024`, `PT1S`, `P3D` | The sweep: heap pages per chunk (1,024 × 8 KB = 8 MB of heap, ~2,700 rows), the pause between chunks (sets the WAL rate), the run's horizon (a month's sweep lasts hours, resumed across runs) |
-| `table.<id>.partition-sweep.require-release` | `true` | A month is swept only after `releasePartition` (the Full validator's verdict); `false` for tables without such a step |
-| `table.<id>.ttl` / `touch-threshold` / `safety-margin` | inherited (`P15D` / `P1D` / `P2D`) | For the full tables the consumer sets `ttl=P7D`, `safety-margin=P1D` |
+| `table.<id>.partition-sweep.hold-after-load` | `P5D` | The month stays fully hot for this long after `loaded_at` (the consumer's signal) or, for a partition exported without a signal (backfill), after `verified_at`; the sweep starts after `max(hold, ttl + safety-margin)` from that moment, so its first pass finds the bulk expired |
+| `table.<id>.ttl` / `touch-threshold` / `safety-margin` | inherited (`P15D` / `P1D` / `P2D`) | For the full tables the consumer sets `ttl=P5D` (developer range 3–5 days, per table), `safety-margin=P1D`: with the default hold, the sweep of a month starts 6 days after its load |
 
 ### Cold format
 
@@ -415,8 +414,8 @@ Two batches, both deletes, no DDL, no change of the partition layout:
 
 **Partition sweep** (`PARTITION_SWEEP`, new): one paced pass per verified month, in **heap order**,
 that deletes every row of the month past its TTL and marks the ones it keeps. GET = the next
-`VERIFIED` partition with `swept_at IS NULL`, `released_at` set (when `require-release`), and
-`loaded_at (or exported_at) + ttl + safety-margin < now`; the item is a block range, cursor
+`VERIFIED` partition with `swept_at IS NULL` whose hold start (`loaded_at`, else `verified_at`)
+plus `max(hold-after-load, ttl + safety-margin)` is in the past; the item is a block range, cursor
 `sweep_cursor` on the record (resumes across runs and restarts). EXECUTE, one chunk per
 transaction (`long-timeout`):
 
@@ -447,9 +446,8 @@ checkpoints, and every first touch of a page after a checkpoint writes a full-pa
 the WAL: WAL volume would be a multiple of the table's size. In heap order each page is touched
 once, TOAST chunks (allocated at insert, in the same order) nearly so, and the WAL is bounded by
 roughly one full-page image per heap and TOAST page plus the delete records: **≈ 1.0–1.3× the
-partition's size, ~1.1–1.4 TB per big month and table**, spread over the sweep's duration. On a
-Postgres before 14 (no TID range scan) the fallback is a key-order sweep over the PK with the same
-predicate; it works but the WAL amplification above applies, so check the server version first.
+partition's size, ~1.1–1.4 TB per big month and table**, spread over the sweep's duration.
+Production runs Postgres 18.6, so the TID range scan is available; no key-order fallback is built.
 
 Rows the sweep keeps (read or written inside the TTL: `kept`) get `archived_at = updated_at`, which
 puts them into the partial eviction index (`WHERE archived_at IS NOT NULL`) alongside the
@@ -468,11 +466,10 @@ rows kept and duration. Run one table at a time; never during a delivery's apply
 WAL comes on top).
 
 Vacuum and space: the sweep leaves ~240 M dead tuples (plus their TOAST chunks and PK entries)
-per month. Autovacuum triggers at `autovacuum_vacuum_scale_factor` × 240 M (48 M at the default
-0.2) and vacuums the 1.1 TB partition in hours, under the cost delay; better to set, per big
-partition, `autovacuum_vacuum_cost_delay = 2ms` and `autovacuum_vacuum_scale_factor = 0.01`, or run
-`VACUUM (VERBOSE) <partition>` by hand after the sweep (`INDEX_CLEANUP ON`, the PK shrinks only
-by page reuse, not in size). **Freed space is reused only by inserts into the same partition**
+per month. Autovacuum handles them (developer's decision: no manual vacuum step): it triggers at
+`autovacuum_vacuum_scale_factor` × 240 M (48 M at the default 0.2) and vacuums the 1.1 TB
+partition in hours under its cost delay; the PK shrinks only by page reuse, not in size. **Freed
+space is reused only by inserts into the same partition**
 (the rehydrations of that month, a few MB a day): the files stay at 1.1 TB each until the
 database is replaced through a new replica; only trailing empty pages are truncated by vacuum.
 That is the developer's call and out of scope here.
@@ -485,8 +482,7 @@ partitions holding warm rows (rehydrated or kept by a sweep); the never-marked b
 partial index and outside the predicate, so an unswept month is never touched by it. `archived_at
 >= updated_at` keeps a row rewritten after rehydration (a reprocess) out of the delete.
 
-Guards, restated: sweep only `VERIFIED` (and released, when required) partitions past `loaded_at
-+ ttl + safety-margin`; delete only rows with `updated_at <= exported_at` and past the clock;
+Guards, restated: sweep only `VERIFIED` partitions past their hold and TTL; delete only rows with `updated_at <= exported_at` and past the clock;
 never export or sweep an excluded or open-ended partition; never touch a partition whose name is
 not in the catalog's children of the table.
 
@@ -516,7 +512,6 @@ CREATE TABLE IF NOT EXISTS cold_tiering_partition_archive (
   range_to           text,
   state              varchar(16) NOT NULL,
   loaded_at          timestamptz,
-  released_at        timestamptz,
   export_started_at  timestamptz,
   exported_at        timestamptz,
   verified_at        timestamptz,
@@ -572,23 +567,23 @@ eviction index on the parent, and that `cold_tiering_partition_archive` exists.
 |---|---|
 | Two `PartitionTieredTable` beans: `boa-vista-report-full` (`tax_id, version, cached_at`; shard key `tax_id`; partition column `cached_at`; `LAST_ACCESS`, `INSERT`, entity + `BoaVistaSnapshotKey`), `boa-vista-cadastro-positivo-report-full` (`tax_id, cached_at`) | `BoaVistaOnlineTieringConfiguration` → renamed `BoaVistaTieringConfiguration` (keeps `coldTieringS3Client`) |
 | Reads: `readReportSnapshot` → `findNewestTiered(BoaVistaReportFull.class, {tax_id}, bounds.asOf())` and, on empty with a fallback, `findFirstTiered(…, bounds.asOf(), bounds.fallbackUpTo())`; `readReportTimeline` → `findTimelineTiered`; `readCadastroPositivoSnapshot` the same; the validator's `findAllByTaxIdInAndCachedAt` → `findAllByKeysTiered`. The six JPA finders stay for tests and tooling but nothing in the read path calls them | `BoaVistaFullReadServiceComponent`, `BoaVistaFullValidator` |
-| Delivery signals: when `recordApplyWorkerFinished` returns `ApplyDone`, call `partitionLoaded` for both table ids with the delivery's `cachedAt` and `totalRows` (next to `alertDeliveryFinished`); when the validation runner records a delivery's verdict, call `releasePartition` for both tables (the sweep of that month waits for it); the import endpoint (`POST …/deliveries/{id}/import`) calls `markStale` for both tables when the month already has a record | `BoaVistaFullApplyExecutor.finishWorker`, `BoaVistaFullValidationRunner`, `BoaVistaFullCoordinator` |
+| Delivery signals: when `recordApplyWorkerFinished` returns `ApplyDone`, call `partitionLoaded` for both table ids with the delivery's `cachedAt` and `totalRows` (next to `alertDeliveryFinished`); the import endpoint (`POST …/deliveries/{id}/import`) calls `markStale` for both tables when the month already has a record | `BoaVistaFullApplyExecutor.finishWorker`, `BoaVistaFullCoordinator` |
 | Flyway `V4__boa_vista_full_cold_tiering.sql` + `.sql.conf`: the record table, the two `ALTER TABLE … ADD COLUMN`s, the partitioned eviction index with its 46 concurrent leaf builds per table | `src/main/resources/db/migration` |
-| Properties: `table.boa-vista-report-full.*` and `…cadastro-positivo-report-full.*`: `enabled`, `cold-read-enabled`, `ttl=P7D`, `safety-margin=P1D`, `touch-threshold=P1D`, `export.enabled`, `export.cron`, `partition-sweep.enabled`, `partition-sweep.delay-between-chunks`, every flag from an env var defaulting to `false`; `export.concurrency=${…:4}`; `block-codec=zstd` with `zstd-jni` added to the service pom | `application.properties`, `pom.xml` |
+| Properties: `table.boa-vista-report-full.*` and `…cadastro-positivo-report-full.*`: `enabled`, `cold-read-enabled`, `ttl=P5D`, `safety-margin=P1D`, `touch-threshold=P1D`, `export.enabled`, `export.cron`, `partition-sweep.enabled`, `partition-sweep.hold-after-load=P5D`, `partition-sweep.delay-between-chunks`, every flag from an env var defaulting to `false`; `export.concurrency=${…:4}`; `block-codec=zstd` with `zstd-jni` added to the service pom | `application.properties`, `pom.xml` |
 | S3 prefix: the online tables use `boa-vista/online/`; the full tables need their own. Add `table.<id>.prefix` to the library (falls back to the global `prefix`) and set `boa-vista/full/` on the two tables | library property, `application.properties` |
-| QC endpoint on `BoaVistaFullDeliveryService`: `GET …/deliveries/archive` listing the partition records; `POST …/archive/{partition}/export`, `/sweep`, `/stale`, `/release` to run or mark on demand (scope `VENDOR_REPORT_GATHER`) | `service/…/full` |
+| QC endpoint on `BoaVistaFullDeliveryService`: `GET …/deliveries/archive` listing the partition records; `POST …/archive/{partition}/export`, `/sweep`, `/stale` to run or mark on demand (scope `VENDOR_REPORT_GATHER`) | `service/…/full` |
 | Docs: `doc/boa-vista-base-full.md` gains the tiering section; this plan's consumer part becomes `doc/boa-vista-full-report-tiering.md` | `doc/` |
 
 Rollout, every flag off at deploy:
 
 | Step | Action | Rollback |
 |---|---|---|
-| 1 | Deploy; V4 adds the record table, the columns and the eviction indexes (hours of concurrent builds on the big months, no blocking); check `SHOW server_version` ≥ 14 for the TID range sweep | leave them |
+| 1 | Deploy; V4 adds the record table, the columns and the eviction indexes (hours of concurrent builds on the big months, no blocking) | leave them |
 | 2 | `export.enabled` on `boa-vista-report-full`, run on demand for `boa_vista_report_full_2025_03` (~2 GB): boundaries pass time, rows/s, S3 bytes, shard sizes (equal, by construction), verification; then the big `_2026_08` at night | delete the objects; records back to `LOADED` |
 | 3 | `cold-read-enabled` on: no behaviour change yet (every partition is still hot, cold reads only happen on hot misses of `VERIFIED` partitions, which have none) | flag off |
-| 4 | `partition-sweep.enabled` with `require-release=false` for the backfilled months (no validator verdict exists for them), sweep the small 2025 month on demand; read a CPF of that month through the gate with an explicit `referenceDate`: rehydrated, served, touched; the row `EVICTION` removes it after the TTL | flag off: deleted rows are served from S3, that is the design |
-| 5 | Backfill: export the remaining months of both tables (≈ 1–2 days of listener time at 4–8 h a big month), then sweep each at ~10–20 MB/s of WAL (1.5–3 days a month, one table at a time, `VACUUM` after each); watch replica lag and the WAL archive | pause the sweep (`enabled=false`, resumes from the cursor) |
-| 6 | Next delivery: the loader's signal exports it on load; the validator's verdict releases it; the sweep follows 8 days after the load (`P7D + P1D`); then lower the TTL to `P3D` if the warm hit rate allows | raise the TTL |
+| 4 | `partition-sweep.enabled`; the backfilled months count their hold from `verified_at`; sweep the small 2025 month on demand once its hold passed; read a CPF of that month through the gate with an explicit `referenceDate`: rehydrated, served, touched; the row `EVICTION` removes it after the TTL | flag off: deleted rows are served from S3, that is the design |
+| 5 | Backfill: export the remaining months of both tables (≈ 1–2 days of listener time at 4–8 h a big month), then sweep each at ~10–20 MB/s of WAL (1.5–3 days a month, one table at a time, autovacuum follows); watch replica lag and the WAL archive | pause the sweep (`enabled=false`, resumes from the cursor) |
+| 6 | Next delivery: the loader's signal exports it on load; the month stays fully hot for the `P5D` hold and the sweep follows 6 days after the load (`P5D + P1D`); then lower the TTL towards `P3D` if the warm hit rate allows | raise the TTL or the hold |
 
 Monitoring: the batch Slack messages (per partition: shards, rows, bytes, duration; a `STALE`
 verdict; per sweep run: blocks, deleted, kept); queue depth and oldest age of
@@ -597,8 +592,8 @@ verdict; per sweep run: blocks, deleted, kept); queue depth and oldest age of
 replica lag and WAL generation during sweeps; and two queries for a dashboard:
 
 ```sql
--- partitions that should have been swept (VERIFIED, released, past TTL + margin) or are inconsistent
-SELECT table_id, partition_name, state, loaded_at, released_at, verified_at, swept_at, row_count,
+-- partitions that should have been swept (VERIFIED, past hold and TTL + margin) or are inconsistent
+SELECT table_id, partition_name, state, loaded_at, verified_at, swept_at, row_count,
        sweep_cursor, sweep_deleted, sweep_kept
 FROM cold_tiering_partition_archive WHERE state IN ('VERIFIED', 'STALE', 'EXPORTING');
 -- rows written after the export inside a verified month (reprocess, or an unexpected writer)
@@ -632,7 +627,7 @@ Library, `src/test/java/org/coldis/library/test/service/tiering/`:
   `findAllByKeysTiered` with keys across shards, blocks and a missing key; a key in a gap between
   blocks costs no block GET; clock +1 h → row `EVICTION` deletes the rehydrated and the kept rows,
   nothing else; a write into the verified month → `STALE`, sweep refused, re-export after
-  `partitionLoaded`; `require-release=true` holds the sweep until `releasePartition`; a corrupted
+  `partitionLoaded`; a month inside its hold is not swept although its rows are expired; a corrupted
   block byte → CRC failure → cache dropped, retry, then `coldTiering.cold.block.corrupt`; an index
   with `formatVersion=99` is refused; a redelivered shard request writes nothing; `_plus` and an
   excluded partition are never exported; the registry rejects a table whose PK does not lead with
@@ -647,8 +642,8 @@ Library, `src/test/java/org/coldis/library/test/service/tiering/`:
   profile test (`BoaVistaBatchS3IntegrationTest` already runs against the real bucket).
 
 Consumer: no new integration test class. `BoaVistaFullPipelineTest` (the full-delivery anchor)
-gains: after the apply, the two partition records are `LOADED`; the verdict releases them;
-`run(tableId, EXPORT)` → `VERIFIED` on the in-memory storage; clock past the TTL → `run(…,
+gains: after the apply, the two partition records are `LOADED`;
+`run(tableId, EXPORT)` → `VERIFIED` on the in-memory storage; clock past the hold → `run(…,
 PARTITION_SWEEP)` → the delivery's rows are gone from the hot table except the ones the test read
 (asserted through the client: a read still answers, now from cold and rehydrated);
 `BoaVistaFullReadGateTest` keeps its cases (reads go through the same component).
@@ -662,18 +657,18 @@ partitioned tables come from Flyway `V1` already (`spring.flyway.enabled=true` i
   high by night, run the backfill one table at a time; the keyset pages never hold a transaction
   across S3 calls.
 - **WAL of the sweep**: ~1.1–1.4 TB per big month and table even in heap order; paced by
-  `delay-between-chunks`, visible on replica lag and the WAL archive; a key-order fallback (pre-14
-  server) multiplies it. The deleted space is not returned to the OS (out of scope by decision).
-- **Vacuum after the sweep**: hours per partition; the PK of a swept month keeps its size; set the
-  per-partition autovacuum parameters or vacuum by hand.
+  `delay-between-chunks` (default ~10 MB/s), visible on replica lag and the WAL archive. The
+  deleted space is not returned to the OS (out of scope by decision).
+- **Autovacuum after the sweep**: hours per partition under its cost delay; the PK of a swept month
+  keeps its size.
 - **Cold read latency on every first read of a CPF** after the month is swept (the whole population
-  is cold after 8 days, by design). ~100–150 ms per cold read on top of the request; the warm
+  is cold after 6 days, by design). ~100–150 ms per cold read on top of the request; the warm
   window keeps repeated CPFs hot. Measure the read QPS on the full tables before step 6.
 - **The validator's 500 k sample** compared against the served date's rows, which live in an
   already swept month: ~55 % of the blocks of each shard hold a sampled key at 1 MB blocks (0.2 %
   of rows sampled) → ~330 k range GETs ≈ 330 GB read, ~20 min at 32-way parallelism, ~US$ 0.15 of
-  requests, free egress inside the region. Workable; the release hold keeps the delivery under
-  validation itself hot, not the month it is compared with.
+  requests, free egress inside the region. Workable; the hold keeps the delivery itself hot for
+  its validation, not the month it is compared with.
 - **Collation vs code-point order**: asserted by the writer; a non-digit tax id would surface
   there, not in a wrong read.
 - **Reprocess after a sweep** re-grows a month to 1.1 TB until it is re-exported and re-swept
@@ -692,12 +687,17 @@ partitioned tables come from Flyway `V1` already (`spring.flyway.enabled=true` i
 - Block codec `gzip` by default in the library, `zstd` an optional plug-in; data-gathering uses
   `zstd`.
 - Index cache in memory, TTL-bounded; Redis later if S3 GET counts call for it.
-- The Full validator: a month is not swept until the validator's verdict for it is recorded
-  (`releasePartition`, `require-release`).
+- Time-based hold: a month stays fully hot for `hold-after-load` (`P5D`) after the loader's
+  signal (after `verified_at` for a backfilled month); no validator release signal.
+- Warm TTL `P5D` on the last-access clock for the full tables (range 3–5 days, per table).
+- Sweep pacing ~10 MB/s of WAL by default (`chunk-blocks=1024`, `PT1S`), property-tunable; the
+  sweep uses the TID range scan (production Postgres 18.6).
+- Autovacuum only after a sweep; no manual vacuum step.
 - Reprocess: `markStale` on re-import; a reprocess past the TTL is manual (`markStale` first).
 - `_legacy` stays hot, never exported.
 - S3 Standard only.
-- `/all` keeps rehydrating what it serves (open question below).
+- `/all` (timeline) rehydrates every cold row it serves: a loan application runs the credit model
+  dozens of times, so the rows must be warm again after the first read.
 - Micrometer deferred.
 - Line-delimited `row_to_json` blocks, not Parquet: rehydration stays `json_populate_record`
   and the library keeps knowing nothing about the consumer's columns.
@@ -716,14 +716,5 @@ partitioned tables come from Flyway `V1` already (`spring.flyway.enabled=true` i
 
 ## Open questions
 
-1. **Timeline rehydration**: `findTimelineTiered` (`/all`, `/newest`) rehydrates every cold row it
-   serves (up to one per month, ~20 KiB each). Confirm `/all` is not on a hot path.
-2. **Server version**: is production Postgres ≥ 14 (TID range scan for the heap-order sweep)? If
-   not, the key-order fallback's WAL cost needs a decision before the first big sweep.
-3. **Sweep pacing**: what WAL rate do the replicas and the archive absorb (sets
-   `delay-between-chunks`, 10 MB/s ≈ 35–40 h per big month)?
-4. **Release signal for backfilled months**: they have no validator verdict; the plan sets
-   `require-release=false` during the backfill and `true` afterwards (or the operator releases
-   them through the QC endpoint). Confirm.
-5. **Vacuum policy** on the big partitions after a sweep: per-partition autovacuum parameters, or a
-   manual `VACUUM` in the runbook?
+1. **Sweep pacing in production**: the default 10 MB/s of WAL (≈ 35–40 h per big month) is a
+   starting point; confirm against replica lag and the WAL archive during the first big sweep.
