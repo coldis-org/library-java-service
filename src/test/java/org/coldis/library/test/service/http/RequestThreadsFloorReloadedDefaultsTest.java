@@ -48,7 +48,7 @@ public class RequestThreadsFloorReloadedDefaultsTest {
 	 */
 	@Test
 	@DisplayName("the running server's cap, read from the copy, is raised to the floor")
-	public void testRunningServerCap() {
+	public void testRunningServerCapFromReloadedDefaultsRaisedToFloor() {
 		final SpringApplication application = new SpringApplicationBuilder(PropertyPlaceholderAutoConfiguration.class,
 				ServletWebServerFactoryAutoConfiguration.class, EmbeddedWebServerFactoryCustomizerAutoConfiguration.class, ServiceConfiguration.class,
 				RequestThreadsFloorCustomizer.class, ReloadedLibraryDefaultsConfiguration.class).web(WebApplicationType.SERVLET).properties("server.port=0")

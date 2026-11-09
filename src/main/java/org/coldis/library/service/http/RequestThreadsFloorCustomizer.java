@@ -79,13 +79,13 @@ public class RequestThreadsFloorCustomizer implements WebServerFactoryCustomizer
 	 */
 	private static PropertySource<?> getMaxThreadsHolder(
 			final PropertySource<?> propertySource) {
-		PropertySource<?> holder = propertySource;
-		while (holder instanceof final CompositePropertySource compositePropertySource) {
-			holder = compositePropertySource.getPropertySources().stream()
+		PropertySource<?> maxThreadsSource = propertySource;
+		while (maxThreadsSource instanceof final CompositePropertySource compositePropertySource) {
+			maxThreadsSource = compositePropertySource.getPropertySources().stream()
 					.filter(nestedPropertySource -> nestedPropertySource.containsProperty(RequestThreadsFloorCustomizer.MAX_THREADS_PROPERTY)).findFirst()
 					.orElse(null);
 		}
-		return ((holder != null) && holder.containsProperty(RequestThreadsFloorCustomizer.MAX_THREADS_PROPERTY)) ? holder : null;
+		return ((maxThreadsSource != null) && maxThreadsSource.containsProperty(RequestThreadsFloorCustomizer.MAX_THREADS_PROPERTY)) ? maxThreadsSource : null;
 	}
 
 	/**
