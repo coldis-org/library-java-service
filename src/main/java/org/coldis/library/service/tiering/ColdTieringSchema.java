@@ -4,6 +4,7 @@ import java.util.ArrayList;
 import java.util.List;
 
 import org.coldis.library.service.tiering.model.TieredTable;
+import org.coldis.library.service.tiering.repository.PartitionArchiveRepository;
 
 /**
  * DDL a tiered table needs on its hot table: the lifecycle columns and the eviction index. The
@@ -71,6 +72,45 @@ public final class ColdTieringSchema {
 		final List<String> statements = new ArrayList<>();
 		statements.add(ColdTieringSchema.columnsStatement(table, watermarkType));
 		statements.add(ColdTieringSchema.evictionIndexStatement(table, concurrently));
+		return statements;
+	}
+
+
+	/**
+	 * DDL of the per-partition archive record table (partition tiering).
+	 *
+	 * @return Statements.
+	 */
+	public static List<String> partitionArchiveStatements() {
+		return List.of("CREATE TABLE IF NOT EXISTS " + PartitionArchiveRepository.TABLE + " (table_id varchar NOT NULL, partition_name varchar NOT NULL,"
+				+ " range_from text, range_to text, state varchar(16) NOT NULL, loaded_at timestamptz, export_started_at timestamptz, exported_at timestamptz,"
+				+ " verified_at timestamptz, swept_at timestamptz, format_version integer, shard_count integer, shards_done integer, row_count bigint,"
+				+ " size_bytes bigint, boundaries jsonb, shards jsonb, sweep_blocks bigint, sweep_cursor bigint, sweep_deleted bigint, sweep_kept bigint,"
+				+ " manifest_key text, created_at timestamptz NOT NULL, updated_at timestamptz NOT NULL, PRIMARY KEY (table_id, partition_name))");
+	}
+
+	/**
+	 * Eviction index of a partitioned table built leaf by leaf (a partitioned table takes no
+	 * {@code CREATE INDEX CONCURRENTLY}): the parent's index {@code ON ONLY}, one concurrent build
+	 * per leaf, each attached.
+	 *
+	 * @param  table  Table.
+	 * @param  leaves Leaf partition names.
+	 * @return        Statements, to run outside a transaction.
+	 */
+	public static List<String> partitionedEvictionIndexStatements(
+			final TieredTable table,
+			final List<String> leaves) {
+		final List<String> statements = new ArrayList<>();
+		final String parentIndex = table.getTableName() + "_cold_evict_idx";
+		statements.add("CREATE INDEX IF NOT EXISTS " + parentIndex + " ON ONLY " + table.getTableName() + " ((" + table.clockExpression() + ")) WHERE "
+				+ table.getArchivedAtColumn() + " IS NOT NULL");
+		for (final String leaf : leaves) {
+			final String leafIndex = TieredTable.identifier(leaf) + "_cold_evict_idx";
+			statements.add("CREATE INDEX CONCURRENTLY IF NOT EXISTS " + leafIndex + " ON " + leaf + " ((" + table.clockExpression() + ")) WHERE "
+					+ table.getArchivedAtColumn() + " IS NOT NULL");
+			statements.add("ALTER INDEX " + parentIndex + " ATTACH PARTITION " + leafIndex);
+		}
 		return statements;
 	}
 
