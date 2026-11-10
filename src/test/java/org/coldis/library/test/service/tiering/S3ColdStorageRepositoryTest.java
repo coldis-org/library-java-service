@@ -44,6 +44,9 @@ public class S3ColdStorageRepositoryTest {
 	/** Bucket. */
 	private static final String BUCKET = "cold-tiering-test";
 
+	/** LocalStack's dummy credentials: any value is accepted by the container, nothing real. */
+	private static final String LOCALSTACK_DUMMY_CREDENTIAL = "test";
+
 	/** Container. */
 	private static GenericContainer<?> container;
 
@@ -60,7 +63,7 @@ public class S3ColdStorageRepositoryTest {
 		S3ColdStorageRepositoryTest.container.start();
 		final URI endpoint = URI.create("http://" + S3ColdStorageRepositoryTest.container.getHost() + ":" + S3ColdStorageRepositoryTest.container.getMappedPort(4566));
 		S3ColdStorageRepositoryTest.client = S3Client.builder().endpointOverride(endpoint).region(Region.US_EAST_1)
-				.credentialsProvider(StaticCredentialsProvider.create(AwsBasicCredentials.create("test", "test")))
+				.credentialsProvider(StaticCredentialsProvider.create(AwsBasicCredentials.create(S3ColdStorageRepositoryTest.LOCALSTACK_DUMMY_CREDENTIAL, S3ColdStorageRepositoryTest.LOCALSTACK_DUMMY_CREDENTIAL)))
 				.serviceConfiguration(S3Configuration.builder().pathStyleAccessEnabled(true).build())
 				// LocalStack 3.8 rejects the SDK's default per-request checksum next to the CRC32C the
 				// repository declares; real S3 accepts both, so only the test client narrows it.

@@ -17,7 +17,11 @@ import org.coldis.library.service.tiering.ColdTieringBatchServiceComponent;
 import org.coldis.library.service.tiering.ColdTieringServiceComponent;
 import org.coldis.library.service.tiering.PartitionTieringServiceComponent;
 import org.coldis.library.service.tiering.TieredHit;
+import org.coldis.library.service.tiering.TieredTableRegistry;
 import org.coldis.library.service.tiering.TieringBatch;
+import org.springframework.jdbc.core.JdbcTemplate;
+import javax.sql.DataSource;
+import org.coldis.library.helper.DateTimeHelper;
 import org.coldis.library.service.tiering.model.LeafPartition;
 import org.coldis.library.service.tiering.model.PartitionArchive;
 import org.coldis.library.service.tiering.model.PartitionArchiveState;
@@ -101,6 +105,12 @@ public class PartitionTieringServiceTest extends ContainerTestHelper {
 	@Autowired
 	private PartitionTieredTable table;
 
+	@Autowired
+	private TieredTableRegistry registry;
+
+	@Autowired
+	private DataSource dataSource;
+
 	@BeforeEach
 	public void beforeEach() {
 		TestHelper.cleanClock();
@@ -130,6 +140,16 @@ public class PartitionTieringServiceTest extends ContainerTestHelper {
 			final String owner,
 			final LocalDateTime cachedAt) {
 		this.repository.save(new TieredMonthlySnapshot(owner, cachedAt, new HashMap<>(Map.of("marker", owner + "@" + cachedAt.getMonthValue()))));
+	}
+
+	@Transactional
+	private void seedWithWatermark(
+			final String owner,
+			final LocalDateTime cachedAt,
+			final LocalDateTime updatedAt) {
+		final TieredMonthlySnapshot snapshot = new TieredMonthlySnapshot(owner, cachedAt, new HashMap<>(Map.of("marker", owner + "@" + cachedAt.getMonthValue())));
+		snapshot.setUpdatedAt(updatedAt);
+		this.repository.save(snapshot);
 	}
 
 	private void seedMonths() {
@@ -301,8 +321,8 @@ public class PartitionTieringServiceTest extends ContainerTestHelper {
 		Assertions.assertEquals(6, this.repository.findAll().size());
 		// Still readable cold afterwards.
 		Assertions.assertTrue(this.tieringServiceComponent.findByIdTiered(TieredMonthlySnapshot.class, keptKey).isPresent());
-		// A reload with fewer hot rows than the archive is refused: the swept keys stay served
-		// from the previous generation, which is left intact.
+		// A reload of a swept month is refused whatever it holds (a second delivery would orphan
+		// the first): the swept keys stay served from the previous generation, left intact.
 		final PartitionArchive beforeReload = this.archive().orElseThrow();
 		this.seed("r001", PartitionTieringServiceTest.JANUARY_MOMENT);
 		this.seed("r002", PartitionTieringServiceTest.JANUARY_MOMENT);
@@ -323,6 +343,78 @@ public class PartitionTieringServiceTest extends ContainerTestHelper {
 				.findByIdTiered(TieredMonthlySnapshot.class, new TieredMonthlySnapshotKey("z004", PartitionTieringServiceTest.JANUARY_MOMENT)).orElseThrow().getData().get("marker"));
 		Assertions.assertTrue(this.partitionTieringServiceComponent.findExportCandidate(this.table).isEmpty());
 		Assertions.assertTrue(this.partitionTieringServiceComponent.findSweepCandidate(this.table).isEmpty());
+		// An operator confirms: the export runs under a new generation over the hot rows only.
+		this.partitionTieringServiceComponent.confirmReexport(ColdTieringTestConfiguration.MONTHLY_TABLE, PartitionTieringServiceTest.JANUARY_MOMENT);
+		Assertions.assertEquals(PartitionArchiveState.LOADED, this.archive().orElseThrow().state());
+		Assertions.assertTrue(this.batchServiceComponent.run(ColdTieringTestConfiguration.MONTHLY_TABLE, TieringBatch.EXPORT));
+		Assertions.assertTrue(TestHelper.waitUntilValid(() -> this.archive().map(PartitionArchive::state).orElse(null), state -> state == PartitionArchiveState.VERIFIED,
+				TestHelper.REGULAR_WAIT * 8, TestHelper.SHORT_WAIT));
+		final PartitionArchive reexported = this.archive().orElseThrow();
+		Assertions.assertNotEquals(beforeReload.generation(), reexported.generation());
+		Assertions.assertNotEquals(beforeReload.manifestKey(), reexported.manifestKey());
+		Assertions.assertEquals((long) this.januaryRows().size(), reexported.rowCount());
+		Assertions.assertFalse(reexported.reexportConfirmed());
+		Assertions.assertNull(reexported.sweptAt());
+		Assertions.assertTrue(Files.isRegularFile(this.pathOf(beforeReload.manifestKey())), "previous generation left in place");
+		Assertions.assertTrue(Files.isRegularFile(this.pathOf(reexported.manifestKey())));
+	}
+
+	@Test
+	@DisplayName("Data-loss guards: a row written after the export leaves the month STALE at the sweep; rows changed during an export end it STALE")
+	public void testDataLossGuards() throws Exception {
+		this.seedMonths();
+		this.exportJanuary();
+		// A row the archive does not cover: the sweep's re-count refuses, nothing deleted, STALE committed.
+		this.seed("n001", PartitionTieringServiceTest.JANUARY_MOMENT);
+		TestHelper.moveClockBy(Duration.ofHours(3));
+		Assertions.assertTrue(this.partitionTieringServiceComponent.findSweepCandidate(this.table).isPresent());
+		Assertions.assertTrue(this.batchServiceComponent.run(ColdTieringTestConfiguration.MONTHLY_TABLE, TieringBatch.PARTITION_SWEEP));
+		Assertions.assertTrue(TestHelper.waitUntilValid(() -> this.archive().map(PartitionArchive::state).orElse(null), state -> state == PartitionArchiveState.STALE,
+				TestHelper.REGULAR_WAIT * 8, TestHelper.SHORT_WAIT));
+		Assertions.assertEquals(53, this.januaryRows().size());
+		Assertions.assertNull(this.archive().orElseThrow().sweepCursor());
+		Assertions.assertNull(this.archive().orElseThrow().sweptAt());
+		Assertions.assertTrue(this.partitionTieringServiceComponent.findSweepCandidate(this.table).isEmpty());
+		// Still readable cold meanwhile.
+		Assertions.assertFalse(this.partitionTieringServiceComponent.readMatching(this.table, PartitionTieringServiceTest.JANUARY, Map.of("owner_id", "a001")).isEmpty());
+		// Rows changed during an export (a watermark after its start) end it STALE, never VERIFIED.
+		this.clean();
+		this.coldStorage.reset();
+		this.partitionTieredRepository.forgetAll();
+		this.seedMonths();
+		this.seedWithWatermark("late1", PartitionTieringServiceTest.JANUARY_MOMENT, DateTimeHelper.getCurrentLocalDateTime().plusMinutes(1));
+		this.partitionTieringServiceComponent.partitionLoaded(ColdTieringTestConfiguration.MONTHLY_TABLE, PartitionTieringServiceTest.JANUARY_MOMENT, null);
+		Assertions.assertTrue(this.batchServiceComponent.run(ColdTieringTestConfiguration.MONTHLY_TABLE, TieringBatch.EXPORT));
+		Assertions.assertTrue(TestHelper.waitUntilValid(() -> this.archive().map(PartitionArchive::state).orElse(null), state -> state == PartitionArchiveState.STALE,
+				TestHelper.REGULAR_WAIT * 8, TestHelper.SHORT_WAIT));
+		Assertions.assertNotNull(this.archive().orElseThrow().manifestKey());
+		Assertions.assertTrue(this.partitionTieringServiceComponent.findSweepCandidate(this.table).isEmpty());
+	}
+
+	@Test
+	@DisplayName("Delete: a row of an archived partition is refused, a row of a hot partition is deleted; a date partition column is rejected")
+	public void testDeleteAndValidation() throws Exception {
+		this.seedMonths();
+		final TieredMonthlySnapshotKey februaryKey = new TieredMonthlySnapshotKey("a099", PartitionTieringServiceTest.FEBRUARY_MOMENT);
+		this.tieringServiceComponent.delete(this.tieringServiceComponent.keyOf(TieredMonthlySnapshot.class, februaryKey));
+		Assertions.assertTrue(this.repository.findById(februaryKey).isEmpty());
+		this.exportJanuary();
+		final TieredMonthlySnapshotKey januaryKey = new TieredMonthlySnapshotKey("a001", PartitionTieringServiceTest.JANUARY_MOMENT);
+		Assertions.assertThrows(IntegrationException.class, () -> this.tieringServiceComponent.delete(this.tieringServiceComponent.keyOf(TieredMonthlySnapshot.class, januaryKey)));
+		Assertions.assertTrue(this.repository.findById(januaryKey).isPresent());
+		// Only a timestamp (without time zone) partition column is accepted.
+		final JdbcTemplate jdbcTemplate = new JdbcTemplate(this.dataSource);
+		jdbcTemplate.execute("DROP TABLE IF EXISTS tiered_daily_snapshot CASCADE");
+		jdbcTemplate.execute("CREATE TABLE tiered_daily_snapshot (owner_id varchar(255) NOT NULL, cached_on date NOT NULL, data jsonb, created_at timestamptz NOT NULL,"
+				+ " updated_at timestamp(6) NOT NULL, last_accessed_at timestamp(6), archived_at timestamp(6), PRIMARY KEY (owner_id, cached_on)) PARTITION BY RANGE (cached_on)");
+		try {
+			Assertions.assertThrows(IntegrationException.class,
+					() -> this.registry.validate(new PartitionTieredTable("tiered-daily-snapshot", "tiered_daily_snapshot", List.of("owner_id", "cached_on"))));
+			this.registry.validate(this.table);
+		}
+		finally {
+			jdbcTemplate.execute("DROP TABLE IF EXISTS tiered_daily_snapshot CASCADE");
+		}
 	}
 
 	@Test
@@ -368,9 +460,16 @@ public class PartitionTieringServiceTest extends ContainerTestHelper {
 	@Test
 	@DisplayName("Schedules: export and sweep crons are registered for partition tables, backfill is not")
 	public void testSchedules() throws Exception {
-		Assertions.assertNotNull(this.batchServiceComponent.schedule(this.table, TieringBatch.EXPORT, "0 15 * * * *"));
-		Assertions.assertNotNull(this.batchServiceComponent.schedule(this.table, TieringBatch.PARTITION_SWEEP, "0 0 22 * * *"));
-		Assertions.assertTrue(this.batchServiceComponent.getScheduled().containsKey(TieringBatch.EXPORT.keySuffix(ColdTieringTestConfiguration.MONTHLY_TABLE)));
+		// The startup decision itself: the monthly table's properties carry crons for the export
+		// and the sweep (a date that never comes round in a test run), none for the row batches.
+		this.batchServiceComponent.cancelAll();
+		this.batchServiceComponent.afterSingletonsInstantiated();
+		final Map<String, String> scheduled = this.batchServiceComponent.getScheduled();
+		Assertions.assertEquals("0 0 0 29 2 *", scheduled.get(TieringBatch.EXPORT.keySuffix(ColdTieringTestConfiguration.MONTHLY_TABLE)));
+		Assertions.assertEquals("0 0 0 29 2 *", scheduled.get(TieringBatch.PARTITION_SWEEP.keySuffix(ColdTieringTestConfiguration.MONTHLY_TABLE)));
+		Assertions.assertFalse(scheduled.containsKey(TieringBatch.BACKFILL.keySuffix(ColdTieringTestConfiguration.MONTHLY_TABLE)));
+		Assertions.assertFalse(scheduled.containsKey(TieringBatch.EVICTION.keySuffix(ColdTieringTestConfiguration.MONTHLY_TABLE)));
+		Assertions.assertFalse(scheduled.containsKey(TieringBatch.EXPORT.keySuffix(ColdTieringTestConfiguration.SNAPSHOT_TABLE)));
 		Assertions.assertFalse(this.batchServiceComponent.run(this.table, TieringBatch.BACKFILL));
 	}
 
