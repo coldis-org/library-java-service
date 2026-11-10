@@ -7,8 +7,8 @@ import org.coldis.library.model.SimpleMessage;
 
 /**
  * A range-partitioned hot table archived one leaf partition at a time as sharded objects. The
- * shard key is the first key column (and must lead the primary key); the partition column is a
- * key column and the table's range partition key. Always versioned on the partition column,
+ * shard key is the first key column (digit-only text or an integer, leading the primary key);
+ * the partition column is the last key column and the table's range partition key. Always versioned on the partition column,
  * always {@link TtlClock#LAST_ACCESS} and {@link Rehydration#INSERT}.
  */
 public class PartitionTieredTable extends TieredTable {
@@ -61,13 +61,13 @@ public class PartitionTieredTable extends TieredTable {
 	/**
 	 * Sets the partition column.
 	 *
-	 * @param  partitionColumn Column, one of the key columns.
+	 * @param  partitionColumn Column: the last key column (the version of the row).
 	 * @return                 This.
 	 */
 	public PartitionTieredTable withPartitionColumn(
 			final String partitionColumn) {
-		if (!this.getKeyColumns().contains(TieredTable.identifier(partitionColumn))) {
-			throw new IntegrationException(new SimpleMessage("coldTiering.table.partition.column.invalid", new Object[] { this.getId(), partitionColumn }));
+		if (!this.getLastKeyColumn().equals(TieredTable.identifier(partitionColumn))) {
+			throw new IntegrationException(new SimpleMessage("coldTiering.table.partition.column.last.invalid", new Object[] { this.getId(), partitionColumn }));
 		}
 		this.partitionColumn = partitionColumn;
 		return this;

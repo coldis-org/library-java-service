@@ -377,6 +377,17 @@ public class TieredTable implements ColdTable {
 	}
 
 	/**
+	 * Object key prefix to use: the one bound at registration, else the given global one.
+	 *
+	 * @param  globalPrefix Global prefix.
+	 * @return              Prefix.
+	 */
+	public String objectPrefixOr(
+			final String globalPrefix) {
+		return this.objectPrefix == null ? globalPrefix : this.objectPrefix;
+	}
+
+	/**
 	 * Binds the object key prefix.
 	 *
 	 * @param objectPrefix Prefix.

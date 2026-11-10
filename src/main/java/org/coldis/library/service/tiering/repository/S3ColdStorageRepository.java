@@ -10,6 +10,8 @@ import java.util.Optional;
 
 import org.coldis.library.service.tiering.model.ColdObject;
 import org.coldis.library.service.tiering.model.ColdUpload;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import software.amazon.awssdk.core.sync.RequestBody;
 import software.amazon.awssdk.services.s3.S3Client;
@@ -26,6 +28,7 @@ import software.amazon.awssdk.services.s3.model.ListObjectsV2Request;
 import software.amazon.awssdk.services.s3.model.ListObjectsV2Response;
 import software.amazon.awssdk.services.s3.model.NoSuchKeyException;
 import software.amazon.awssdk.services.s3.model.PutObjectRequest;
+import software.amazon.awssdk.services.s3.model.S3Exception;
 import software.amazon.awssdk.services.s3.model.S3Object;
 import software.amazon.awssdk.services.s3.model.UploadPartRequest;
 import software.amazon.awssdk.services.s3.model.UploadPartResponse;
@@ -36,6 +39,9 @@ import software.amazon.awssdk.services.s3.model.UploadPartResponse;
  * tiering.
  */
 public class S3ColdStorageRepository implements ColdStorageRepository {
+
+	/** Logger. */
+	private static final Logger LOGGER = LoggerFactory.getLogger(S3ColdStorageRepository.class);
 
 	/** S3 multipart minimum part size (5 MiB). */
 	private static final Integer MINIMUM_PART_SIZE = 5 * 1024 * 1024;
@@ -148,6 +154,9 @@ public class S3ColdStorageRepository implements ColdStorageRepository {
 			/** Bytes. */
 			private Long size = 0L;
 
+			/** Whether the upload completed. */
+			private Boolean isCompleted = false;
+
 			@Override
 			public void part(
 					final byte[] content) {
@@ -168,7 +177,8 @@ public class S3ColdStorageRepository implements ColdStorageRepository {
 			public ColdObject complete() {
 				ColdObject object;
 				if (this.parts.isEmpty()) {
-					// S3 refuses a multipart completion with no part: the empty object is a plain put.
+					// S3 refuses a multipart completion with no part: the upload is aborted and the
+					// empty object is a plain put.
 					this.abort();
 					object = S3ColdStorageRepository.this.store(key, new byte[0], metadata);
 				}
@@ -177,13 +187,23 @@ public class S3ColdStorageRepository implements ColdStorageRepository {
 							.key(key).uploadId(uploadId).multipartUpload(CompletedMultipartUpload.builder().parts(this.parts).build()).build());
 					object = new ColdObject(key, this.size);
 				}
+				this.isCompleted = true;
 				return object;
 			}
 
 			@Override
 			public void abort() {
-				S3ColdStorageRepository.this.s3Client
-						.abortMultipartUpload(AbortMultipartUploadRequest.builder().bucket(S3ColdStorageRepository.this.bucket).key(key).uploadId(uploadId).build());
+				if (!this.isCompleted) {
+					this.isCompleted = true;
+					try {
+						S3ColdStorageRepository.this.s3Client
+								.abortMultipartUpload(AbortMultipartUploadRequest.builder().bucket(S3ColdStorageRepository.this.bucket).key(key).uploadId(uploadId).build());
+					}
+					catch (final S3Exception exception) {
+						// Best effort: the bucket's lifecycle rule for incomplete uploads cleans what is left.
+						S3ColdStorageRepository.LOGGER.warn("[COLD_TIERING_UPLOAD] abort of the multipart upload failed: {}", exception.getLocalizedMessage());
+					}
+				}
 			}
 		};
 	}

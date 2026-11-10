@@ -9,7 +9,7 @@ import java.util.List;
  */
 public record PartitionArchive(String tableId, String partitionName, String rangeFrom, String rangeTo, PartitionArchiveState state, LocalDateTime loadedAt,
 		LocalDateTime exportStartedAt, LocalDateTime exportedAt, LocalDateTime verifiedAt, LocalDateTime sweptAt, Integer formatVersion, Integer shardCount,
-		Integer shardsDone, Long rowCount, Long loadedRows, Long sizeBytes, String generation, Boolean reexportConfirmed, List<String> boundaries,
+		Integer shardsDone, Long rowCount, Long loadedRows, Long sizeBytes, String generation, Boolean isReexportConfirmed, List<String> boundaries,
 		List<PartitionManifest.ShardSummary> shards, Long sweepBlocks, Long sweepCursor, Long sweepDeleted, Long sweepKept, String manifestKey) {
 
 	/**

@@ -167,7 +167,8 @@ public class TieredTableRegistry implements SmartInitializingSingleton {
 
 	/**
 	 * Validates a partition-tiered table: range-partitioned on the partition column, the shard key
-	 * leading the primary key, no backfill. Reads only; the DDL belongs to {@code register}.
+	 * leading the primary key with a digit-only text or integer type, the partition column the
+	 * last key column. Reads only; the DDL belongs to {@code register}.
 	 *
 	 * @param table       Table.
 	 * @param columnTypes Column types.
@@ -186,8 +187,12 @@ public class TieredTableRegistry implements SmartInitializingSingleton {
 		if (primaryKey.isEmpty() || !primaryKey.get(0).equals(table.getShardKeyColumn())) {
 			throw new IntegrationException(new SimpleMessage("coldTiering.table.shard.index.invalid", new Object[] { table.getId(), table.getShardKeyColumn() }));
 		}
-		if (this.properties.of(table).getBackfill().getEnabled()) {
-			throw new IntegrationException(new SimpleMessage("coldTiering.table.partition.backfill.invalid", new Object[] { table.getId() }));
+		if (!table.getPartitionColumn().equals(table.getLastKeyColumn())) {
+			throw new IntegrationException(new SimpleMessage("coldTiering.table.partition.column.last.invalid", new Object[] { table.getId(), table.getPartitionColumn() }));
+		}
+		final String shardKeyType = columnTypes.get(table.getShardKeyColumn());
+		if (!ColumnValues.TEXT_TYPES.contains(shardKeyType) && !ColumnValues.INTEGER_TYPES.contains(shardKeyType)) {
+			throw new IntegrationException(new SimpleMessage("coldTiering.table.shard.type.invalid", new Object[] { table.getId(), table.getShardKeyColumn(), shardKeyType }));
 		}
 	}
 

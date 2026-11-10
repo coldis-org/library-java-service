@@ -14,7 +14,6 @@ import org.coldis.library.serialization.ObjectMapperHelper;
 import org.coldis.library.service.tiering.model.BlockCodec;
 import org.coldis.library.service.tiering.model.BlockEntry;
 import org.coldis.library.service.tiering.model.ColdRow;
-import org.coldis.library.service.tiering.model.ColdTable;
 import org.coldis.library.service.tiering.model.ColdTieringPropertyNames;
 import org.coldis.library.service.tiering.model.TieredTable;
 import org.coldis.library.service.tiering.model.ColdUpload;
@@ -61,18 +60,6 @@ public class PartitionTieredRepository {
 	/** Object prefix. */
 	@Value(ColdTieringPropertyNames.OBJECT_PREFIX_PLACEHOLDER)
 	private String objectPrefix;
-
-	/**
-	 * Object key prefix of a table: the one bound at registration, else the global one.
-	 *
-	 * @param  table Table.
-	 * @return       Prefix.
-	 */
-	private String prefixOf(
-			final ColdTable table) {
-		final String bound = table instanceof final TieredTable tiered ? tiered.getObjectPrefix() : null;
-		return bound == null ? this.objectPrefix : bound;
-	}
 
 	/** Index cache TTL. */
 	@Value("${" + ColdTieringPropertyNames.PREFIX + ".index-cache.ttl:PT5M}")
@@ -200,7 +187,7 @@ public class PartitionTieredRepository {
 			final PartitionTieredTable table,
 			final String partition,
 			final String generation) {
-		return this.objectKeyStrategy.keyOf(this.prefixOf(table), table, List.of(partition, generation, PartitionTieredRepository.MANIFEST_SEGMENT),
+		return this.objectKeyStrategy.keyOf(table.objectPrefixOr(this.objectPrefix), table, List.of(partition, generation, PartitionTieredRepository.MANIFEST_SEGMENT),
 				this.payloadCodec.extension());
 	}
 
@@ -218,7 +205,7 @@ public class PartitionTieredRepository {
 			final String partition,
 			final String generation,
 			final Integer shard) {
-		return this.objectKeyStrategy.keyOf(this.prefixOf(table), table, List.of(partition, generation, PartitionTieredRepository.shardName(shard)),
+		return this.objectKeyStrategy.keyOf(table.objectPrefixOr(this.objectPrefix), table, List.of(partition, generation, PartitionTieredRepository.shardName(shard)),
 				PartitionTieredRepository.INDEX_EXTENSION);
 	}
 
@@ -236,7 +223,7 @@ public class PartitionTieredRepository {
 			final String partition,
 			final String generation,
 			final Integer shard) {
-		return this.objectKeyStrategy.keyOf(this.prefixOf(table), table, List.of(partition, generation, PartitionTieredRepository.shardName(shard)),
+		return this.objectKeyStrategy.keyOf(table.objectPrefixOr(this.objectPrefix), table, List.of(partition, generation, PartitionTieredRepository.shardName(shard)),
 				PartitionTieredRepository.BLOCKS_EXTENSION);
 	}
 
@@ -304,7 +291,7 @@ public class PartitionTieredRepository {
 	public void forget(
 			final PartitionTieredTable table,
 			final String partition) {
-		final String prefix = this.objectKeyStrategy.prefixOf(this.prefixOf(table), table, List.of(partition));
+		final String prefix = this.objectKeyStrategy.prefixOf(table.objectPrefixOr(this.objectPrefix), table, List.of(partition));
 		this.cache.keySet().removeIf(key -> key.startsWith(prefix));
 	}
 

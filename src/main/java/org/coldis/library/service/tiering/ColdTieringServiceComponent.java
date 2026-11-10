@@ -184,19 +184,6 @@ public class ColdTieringServiceComponent {
 	}
 
 	/**
-	 * Canonical segment of a row key's last key column.
-	 *
-	 * @param  table Table.
-	 * @param  key   Key.
-	 * @return       Segment.
-	 */
-	private static String lastSegmentOf(
-			final TieredTable table,
-			final TieredRowKey key) {
-		return ColumnValues.toSegment(table.getColumnTypes().get(table.getLastKeyColumn()), key.values().get(table.getLastKeyColumn()));
-	}
-
-	/**
 	 * Sort key of a row in a timeline: the last key column's segment, then the whole key's
 	 * segments (newest first when sorted descending).
 	 *
@@ -207,7 +194,7 @@ public class ColdTieringServiceComponent {
 	private static String timelineKeyOf(
 			final TieredTable table,
 			final TieredRowKey key) {
-		return ColdTieringServiceComponent.lastSegmentOf(table, key) + "/" + String.join("/", ColumnValues.toSegments(table, table.getColumnTypes(), key.values()));
+		return ColumnValues.lastSegmentOf(table, key) + "/" + String.join("/", ColumnValues.toSegments(table, table.getColumnTypes(), key.values()));
 	}
 
 	/**
@@ -606,7 +593,7 @@ public class ColdTieringServiceComponent {
 	}
 
 	/**
-	 * Rows by full keys: hot hits, then the missing keys read cold and rehydrated (through
+	 * Rows by entity ids, one lookup each: hot hits, then the missing ids read cold and rehydrated (through
 	 * {@link #findByIdTiered}, so on a {@link Rehydration#NONE} table only hot rows are
 	 * returned). Keys with no row are left out.
 	 *
@@ -619,7 +606,7 @@ public class ColdTieringServiceComponent {
 			propagation = Propagation.REQUIRED,
 			timeoutString = "${org.coldis.library.service.transaction.long-timeout}"
 	)
-	public <Type> List<TieredHit<Type>> findAllByKeysTiered(
+	public <Type> List<TieredHit<Type>> findAllByIdsTiered(
 			final Class<Type> entityClass,
 			final Collection<?> ids) {
 		final List<TieredHit<Type>> hits = new ArrayList<>();

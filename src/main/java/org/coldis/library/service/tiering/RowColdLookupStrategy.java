@@ -36,19 +36,6 @@ public class RowColdLookupStrategy implements ColdLookupStrategy {
 	private TieredRepository tieredRepository;
 
 	/**
-	 * Canonical segment of a key's last column.
-	 *
-	 * @param  table Table.
-	 * @param  key   Key.
-	 * @return       Segment.
-	 */
-	private static String lastSegmentOf(
-			final TieredTable table,
-			final TieredRowKey key) {
-		return ColumnValues.toSegment(table.getColumnTypes().get(table.getLastKeyColumn()), key.values().get(table.getLastKeyColumn()));
-	}
-
-	/**
 	 * @see ColdLookupStrategy#unit()
 	 */
 	@Override
@@ -81,7 +68,7 @@ public class RowColdLookupStrategy implements ColdLookupStrategy {
 				value) -> keyPrefix.put(column, ColumnValues.parse(table.getColumnTypes().get(column), value)));
 		return this.tieredRepository.findNewestColdKey(table, keyPrefix, asOf)
 				.filter(coldKey -> hotCandidate.isEmpty()
-						|| (RowColdLookupStrategy.lastSegmentOf(table, hotCandidate.get()).compareTo(RowColdLookupStrategy.lastSegmentOf(table, coldKey)) < 0))
+						|| (ColumnValues.lastSegmentOf(table, hotCandidate.get()).compareTo(ColumnValues.lastSegmentOf(table, coldKey)) < 0))
 				.flatMap(coldKey -> this.tieredRepository.loadCold(table, coldKey));
 	}
 
