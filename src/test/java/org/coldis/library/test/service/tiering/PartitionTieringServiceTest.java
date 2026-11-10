@@ -28,6 +28,7 @@ import org.coldis.library.service.tiering.model.PartitionArchiveState;
 import org.coldis.library.service.tiering.model.PartitionManifest;
 import org.coldis.library.service.tiering.model.PartitionTieredTable;
 import org.coldis.library.service.tiering.model.ShardExportRequest;
+import org.coldis.library.service.tiering.model.ShardIndex;
 import org.coldis.library.service.tiering.repository.FolderColdStorageRepository;
 import org.coldis.library.service.tiering.repository.PartitionArchiveRepository;
 import org.coldis.library.service.tiering.repository.PartitionTieredRepository;
@@ -148,6 +149,18 @@ public class PartitionTieringServiceTest extends ContainerTestHelper {
 			final LocalDateTime cachedAt,
 			final LocalDateTime updatedAt) {
 		final TieredMonthlySnapshot snapshot = new TieredMonthlySnapshot(owner, cachedAt, new HashMap<>(Map.of("marker", owner + "@" + cachedAt.getMonthValue())));
+		snapshot.setUpdatedAt(updatedAt);
+		this.repository.save(snapshot);
+	}
+
+	@Transactional
+	private void rewrite(
+			final String owner,
+			final LocalDateTime cachedAt,
+			final String marker,
+			final LocalDateTime updatedAt) {
+		final TieredMonthlySnapshot snapshot = this.repository.findById(new TieredMonthlySnapshotKey(owner, cachedAt)).orElseThrow();
+		snapshot.setData(new HashMap<>(Map.of("marker", marker)));
 		snapshot.setUpdatedAt(updatedAt);
 		this.repository.save(snapshot);
 	}
@@ -363,6 +376,23 @@ public class PartitionTieringServiceTest extends ContainerTestHelper {
 	@DisplayName("Data-loss guards: a row written after the export leaves the month STALE at the sweep; rows changed during an export end it STALE")
 	public void testDataLossGuards() throws Exception {
 		this.seedMonths();
+		final PartitionArchive exported = this.exportJanuary();
+		// A row rewritten after the export (same key, newer watermark, count unchanged) survives
+		// the sweep with its new content and is not counted as deleted.
+		this.rewrite("a005", PartitionTieringServiceTest.JANUARY_MOMENT, "rewritten", exported.exportStartedAt().plusMinutes(1));
+		TestHelper.moveClockBy(Duration.ofHours(3));
+		Assertions.assertTrue(this.batchServiceComponent.run(ColdTieringTestConfiguration.MONTHLY_TABLE, TieringBatch.PARTITION_SWEEP));
+		Assertions.assertTrue(TestHelper.waitUntilValid(() -> this.archive().map(PartitionArchive::sweptAt).orElse(null), sweptAt -> sweptAt != null,
+				TestHelper.REGULAR_WAIT * 8, TestHelper.SHORT_WAIT));
+		Assertions.assertEquals(51L, this.archive().orElseThrow().sweepDeleted());
+		final TieredMonthlySnapshot survivor = this.repository.findById(new TieredMonthlySnapshotKey("a005", PartitionTieringServiceTest.JANUARY_MOMENT)).orElseThrow();
+		Assertions.assertEquals("rewritten", survivor.getData().get("marker"));
+		Assertions.assertNull(survivor.getArchivedAt(), "a rewritten row is not covered by the export, so never marked");
+		Assertions.assertEquals(1, this.januaryRows().size());
+		this.clean();
+		this.coldStorage.reset();
+		this.partitionTieredRepository.forgetAll();
+		this.seedMonths();
 		this.exportJanuary();
 		// A row the archive does not cover: the sweep's re-count refuses, nothing deleted, STALE committed.
 		this.seed("n001", PartitionTieringServiceTest.JANUARY_MOMENT);
@@ -455,6 +485,33 @@ public class PartitionTieringServiceTest extends ContainerTestHelper {
 				manifest.rangeFrom(), manifest.rangeTo(), manifest.keyColumns(), manifest.shardStrategy(), manifest.boundaries(), manifest.shards(), manifest.rows(),
 				manifest.exportStartedAt(), manifest.exportedAt()));
 		Assertions.assertThrows(IntegrationException.class, () -> this.partitionTieredRepository.manifest(exported.manifestKey()));
+		// Verification failures: a row that appears in a shard's range after it was written fails
+		// the count check; a sample that does not read back fails the sample check. Neither
+		// touches the record.
+		final ShardIndex shardZero = this.partitionTieredRepository.loadIndex(this.table, PartitionTieringServiceTest.JANUARY, exported.generation(), 0).orElseThrow();
+		final ShardExportRequest shardZeroRequest = new ShardExportRequest(ColdTieringTestConfiguration.MONTHLY_TABLE, PartitionTieringServiceTest.JANUARY,
+				exported.generation(), 0, "", manifest.boundaries().size() > 1 ? manifest.boundaries().get(1) : null, shardZero.exportStartedAt());
+		Assertions.assertThrows(IntegrationException.class, () -> this.partitionTieringServiceComponent.verifyShard(this.table, shardZeroRequest, shardZero,
+				Map.of(List.of(shardZeroOwner, "2026-01-10T00:00:00.000000"), "{\"owner_id\":\"" + shardZeroOwner + "\",\"other\":true}")));
+		this.seed("a000", PartitionTieringServiceTest.JANUARY_MOMENT);
+		Assertions.assertThrows(IntegrationException.class, () -> this.partitionTieringServiceComponent.verifyShard(this.table, shardZeroRequest, shardZero, Map.of()));
+		final PartitionArchive untouched = this.archive().orElseThrow();
+		Assertions.assertEquals(exported.shardsDone(), untouched.shardsDone());
+		Assertions.assertEquals(exported.verifiedAt(), untouched.verifiedAt());
+		Assertions.assertEquals(exported.manifestKey(), untouched.manifestKey());
+		Assertions.assertEquals(exported.state(), untouched.state());
+		// An empty shard: an index with no block, a miss without a range read.
+		this.partitionTieringServiceComponent.exportShard(new ShardExportRequest(ColdTieringTestConfiguration.MONTHLY_TABLE, PartitionTieringServiceTest.JANUARY,
+				exported.generation(), 99, "zz", null, "empty"));
+		final ShardIndex empty = this.partitionTieredRepository.loadIndex(this.table, PartitionTieringServiceTest.JANUARY, exported.generation(), 99).orElseThrow();
+		Assertions.assertEquals(0L, empty.rows());
+		Assertions.assertTrue(empty.blocks().isEmpty());
+		Assertions.assertEquals(0L, this.coldStorage.head(this.partitionTieredRepository.blocksKey(this.table, PartitionTieringServiceTest.JANUARY, exported.generation(), 99))
+				.orElseThrow().sizeBytes());
+		final Long rangeReads = this.partitionTieredRepository.getRangeReads();
+		Assertions.assertTrue(this.partitionTieredRepository.readMatching(this.table, PartitionTieringServiceTest.JANUARY, empty, List.of("zzz")).isEmpty());
+		Assertions.assertEquals(rangeReads, this.partitionTieredRepository.getRangeReads());
+		Assertions.assertEquals(exported.shardsDone(), this.archive().orElseThrow().shardsDone());
 	}
 
 	@Test

@@ -169,11 +169,11 @@ public class ShardedBlockFormatUnitTest {
 		Assertions.assertEquals("01", prefixes.get(1));
 		Assertions.assertEquals(42, PartitionManifest.shardOf(prefixes, "4299999"));
 		final LeafPartition month = LeafPartition.of("t_2026_01", "FOR VALUES FROM ('2026-01-01 00:00:00') TO ('2026-02-01 00:00:00')");
-		Assertions.assertFalse(month.openEnded());
+		Assertions.assertFalse(month.isOpenEnded());
 		Assertions.assertTrue(month.contains(java.time.LocalDateTime.of(2026, 1, 15, 0, 0)));
 		Assertions.assertFalse(month.contains(java.time.LocalDateTime.of(2026, 2, 1, 0, 0)));
-		Assertions.assertTrue(LeafPartition.of("t_plus", "FOR VALUES FROM ('2026-04-01 00:00:00') TO (MAXVALUE)").openEnded());
-		Assertions.assertTrue(LeafPartition.of("t_default", "DEFAULT").openEnded());
+		Assertions.assertTrue(LeafPartition.of("t_plus", "FOR VALUES FROM ('2026-04-01 00:00:00') TO (MAXVALUE)").isOpenEnded());
+		Assertions.assertTrue(LeafPartition.of("t_default", "DEFAULT").isOpenEnded());
 		Assertions.assertEquals(0, BlockEntry.compareKeys(List.of("a"), List.of("a", "x")));
 		Assertions.assertTrue(BlockEntry.compareKeys(List.of("a", "b"), List.of("a", "c")) < 0);
 		// CRC32C check value (RFC 3720): "123456789" -> 0xE3069283; and the JDK implementation agrees.

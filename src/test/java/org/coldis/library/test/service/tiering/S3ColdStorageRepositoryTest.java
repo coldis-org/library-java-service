@@ -130,6 +130,14 @@ public class S3ColdStorageRepositoryTest {
 		Assertions.assertTrue(storage.head("t/a/0002.blocks").isEmpty());
 		Assertions.assertTrue(S3ColdStorageRepositoryTest.client
 				.listMultipartUploads(ListMultipartUploadsRequest.builder().bucket(S3ColdStorageRepositoryTest.BUCKET).prefix("t/a/0002").build()).uploads().isEmpty());
+		// An upload completed with no part (an empty shard) is an empty object, not a refused completion.
+		final ColdUpload emptyUpload = storage.beginUpload("t/a/0003.blocks", Map.of(ColdStorageRepository.CONTENT_TYPE_METADATA, "application/octet-stream"));
+		Assertions.assertEquals(0L, emptyUpload.complete().sizeBytes());
+		Assertions.assertEquals(0L, storage.head("t/a/0003.blocks").orElseThrow().sizeBytes());
+		Assertions.assertEquals(0, storage.load("t/a/0003.blocks").orElseThrow().length);
+		Assertions.assertTrue(S3ColdStorageRepositoryTest.client
+				.listMultipartUploads(ListMultipartUploadsRequest.builder().bucket(S3ColdStorageRepositoryTest.BUCKET).prefix("t/a/0003").build()).uploads().isEmpty());
+		storage.delete("t/a/0003.blocks");
 		// Store, load, list, delete.
 		storage.store("t/b/row.json.gz", last, Map.of(ColdStorageRepository.CONTENT_TYPE_METADATA, "application/gzip"));
 		Assertions.assertArrayEquals(last, storage.load("t/b/row.json.gz").orElseThrow());
