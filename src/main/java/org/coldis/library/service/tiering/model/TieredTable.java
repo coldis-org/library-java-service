@@ -156,6 +156,16 @@ public class TieredTable implements ColdTable {
 	}
 
 	/**
+	 * Archive unit: one row per object for this definition; a {@link PartitionTieredTable} says
+	 * {@link ArchiveUnit#PARTITION}.
+	 *
+	 * @return Unit.
+	 */
+	public ArchiveUnit getArchiveUnit() {
+		return ArchiveUnit.ROW;
+	}
+
+	/**
 	 * The last key column: the object's file name and, when versioned, the version/time.
 	 *
 	 * @return The column.
