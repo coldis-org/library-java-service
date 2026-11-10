@@ -19,6 +19,10 @@ import org.coldis.library.service.batch.BatchService;
 import org.coldis.library.service.tiering.ColdTieringProperties.BatchProperties;
 import org.coldis.library.service.tiering.ColdTieringProperties.TableProperties;
 import org.coldis.library.service.tiering.repository.HotTierRepository;
+import org.coldis.library.service.tiering.repository.PartitionHotTierRepository;
+import org.coldis.library.service.tiering.model.ArchiveUnit;
+import org.coldis.library.service.tiering.model.LeafPartition;
+import org.coldis.library.service.tiering.model.PartitionTieredTable;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.ObjectProvider;
@@ -59,6 +63,16 @@ public class ColdTieringBatchServiceComponent implements SmartInitializingSingle
 
 	}
 
+	/** One partition to export. */
+	public record ExportItem(String tableId, String partition) implements Serializable {
+
+	}
+
+	/** One sweep step of a partition. */
+	public record SweepChunk(String tableId, String partition, Long number) implements Serializable {
+
+	}
+
 	/** Batch argument naming the table. */
 	private static final String TABLE_ARGUMENT = "table";
 
@@ -76,6 +90,12 @@ public class ColdTieringBatchServiceComponent implements SmartInitializingSingle
 	@Autowired
 	private TieredTableRegistry registry;
 
+	/**
+	 * Partition tiering.
+	 */
+	@Autowired
+	private PartitionTieringServiceComponent partitionTieringServiceComponent;
+
 	/** Properties. */
 	@Autowired
 	private ColdTieringProperties properties;
@@ -83,6 +103,12 @@ public class ColdTieringBatchServiceComponent implements SmartInitializingSingle
 	/** Hot tier. */
 	@Autowired
 	private HotTierRepository hotTierRepository;
+
+	/**
+	 * Partition hot tier repository.
+	 */
+	@Autowired
+	private PartitionHotTierRepository partitionHotTierRepository;
 
 	/** Tiering component (archive). */
 	@Autowired
@@ -195,6 +221,83 @@ public class ColdTieringBatchServiceComponent implements SmartInitializingSingle
 	}
 
 	/**
+	 * GET of the export batch: the next partition to export, one per step.
+	 *
+	 * @param  lastItem  Last item.
+	 * @param  size      Ignored.
+	 * @param  arguments Arguments.
+	 * @return           Item.
+	 */
+	public List<ExportItem> findNextExport(
+			final ExportItem lastItem,
+			final Long size,
+			final Map<String, String> arguments) {
+		final PartitionTieredTable table = (PartitionTieredTable) this.registry.getTable(arguments.get(ColdTieringBatchServiceComponent.TABLE_ARGUMENT));
+		return this.partitionTieringServiceComponent.findExportCandidate(table).map(partition -> List.of(new ExportItem(table.getId(), partition.name())))
+				.orElse(List.of());
+	}
+
+	/**
+	 * EXECUTE of the export batch: boundaries pass and shard requests.
+	 *
+	 * @param item Item.
+	 */
+	public void startExport(
+			final ExportItem item) {
+		final PartitionTieredTable table = (PartitionTieredTable) this.registry.getTable(item.tableId());
+		final LeafPartition partition = this.partitionHotTierRepository.leafPartitions(table).stream().filter(leaf -> leaf.name().equals(item.partition())).findFirst()
+				.orElseThrow();
+		this.partitionTieringServiceComponent.startExport(table, partition);
+	}
+
+	/**
+	 * GET of the sweep batch: the next chunk of the partition being swept, or the first of the
+	 * next partition past its hold.
+	 *
+	 * @param  lastChunk Last chunk.
+	 * @param  size      Ignored.
+	 * @param  arguments Arguments.
+	 * @return           Chunk.
+	 */
+	public List<SweepChunk> findNextSweepChunk(
+			final SweepChunk lastChunk,
+			final Long size,
+			final Map<String, String> arguments) {
+		final PartitionTieredTable table = (PartitionTieredTable) this.registry.getTable(arguments.get(ColdTieringBatchServiceComponent.TABLE_ARGUMENT));
+		return this.partitionTieringServiceComponent.findSweepCandidate(table)
+				.map(archive -> List.of(new SweepChunk(table.getId(), archive.partitionName(), lastChunk == null ? 1L : lastChunk.number() + 1))).orElse(List.of());
+	}
+
+	/**
+	 * EXECUTE of the sweep batch: one chunk of heap blocks.
+	 *
+	 * @param chunk Chunk.
+	 */
+	public void sweepChunk(
+			final SweepChunk chunk) {
+		final PartitionTieredTable table = (PartitionTieredTable) this.registry.getTable(chunk.tableId());
+		this.partitionTieringServiceComponent.sweepChunk(table, this.partitionTieringServiceComponent.archiveOf(table.getId(), chunk.partition()).orElseThrow());
+	}
+
+	/**
+	 * Batch properties of a table's batch.
+	 *
+	 * @param  tableProperties Table properties.
+	 * @param  batch           Batch.
+	 * @return                 Properties.
+	 */
+	private static BatchProperties batchPropertiesOf(
+			final TableProperties tableProperties,
+			final TieringBatch batch) {
+		return switch (batch) {
+			case EVICTION -> tableProperties.getEviction();
+			case BACKFILL -> tableProperties.getBackfill();
+			case EXPORT -> tableProperties.getExport();
+			case PARTITION_SWEEP -> tableProperties.getPartitionSweep();
+		};
+	}
+
+	/**
 	 * Starts (or continues) a batch of a table.
 	 *
 	 * @param  table Table.
@@ -206,13 +309,28 @@ public class ColdTieringBatchServiceComponent implements SmartInitializingSingle
 			final TieredTable table,
 			final TieringBatch batch) throws BusinessException {
 		final TableProperties tableProperties = this.properties.of(table);
-		final BatchProperties batchProperties = batch == TieringBatch.EVICTION ? tableProperties.getEviction() : tableProperties.getBackfill();
-		final Boolean isStarted = tableProperties.getEnabled() && batchProperties.getEnabled();
+		final BatchProperties batchProperties = ColdTieringBatchServiceComponent.batchPropertiesOf(tableProperties, batch);
+		final Boolean isPartition = table.getArchiveUnit() == ArchiveUnit.PARTITION;
+		final Boolean isApplicable = switch (batch) {
+			case EVICTION -> true;
+			case BACKFILL -> !isPartition;
+			case EXPORT, PARTITION_SWEEP -> isPartition;
+		};
+		final Boolean isStarted = isApplicable && tableProperties.getEnabled() && batchProperties.getEnabled();
 		if (isStarted) {
-			final Class<?> itemType = batch == TieringBatch.EVICTION ? EvictionChunk.class : TieredRowKey.class;
-			final Long size = batch == TieringBatch.EVICTION ? 1L : batchProperties.getChunkSize();
-			final Map<BatchAction, String> delegates = batch == TieringBatch.EVICTION ? Map.of(BatchAction.GET, "findNextEvictionChunk", BatchAction.EXECUTE, "evictChunk")
-					: Map.of(BatchAction.GET, "findNextKeysToArchive", BatchAction.EXECUTE, "enqueueKey");
+			final Class<?> itemType = switch (batch) {
+				case EVICTION -> EvictionChunk.class;
+				case BACKFILL -> TieredRowKey.class;
+				case EXPORT -> ExportItem.class;
+				case PARTITION_SWEEP -> SweepChunk.class;
+			};
+			final Long size = batch == TieringBatch.BACKFILL ? batchProperties.getChunkSize() : 1L;
+			final Map<BatchAction, String> delegates = switch (batch) {
+				case EVICTION -> Map.of(BatchAction.GET, "findNextEvictionChunk", BatchAction.EXECUTE, "evictChunk");
+				case BACKFILL -> Map.of(BatchAction.GET, "findNextKeysToArchive", BatchAction.EXECUTE, "enqueueKey");
+				case EXPORT -> Map.of(BatchAction.GET, "findNextExport", BatchAction.EXECUTE, "startExport");
+				case PARTITION_SWEEP -> Map.of(BatchAction.GET, "findNextSweepChunk", BatchAction.EXECUTE, "sweepChunk");
+			};
 			final BatchExecutor<Object> executor = BatchExecutor.withFixedRate(itemType.getName(), batch.keySuffix(table.getId()), size,
 					batchProperties.getDelayBetweenChunks(), batchProperties.getFinishWithin(), ColdTieringBatchServiceComponent.BEAN_NAME, new HashMap<>(delegates),
 					new HashMap<>(Map.of(ColdTieringBatchServiceComponent.TABLE_ARGUMENT, table.getId())));
@@ -337,7 +455,13 @@ public class ColdTieringBatchServiceComponent implements SmartInitializingSingle
 		for (final TieredTable table : this.registry.getTables()) {
 			final TableProperties tableProperties = this.properties.of(table);
 			this.schedule(table, TieringBatch.EVICTION, tableProperties.getEviction().getCron());
-			this.schedule(table, TieringBatch.BACKFILL, tableProperties.getBackfill().getCron());
+			if (table.getArchiveUnit() == ArchiveUnit.PARTITION) {
+				this.schedule(table, TieringBatch.EXPORT, tableProperties.getExport().getCron());
+				this.schedule(table, TieringBatch.PARTITION_SWEEP, tableProperties.getPartitionSweep().getCron());
+			}
+			else {
+				this.schedule(table, TieringBatch.BACKFILL, tableProperties.getBackfill().getCron());
+			}
 		}
 	}
 
