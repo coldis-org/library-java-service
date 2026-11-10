@@ -1,10 +1,11 @@
 # Cold storage tiering, step 4: sharded partition archives (Boa Vista full tables)
 
-Status: plan, 2026-11-09 (revised the same day with the developer's decisions: no partition swap,
-equi-depth shards, gzip default), branch `feature/cold-tiering-sharded-plan`. Extends
-[`cold-storage-tiering.md`](cold-storage-tiering.md) (step 1, row tiering, built). Nothing here is
-implemented; the first consumer is data-gathering's `boa_vista_report_full` and
-`boa_vista_cadastro_positivo_report_full`.
+Status: **library implemented**, 2026-11-09, branch `feature/cold-tiering-sharded-plan`, package
+`org.coldis.library.service.tiering` (plan revised the same day with the developer's decisions: no
+partition swap, equi-depth shards, gzip default, time-based hold). Extends
+[`cold-storage-tiering.md`](cold-storage-tiering.md) (step 1, row tiering, built). The consumer
+side (data-gathering's `boa_vista_report_full` and `boa_vista_cadastro_positivo_report_full`) is
+not started. *Implementation notes* at the end list where the code departs from the plan.
 
 ## Summary
 
@@ -124,8 +125,8 @@ Model (`tiering.model`):
 |---|---|
 | `ArchiveUnit { ROW, PARTITION }` | On `TieredTable` (`getArchiveUnit()`, `ROW` for every existing definition). The component and the batches dispatch on it |
 | `PartitionTieredTable extends TieredTable` | `new PartitionTieredTable(id, tableName, keyColumns)` `.withShardKeyColumn("tax_id")` (must be the first key column) `.withPartitionColumn("cached_at")` (must be a key column, and the table's range partition key); inherits `withWatermarkColumn`, `withLastAccessedColumn`, `withArchivedAtColumn`, `withEntity`, `withTtlClock` (only `LAST_ACCESS`), `withRehydration` (only `INSERT`); `isVersioned()` is forced true (the partition column is the version) |
-| `ShardBoundaries` | Immutable list of lower bounds (canonical segments of the shard key), `shardOf(segment)` by binary search, `rangeOf(shard)`; produced by the export's boundaries pass and **recorded in the manifest**, so readers never recompute them and resolve the shard with no extra S3 call |
-| `ShardBoundaryStrategy` SPI | `EquiDepthShardBoundaryStrategy(targetShards)` (default: cut a shard every `target` rows during the key pass, below), `PrefixShardBoundaryStrategy(digits)` (fixed prefixes, for a key known to be uniform; not the default, see the distribution above). Selected by `table.<id>.export.shard-strategy` |
+| Boundaries | A list of lower bounds (canonical segments of the shard key, the first is `""`) on `PartitionManifest.boundaries`, `shardOf(segment)` by binary search; produced by the export's boundaries pass and **recorded in the manifest**, so readers never recompute them and resolve the shard with no extra S3 call |
+| `ShardStrategy` enum + `EquiDepthShardCutter` | `EQUI_DEPTH` (default: the cutter closes a shard at the first key change after `target` rows during the key pass, below), `PREFIX` (`EquiDepthShardCutter.prefixBoundaries(digits)`, for a key known to be uniform; not the default, see the distribution above). Selected by `table.<id>.export.shard-strategy` |
 | `BlockCodec` SPI | `compress(byte[])`, `decompress(byte[], expectedLength)`, `name()`; built-in `gzip` (JDK, the default); `zstd` (`com.github.luben:zstd-jni`, `<optional>` in this pom, `@ConditionalOnClass`) selected by property when the consumer adds the dependency; the index names the codec, so a partition exported with one is readable after the default changes |
 | `PartitionManifest`, `ShardIndex`, `BlockEntry` | Records of the formats below, with `formatVersion`; Jackson, through the existing `GzipJsonPayloadCodec` for the bytes |
 | `PartitionArchive` | The DB record: `tableId`, `partitionName`, `rangeFrom`, `rangeTo`, `state`, timestamps (`loadedAt`, `exportStartedAt`, `exportedAt`, `verifiedAt`, `sweptAt`), `shardCount`, `shardsDone`, `rowCount`, `sizeBytes`, `formatVersion`, `manifestKey`, `sweepCursor`, `sweepDeleted`, `sweepKept` |
@@ -139,7 +140,7 @@ Repository (`tiering.repository`):
 | `ColdStorageRepository` (extended, **default methods throwing `UnsupportedOperationException`** so a consumer's own implementation keeps compiling) | `Optional<byte[]> loadRange(key, offset, length)`; `Optional<ColdObject> head(key)` (size, metadata); `ColdUpload beginUpload(key, metadata)` with `part(byte[])`, `complete() → ColdObject`, `abort()`. S3: `GetObjectRequest.range("bytes=a-b")`, `HeadObject`, multipart upload (parts ≥ 5 MB, `ChecksumAlgorithm.CRC32C` on every part); folder: `RandomAccessFile`, parts appended to the temporary file, atomic move on complete; memory: array slices |
 | `PartitionHotTierRepository` | `leafPartitions(table)` from `pg_inherits` + `pg_get_expr(relpartbound)` (name validated by `TieredTable.IDENTIFIER` and by membership in the catalog, never by string building); `nextKeys(partition, lastKey, pageSize)` (key columns only, for the boundaries pass); `nextPage(partition, shardRange, lastKey, pageSize)` (the keyset export query below); `countInRange(partition, shardRange)`; `countWrittenAfter(partition, moment)`; `blockCount(partition)` (`pg_relation_size / current_setting('block_size')`); `sweepChunk(partition, fromBlock, toBlock, before, exportedAt)` (the heap-order delete-and-mark below); `evictExpired(partition, before, chunk)` (step 1's predicate, `FROM ONLY`) |
 | `PartitionArchiveRepository` | CRUD on `cold_tiering_partition_archive` with `SELECT … FOR UPDATE` on state transitions |
-| `PartitionTieredRepository` | `manifest(table, partition)` (cached), `shardIndex(table, partition, shard)` (cached), `readRow(table, partition, key)`, `readRows(table, partition, keys)` (grouped by shard and block, one range GET per block, adjacent blocks coalesced into one GET), `readNewest(table, partition, shardKeyValue, asOf)`; composes `ColdStorageRepository`, `BlockCodec`, `ObjectKeyStrategy` |
+| `PartitionTieredRepository` | `manifest(table, partition)` (cached), `shardIndex(table, partition, shard)` (cached), `readMatching(table, partition, prefixSegments)` (the rows whose key starts with the prefix: shard from the manifest, candidate blocks from the index, one range GET per block, a retry after dropping a stale index), `loadIndex`, `writeIndex`, `writeManifest`, `beginBlocks`, `forget`; composes `ColdStorageRepository`, `BlockCodec`, `ObjectKeyStrategy` |
 | `ShardedBlockWriter`, `ShardedBlockReader` | Format code only: lines in, frames out, index entries; frames in, lines out; CRC32C check |
 
 Policy (`tiering`):
@@ -163,7 +164,7 @@ Properties, under `org.coldis.library.service.tiering.`:
 | `table.<id>.export.quiet-period` | `P2D` | Heuristic eligibility: a partition with no `loaded_at` signal is exported when its newest `updated_at` is older than this and its range end is in the past (backfill of existing months) |
 | `table.<id>.export.exclude-partitions` | `*_legacy` | Leaf partitions never exported nor swept (glob on the name); open-ended ranges (`MAXVALUE`) are always excluded |
 | `table.<id>.export.shard-strategy` / `shards` / `shard-digits` | `equi-depth` / `1000` / `3` | Boundaries for new exports; `shards` is the equi-depth target, `shard-digits` the prefix option |
-| `table.<id>.export.block-size` / `page-size` / `key-page-size` / `part-size` | `1MB` (compressed, 256 KB–4 MB) / `2000` rows / `1000000` keys / `16MB` | Block cut when the compressed frame reaches the size; rows per keyset page of the data pass; keys per page of the boundaries pass; multipart part |
+| `table.<id>.export.block-size` / `page-size` / `key-page-size` / `part-size` | `1MB` (compressed, 256 KB–4 MB) / `2000` rows / `1000000` keys / `16MB` | Block cut when its estimated compressed size reaches the target (the previous block's ratio, 4:1 at first); rows per keyset page of the data pass; keys per page of the boundaries pass; multipart part |
 | `table.<id>.export.verify-sample-every` | `50000` | One row in every N written is read back through the cold path after the shard completes |
 | `table.<id>.partition-sweep.{enabled,cron,chunk-blocks,delay-between-chunks,finish-within}` | `false`, `0 0 22 * * *`, `1024`, `PT1S`, `P3D` | The sweep: heap pages per chunk (1,024 × 8 KB = 8 MB of heap, ~2,700 rows), the pause between chunks (sets the WAL rate), the run's horizon (a month's sweep lasts hours, resumed across runs) |
 | `table.<id>.partition-sweep.hold-after-load` | `P5D` | The month stays fully hot for this long after `loaded_at` (the consumer's signal) or, for a partition exported without a signal (backfill), after `verified_at`; the sweep starts after `max(hold, ttl + safety-margin)` from that moment, so its first pass finds the bulk expired |
@@ -364,7 +365,7 @@ Entry points on `ColdTieringServiceComponent`, dispatching on `ArchiveUnit.PARTI
 | `findNewestTiered(Entity, {tax_id[, version]}, asOf)` | `findNewestHot` (one probe per partition index, 46) | readable partitions with `rangeFrom <= asOf`, **newest first, only those whose range starts after the hot candidate's `cached_at`**; stop at the first hit | the newer of hot and cold; cold → rehydrate |
 | `findFirstTiered(Entity, {tax_id}, after, upTo)` (new) | `findFirstHot` in the interval | readable partitions intersecting `(after, upTo]`, oldest first, only those before the hot candidate | same |
 | `findTimelineTiered(Entity, {tax_id}, asOf)` (new) | all hot rows of the prefix | every readable partition `<= asOf` not already represented by a hot row of that partition, probed in parallel (bounded executor, `index-cache` warm) | hot ∪ cold, newest first; cold rows rehydrated |
-| `findAllByKeysTiered(Entity, ids)` (new) | one JPQL `IN` per partition | the missing keys grouped by partition → shard → block; adjacent blocks coalesced into one range GET; parallel with a bounded executor | hits in input order; cold rows rehydrated in one batched `INSERT` per partition |
+| `findAllByKeysTiered(Entity, ids)` (new) | one lookup per key | one cold lookup per missing key (grouping by block and coalescing adjacent blocks: future work) | hits in input order; cold rows rehydrated |
 
 "Readable" = record state `VERIFIED` or `STALE` with a manifest. A partition with another state or
 no record is **hot by definition** (every row of it is still in Postgres: nothing deletes a row
@@ -634,9 +635,9 @@ Library, `src/test/java/org/coldis/library/test/service/tiering/`:
   the shard key, and `backfill.enabled` on a `PARTITION` table.
 - `ShardedBlockFormatUnitTest` (plain JUnit): writer/reader round trip for gzip (and zstd when on
   the test classpath), block cut at the size, index `first`/`last`, CRC, a tax id spanning two
-  blocks, binary search edge cases, `EquiDepthShardBoundaryStrategy` on a stream of skewed keys
+  blocks, binary search edge cases, `EquiDepthShardCutter` on a stream of skewed keys
   (cuts at tax-id changes, remainder in the last shard, wrong estimate → different shard count),
-  `PrefixShardBoundaryStrategy`, code-point order assertion.
+  prefix boundaries, code-point order assertion.
 - `FolderColdStorageRepository` range and multipart paths are exercised by the above; the S3
   adapter (`range`, multipart, `HeadObject`) is covered by the consumer's `s3-integration`
   profile test (`BoaVistaBatchS3IntegrationTest` already runs against the real bucket).
@@ -702,6 +703,48 @@ partitioned tables come from Flyway `V1` already (`spring.flyway.enabled=true` i
 - Line-delimited `row_to_json` blocks, not Parquet: rehydration stays `json_populate_record`
   and the library keeps knowing nothing about the consumer's columns.
 - `ColdStorageRepository` grows range reads and multipart uploads as default methods.
+
+## Implementation notes (2026-11-09)
+
+What was built, and where it departs from the plan above:
+
+- Classes: `model/` `ArchiveUnit`, `PartitionTieredTable`, `ShardStrategy`, `EquiDepthShardCutter`,
+  `BlockCodec` + `GzipBlockCodec` + `ZstdBlockCodec`, `ColdUpload`, `BlockEntry`, `ShardIndex`,
+  `PartitionManifest`, `PartitionArchive`, `PartitionArchiveState`, `LeafPartition`,
+  `ShardExportRequest`; `repository/` `PartitionHotTierRepository`, `PartitionArchiveRepository`,
+  `PartitionTieredRepository`, `ShardedBlockWriter`, `ShardedBlockReader`, range/head/upload
+  defaults on `ColdStorageRepository` and the three storages, `findFirstHot`/`findAllHot` on
+  `TieredRepository`; `tiering/` `PartitionTieringServiceComponent`, `TieringBatch.EXPORT` and
+  `PARTITION_SWEEP`, `ExportProperties`/`SweepProperties`, the dispatch and the three new reads
+  on `ColdTieringServiceComponent`, the registry checks, `ColdTieringSchema`'s record table and
+  leaf-by-leaf index statements. Tests: `PartitionTieringServiceTest` (4 cases),
+  `ShardedBlockFormatUnitTest` (2), on a partitioned `tiered_monthly_snapshot` the test
+  configuration recreates after Hibernate's DDL.
+- The shard strategy is an enum with a cutter, not an SPI: two strategies exist and nothing else
+  is foreseen. `ShardIndex` carries `exportStartedAt`, which is what makes a redelivered shard
+  request a no-op (the index object is compared, not object metadata, so the folder storage
+  behaves like S3).
+- Blocks are cut by an estimated compressed size (the previous block's ratio), not by compressing
+  incrementally.
+- `findAllByKeysTiered` does one hot lookup and, on a miss, one cold lookup per key; grouping the
+  misses by block and coalescing adjacent blocks is future work (the validator's batch reads
+  would benefit first).
+- `readablePartitions` reads the record table and the catalog on every cold path (two small
+  queries); a short record cache is future work if it shows on the cold read latency.
+- `completeShard` appends the shard summary to a `shards` jsonb column under a per-shard guard
+  (idempotent) and returns null when the record is no longer exporting, so a late or duplicate
+  shard never finishes a partition twice.
+- A partition whose rows changed under the export gets its manifest written and the record set
+  `STALE` (readable, not sweepable) instead of failing: the next export run re-exports it once it
+  is quiet again.
+- The sweep's GET returns one chunk per step and the component keeps the cursor on the record
+  (`sweep_blocks`, `sweep_cursor`, `sweep_deleted`, `sweep_kept`), so a run restarted from
+  scratch resumes where it stopped.
+- The registry creates `cold_tiering_partition_archive` with `create-schema=true` and refuses a
+  partition table with `backfill.enabled=true`, a non-range partitioning, a partition column that
+  is not temporal, or a primary key not led by the shard key.
+- Not built (no test exercises it): the registry's `require-leading-index` option named in the
+  plan (the check always fails the boot), the QC endpoints (consumer side), Micrometer counters.
 
 ## Future work
 
