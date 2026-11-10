@@ -167,7 +167,7 @@ public class TieredTableRegistry implements SmartInitializingSingleton {
 
 	/**
 	 * Validates a partition-tiered table: range-partitioned on the partition column, the shard key
-	 * leading the primary key, no backfill; creates the archive record table when asked.
+	 * leading the primary key, no backfill. Reads only; the DDL belongs to {@code register}.
 	 *
 	 * @param table       Table.
 	 * @param columnTypes Column types.
@@ -175,12 +175,6 @@ public class TieredTableRegistry implements SmartInitializingSingleton {
 	private void validatePartitioned(
 			final PartitionTieredTable table,
 			final Map<String, String> columnTypes) {
-		if (this.properties.getCreateSchema() && !this.isPartitionSchemaCreated) {
-			for (final String statement : ColdTieringSchema.partitionArchiveStatements()) {
-				this.hotTierRepository.executeDdl(statement);
-			}
-			this.isPartitionSchemaCreated = true;
-		}
 		if (!"r".equals(this.partitionHotTierRepository.partitionStrategy(table.getTableName()).orElse(null))) {
 			throw new IntegrationException(new SimpleMessage("coldTiering.table.partition.strategy.invalid", new Object[] { table.getId(), table.getTableName() }));
 		}
@@ -225,6 +219,12 @@ public class TieredTableRegistry implements SmartInitializingSingleton {
 		if (this.properties.getCreateSchema() && !columnTypes.isEmpty()) {
 			for (final String statement : ColdTieringSchema.statements(table, columnTypes.get(table.getWatermarkColumn()), false)) {
 				this.hotTierRepository.executeDdl(statement);
+			}
+			if ((table.getArchiveUnit() == ArchiveUnit.PARTITION) && !this.isPartitionSchemaCreated) {
+				for (final String statement : ColdTieringSchema.partitionArchiveStatements()) {
+					this.hotTierRepository.executeDdl(statement);
+				}
+				this.isPartitionSchemaCreated = true;
 			}
 			columnTypes = this.hotTierRepository.columnTypes(table.getTableName());
 		}

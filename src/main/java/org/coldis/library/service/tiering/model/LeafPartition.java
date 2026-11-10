@@ -12,7 +12,7 @@ import java.util.regex.Pattern;
  * Bounds are parsed as timestamps when they are literals; {@code MINVALUE}/{@code MAXVALUE} and a
  * default partition leave them null and mark the partition open-ended.
  */
-public record LeafPartition(String name, String rangeFrom, String rangeTo, LocalDateTime from, LocalDateTime to, Boolean openEnded) {
+public record LeafPartition(String name, String rangeFrom, String rangeTo, LocalDateTime from, LocalDateTime to, Boolean isOpenEnded) {
 
 	/** Bound expression. */
 	private static final Pattern BOUNDS = Pattern.compile("FOR VALUES FROM \\((.*)\\) TO \\((.*)\\)");

@@ -108,7 +108,7 @@ public class PartitionHotTierRepository {
 			final TieredTable table) {
 		return this.jdbcTemplate.query("SELECT child.relname AS name_, pg_get_expr(child.relpartbound, child.oid) AS bound_ FROM pg_inherits"
 				+ " JOIN pg_class parent ON parent.oid = pg_inherits.inhparent JOIN pg_class child ON child.oid = pg_inherits.inhrelid"
-				+ " JOIN pg_namespace ns ON ns.oid = child.relnamespace WHERE parent.relname = :table AND ns.nspname = current_schema()"
+				+ " JOIN pg_namespace schema_ ON schema_.oid = child.relnamespace WHERE parent.relname = :table AND schema_.nspname = current_schema()"
 				+ " AND child.relkind = 'r' ORDER BY child.relname", new MapSqlParameterSource("table", table.getTableName()), (
 						resultSet,
 						rowNumber) -> LeafPartition.of(TieredTable.identifier(resultSet.getString("name_")), resultSet.getString("bound_")));
@@ -122,8 +122,9 @@ public class PartitionHotTierRepository {
 	 */
 	public Optional<String> partitionStrategy(
 			final String tableName) {
-		return this.jdbcTemplate.query("SELECT CAST(pt.partstrat AS text) AS strategy_ FROM pg_partitioned_table pt JOIN pg_class c ON c.oid = pt.partrelid"
-				+ " JOIN pg_namespace ns ON ns.oid = c.relnamespace WHERE c.relname = :table AND ns.nspname = current_schema()",
+		return this.jdbcTemplate.query("SELECT CAST(partitioned.partstrat AS text) AS strategy_ FROM pg_partitioned_table partitioned"
+				+ " JOIN pg_class relation ON relation.oid = partitioned.partrelid JOIN pg_namespace schema_ ON schema_.oid = relation.relnamespace"
+				+ " WHERE relation.relname = :table AND schema_.nspname = current_schema()",
 				new MapSqlParameterSource("table", tableName), (
 						resultSet,
 						rowNumber) -> resultSet.getString("strategy_")).stream().findFirst();
@@ -137,10 +138,11 @@ public class PartitionHotTierRepository {
 	 */
 	public List<String> primaryKeyColumns(
 			final String tableName) {
-		return this.jdbcTemplate.query("SELECT a.attname AS column_ FROM pg_index i JOIN pg_class c ON c.oid = i.indrelid"
-				+ " JOIN pg_namespace ns ON ns.oid = c.relnamespace CROSS JOIN LATERAL unnest(i.indkey) WITH ORDINALITY k(attnum, ordinal)"
-				+ " JOIN pg_attribute a ON a.attrelid = c.oid AND a.attnum = k.attnum WHERE c.relname = :table AND ns.nspname = current_schema()"
-				+ " AND i.indisprimary ORDER BY k.ordinal", new MapSqlParameterSource("table", tableName), (
+		return this.jdbcTemplate.query("SELECT attribute.attname AS column_ FROM pg_index index_ JOIN pg_class relation ON relation.oid = index_.indrelid"
+				+ " JOIN pg_namespace schema_ ON schema_.oid = relation.relnamespace"
+				+ " CROSS JOIN LATERAL unnest(index_.indkey) WITH ORDINALITY key_column(attnum, ordinal)"
+				+ " JOIN pg_attribute attribute ON attribute.attrelid = relation.oid AND attribute.attnum = key_column.attnum"
+				+ " WHERE relation.relname = :table AND schema_.nspname = current_schema() AND index_.indisprimary ORDER BY key_column.ordinal", new MapSqlParameterSource("table", tableName), (
 						resultSet,
 						rowNumber) -> resultSet.getString("column_"));
 	}
@@ -262,8 +264,8 @@ public class PartitionHotTierRepository {
 	 */
 	public Long estimateRows(
 			final String partition) {
-		return this.jdbcTemplate.queryForObject("SELECT CAST(reltuples AS bigint) FROM pg_class c JOIN pg_namespace ns ON ns.oid = c.relnamespace"
-				+ " WHERE c.relname = :partition AND ns.nspname = current_schema()", new MapSqlParameterSource("partition", TieredTable.identifier(partition)),
+		return this.jdbcTemplate.queryForObject("SELECT CAST(relation.reltuples AS bigint) FROM pg_class relation JOIN pg_namespace schema_ ON schema_.oid = relation.relnamespace"
+				+ " WHERE relation.relname = :partition AND schema_.nspname = current_schema()", new MapSqlParameterSource("partition", TieredTable.identifier(partition)),
 				Long.class);
 	}
 

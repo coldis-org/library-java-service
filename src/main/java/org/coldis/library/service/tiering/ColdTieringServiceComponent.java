@@ -227,16 +227,16 @@ public class ColdTieringServiceComponent {
 			}
 		}
 		final Map<String, String> formatted = new LinkedHashMap<>();
-		Boolean missing = false;
+		Boolean isColumnMissing = false;
 		for (final String column : table.getKeyColumns()) {
 			if (keyPrefix.containsKey(column)) {
-				if (missing) {
+				if (isColumnMissing) {
 					throw new IntegrationException(new SimpleMessage("coldTiering.key.prefix.invalid", new Object[] { table.getId(), column }));
 				}
 				formatted.put(column, ColumnValues.format(ColumnValues.toColumnValue(table.getColumnTypes().get(column), keyPrefix.get(column))));
 			}
 			else {
-				missing = true;
+				isColumnMissing = true;
 			}
 		}
 		if (formatted.isEmpty()) {
@@ -606,8 +606,9 @@ public class ColdTieringServiceComponent {
 	}
 
 	/**
-	 * Rows by full keys: hot hits, then the missing keys read cold and rehydrated. Keys with no
-	 * row are left out.
+	 * Rows by full keys: hot hits, then the missing keys read cold and rehydrated (through
+	 * {@link #findByIdTiered}, so on a {@link Rehydration#NONE} table only hot rows are
+	 * returned). Keys with no row are left out.
 	 *
 	 * @param  <Type>      Entity type.
 	 * @param  entityClass Entity class.

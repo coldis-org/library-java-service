@@ -166,9 +166,18 @@ public class S3ColdStorageRepository implements ColdStorageRepository {
 
 			@Override
 			public ColdObject complete() {
-				S3ColdStorageRepository.this.s3Client.completeMultipartUpload(CompleteMultipartUploadRequest.builder().bucket(S3ColdStorageRepository.this.bucket)
-						.key(key).uploadId(uploadId).multipartUpload(CompletedMultipartUpload.builder().parts(this.parts).build()).build());
-				return new ColdObject(key, this.size);
+				ColdObject object;
+				if (this.parts.isEmpty()) {
+					// S3 refuses a multipart completion with no part: the empty object is a plain put.
+					this.abort();
+					object = S3ColdStorageRepository.this.store(key, new byte[0], metadata);
+				}
+				else {
+					S3ColdStorageRepository.this.s3Client.completeMultipartUpload(CompleteMultipartUploadRequest.builder().bucket(S3ColdStorageRepository.this.bucket)
+							.key(key).uploadId(uploadId).multipartUpload(CompletedMultipartUpload.builder().parts(this.parts).build()).build());
+					object = new ColdObject(key, this.size);
+				}
+				return object;
 			}
 
 			@Override

@@ -6,6 +6,8 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 
+import org.coldis.library.exception.IntegrationException;
+import org.coldis.library.model.SimpleMessage;
 import org.coldis.library.service.tiering.model.ArchiveUnit;
 import org.coldis.library.service.tiering.model.ColdRow;
 import org.coldis.library.service.tiering.model.ColumnValues;
@@ -18,7 +20,9 @@ import org.springframework.stereotype.Component;
 
 /**
  * Cold lookups of row-tiered tables: one object per row at a derived key, "newest on or before"
- * by listing the prefix. First-in-interval and timeline reads have no cold side for this unit.
+ * by listing the prefix. First-in-interval and timeline reads are not supported for this unit
+ * (they would list and read every object of the prefix) and fail with
+ * {@code coldTiering.lookup.unsupported}.
  */
 @Component
 @ConditionalOnProperty(
@@ -91,7 +95,7 @@ public class RowColdLookupStrategy implements ColdLookupStrategy {
 			final LocalDateTime after,
 			final LocalDateTime upTo,
 			final Optional<TieredRowKey> hotCandidate) {
-		return Optional.empty();
+		throw new IntegrationException(new SimpleMessage("coldTiering.lookup.unsupported", new Object[] { table.getId(), "findFirstCold" }));
 	}
 
 	/**
@@ -112,7 +116,7 @@ public class RowColdLookupStrategy implements ColdLookupStrategy {
 			final TieredTable table,
 			final Map<String, String> prefix,
 			final LocalDateTime asOf) {
-		return List.of();
+		throw new IntegrationException(new SimpleMessage("coldTiering.lookup.unsupported", new Object[] { table.getId(), "findTimelineCold" }));
 	}
 
 }

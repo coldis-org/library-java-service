@@ -140,7 +140,7 @@ public class PartitionTieringServiceComponent implements ColdLookupStrategy {
 	private LeafPartition partitionOf(
 			final PartitionTieredTable table,
 			final LocalDateTime moment) {
-		return this.partitionHotTierRepository.leafPartitions(table).stream().filter(partition -> !partition.openEnded() && partition.contains(moment)).findFirst()
+		return this.partitionHotTierRepository.leafPartitions(table).stream().filter(partition -> !partition.isOpenEnded() && partition.contains(moment)).findFirst()
 				.orElseThrow(() -> new IntegrationException(new SimpleMessage("coldTiering.partition.missing", new Object[] { table.getId() })));
 	}
 
@@ -154,13 +154,13 @@ public class PartitionTieringServiceComponent implements ColdLookupStrategy {
 	private static Boolean isExcluded(
 			final String name,
 			final String glob) {
-		Boolean excluded = false;
+		Boolean isMatched = false;
 		for (final String pattern : glob.split(",")) {
 			if (!pattern.isBlank() && Pattern.compile("^" + Pattern.quote(pattern.trim()).replace("*", "\\E.*\\Q") + "$").matcher(name).matches()) {
-				excluded = true;
+				isMatched = true;
 			}
 		}
-		return excluded;
+		return isMatched;
 	}
 
 	/**
@@ -354,7 +354,7 @@ public class PartitionTieringServiceComponent implements ColdLookupStrategy {
 	 * @param  prefix     Formatted key prefix.
 	 * @param  after      Exclusive lower segment, or null.
 	 * @param  upTo       Inclusive upper segment, or null.
-	 * @param  firstOnly  Stop at the first partition with a match.
+	 * @param  isFirstPartitionOnly Stop at the first partition with a match.
 	 * @return            Matching rows.
 	 */
 	private List<ColdRow> coldRows(
@@ -363,10 +363,10 @@ public class PartitionTieringServiceComponent implements ColdLookupStrategy {
 			final Map<String, String> prefix,
 			final String after,
 			final String upTo,
-			final Boolean firstOnly) {
+			final Boolean isFirstPartitionOnly) {
 		final List<ColdRow> rows = new ArrayList<>();
 		for (final ReadablePartition readable : partitions) {
-			if (!firstOnly || rows.isEmpty()) {
+			if (!isFirstPartitionOnly || rows.isEmpty()) {
 				for (final ColdRow row : this.readMatching(table, readable, prefix)) {
 					final String segment = PartitionTieringServiceComponent.lastSegmentOf(table, row.key());
 					if (((after == null) || (segment.compareTo(after) > 0)) && ((upTo == null) || (segment.compareTo(upTo) <= 0))) {
@@ -444,7 +444,7 @@ public class PartitionTieringServiceComponent implements ColdLookupStrategy {
 		final String ceiling = hotCandidate.map(key -> PartitionTieringServiceComponent.lastSegmentOf(table, key))
 				.orElse(PartitionTieringServiceComponent.segmentOfMoment(table, upTo));
 		return this.coldRows(partitioned, this.partitionsBetween(partitioned, after, hotMoment), prefix, PartitionTieringServiceComponent.segmentOfMoment(table, after),
-				ceiling, true).stream().filter(row -> hotCandidate.isEmpty() || !row.key().equals(hotCandidate.get()))
+				ceiling, true).stream().filter(row -> hotCandidate.isEmpty() || (PartitionTieringServiceComponent.lastSegmentOf(table, row.key()).compareTo(ceiling) < 0))
 				.min(Comparator.comparing(row -> PartitionTieringServiceComponent.lastSegmentOf(table, row.key())));
 	}
 
@@ -480,12 +480,12 @@ public class PartitionTieringServiceComponent implements ColdLookupStrategy {
 		for (final LeafPartition partition : this.partitionHotTierRepository.leafPartitions(table)) {
 			final PartitionArchive archive = archives.get(partition.name());
 			final PartitionArchiveState state = archive == null ? null : archive.state();
-			if (candidate.isEmpty() && !partition.openEnded() && !PartitionTieringServiceComponent.isExcluded(partition.name(), export.getExcludePartitions())
+			if (candidate.isEmpty() && !partition.isOpenEnded() && !PartitionTieringServiceComponent.isExcluded(partition.name(), export.getExcludePartitions())
 					&& ((state == null) || (state == PartitionArchiveState.LOADED) || (state == PartitionArchiveState.STALE))) {
-				final Boolean signalled = (state == PartitionArchiveState.LOADED) && (archive.loadedAt() != null);
-				final Boolean quiet = partition.to().isBefore(now) && this.partitionHotTierRepository.hasRows(partition.name())
+				final Boolean isSignalled = (state == PartitionArchiveState.LOADED) && (archive.loadedAt() != null);
+				final Boolean isQuiet = partition.to().isBefore(now) && this.partitionHotTierRepository.hasRows(partition.name())
 						&& !this.partitionHotTierRepository.hasWatermarkAfter(table, partition.name(), now.minus(export.getQuietPeriod()));
-				if (signalled || quiet) {
+				if (isSignalled || isQuiet) {
 					candidate = Optional.of(partition);
 				}
 			}
@@ -575,14 +575,15 @@ public class PartitionTieringServiceComponent implements ColdLookupStrategy {
 
 	/**
 	 * Verifies a written shard: the index range count equals the rows written, and every sampled
-	 * row reads back byte for byte through the cold path.
+	 * row reads back byte for byte through the cold path. Public so an operator (or a test) can
+	 * re-run a verification against the hot table; it changes nothing.
 	 *
 	 * @param table   Table.
 	 * @param request Request.
 	 * @param index   Index just written.
 	 * @param samples Sampled rows (key segments to line).
 	 */
-	private void verifyShard(
+	public void verifyShard(
 			final PartitionTieredTable table,
 			final ShardExportRequest request,
 			final ShardIndex index,
@@ -592,9 +593,9 @@ public class PartitionTieringServiceComponent implements ColdLookupStrategy {
 			throw new IntegrationException(new SimpleMessage("coldTiering.export.count.mismatch", new Object[] { table.getId(), request.shard(), counted, index.rows() }));
 		}
 		for (final Map.Entry<List<String>, String> sample : samples.entrySet()) {
-			final Boolean found = this.partitionTieredRepository.readMatching(table, request.partition(), index, sample.getKey()).stream()
+			final Boolean isSampleFound = this.partitionTieredRepository.readMatching(table, request.partition(), index, sample.getKey()).stream()
 					.anyMatch(row -> row.rowJson().equals(sample.getValue()));
-			if (!found) {
+			if (!isSampleFound) {
 				throw new IntegrationException(new SimpleMessage("coldTiering.export.sample.mismatch", new Object[] { table.getId(), request.shard() }));
 			}
 		}
@@ -622,10 +623,10 @@ public class PartitionTieringServiceComponent implements ColdLookupStrategy {
 		final String manifestKey = this.partitionTieredRepository.writeManifest(table,
 				new PartitionManifest(PartitionManifest.FORMAT_VERSION, table.getId(), archive.partitionName(), archive.generation(), archive.rangeFrom(),
 						archive.rangeTo(), table.getKeyColumns(), strategy, archive.boundaries(), shards, rows, archive.exportStartedAt().toString(), now.toString()));
-		final Boolean changed = this.partitionHotTierRepository.hasWatermarkAfter(table, archive.partitionName(), archive.exportStartedAt());
-		this.archiveRepository.finishExport(table.getId(), archive.partitionName(), changed ? PartitionArchiveState.STALE : PartitionArchiveState.VERIFIED, manifestKey,
+		final Boolean hasChanged = this.partitionHotTierRepository.hasWatermarkAfter(table, archive.partitionName(), archive.exportStartedAt());
+		this.archiveRepository.finishExport(table.getId(), archive.partitionName(), hasChanged ? PartitionArchiveState.STALE : PartitionArchiveState.VERIFIED, manifestKey,
 				rows, sizeBytes, now);
-		if (changed) {
+		if (hasChanged) {
 			PartitionTieringServiceComponent.LOGGER.warn("[COLD_TIERING_EXPORT] table={} partition={} generation={} rows changed during the export: STALE", table.getId(),
 					archive.partitionName(), archive.generation());
 		}
@@ -767,7 +768,7 @@ public class PartitionTieringServiceComponent implements ColdLookupStrategy {
 			final TableProperties tableProperties,
 			final PartitionArchive current,
 			final LocalDateTime now) {
-		Boolean remaining = false;
+		Boolean hasRemainingBlocks = false;
 		final Long blocks = current.sweepBlocks() == null ? this.partitionHotTierRepository.blockCount(current.partitionName()) : current.sweepBlocks();
 		final Long cursor = current.sweepCursor() == null ? 0L : current.sweepCursor();
 		if (cursor < blocks) {
@@ -776,15 +777,15 @@ public class PartitionTieringServiceComponent implements ColdLookupStrategy {
 					PartitionTieringServiceComponent.expiredBefore(tableProperties), current.exportStartedAt());
 			final Long deleted = (current.sweepDeleted() == null ? 0L : current.sweepDeleted()) + result.deleted();
 			final Long kept = (current.sweepKept() == null ? 0L : current.sweepKept()) + result.kept();
-			remaining = next < blocks;
-			this.archiveRepository.saveSweep(table.getId(), current.partitionName(), blocks, next, deleted, kept, remaining ? null : now, now);
+			hasRemainingBlocks = next < blocks;
+			this.archiveRepository.saveSweep(table.getId(), current.partitionName(), blocks, next, deleted, kept, hasRemainingBlocks ? null : now, now);
 			PartitionTieringServiceComponent.LOGGER.info("[COLD_TIERING_SWEEP] table={} partition={} blocks={}-{}/{} deleted={} kept={} skipped={}", table.getId(),
 					current.partitionName(), cursor, next, blocks, result.deleted(), result.kept(), result.skipped());
 		}
 		else {
 			this.archiveRepository.saveSweep(table.getId(), current.partitionName(), blocks, cursor, current.sweepDeleted(), current.sweepKept(), now, now);
 		}
-		return remaining;
+		return hasRemainingBlocks;
 	}
 
 	/**
@@ -806,7 +807,7 @@ public class PartitionTieringServiceComponent implements ColdLookupStrategy {
 			throw new IntegrationException(new SimpleMessage("coldTiering.sweep.state.invalid", new Object[] { table.getId(), archive.partitionName() }));
 		}
 		final LocalDateTime now = DateTimeHelper.getCurrentLocalDateTime();
-		Boolean remaining = false;
+		Boolean hasRemainingBlocks = false;
 		final Long covered = current.sweepCursor() == null ? this.partitionHotTierRepository.countInRange(table, current.partitionName(), "", null) : current.rowCount();
 		if (!covered.equals(current.rowCount())) {
 			this.archiveRepository.markState(table.getId(), current.partitionName(), PartitionArchiveState.STALE, now);
@@ -814,9 +815,9 @@ public class PartitionTieringServiceComponent implements ColdLookupStrategy {
 					current.partitionName(), covered, current.rowCount());
 		}
 		else {
-			remaining = this.sweepNextChunk(table, tableProperties, current, now);
+			hasRemainingBlocks = this.sweepNextChunk(table, tableProperties, current, now);
 		}
-		return remaining;
+		return hasRemainingBlocks;
 	}
 
 }
