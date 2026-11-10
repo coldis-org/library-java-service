@@ -97,7 +97,7 @@ loader, when a delivery is loaded:
                                                  sample verification → VERIFIED
 tiering.findByIdTiered / findNewestTiered /    ColdTieringServiceComponent dispatches on the table's
   findFirstTiered / findTimelineTiered /         archive unit: ROW → TieredRepository (as today),
-  findAllByKeysTiered (new)                      PARTITION → PartitionTieredRepository (manifest, index,
+  findAllByIdsTiered (new)                      PARTITION → PartitionTieredRepository (manifest, index,
                                                  range GET, block decode) then HotTierRepository.rehydrate
                                                ColdTieringBatchServiceComponent: PARTITION_SWEEP batch
                                                  (VERIFIED, past the hold and the TTL →
@@ -149,10 +149,10 @@ Policy (`tiering`):
 |---|---|
 | `PartitionTieringServiceComponent` | `partitionLoaded(tableId, momentInPartition)` (the consumer's signal, starts the hold); `computeBoundaries(table, partition)`; `exportShard(ShardExportRequest)` (JMS listener on `cold-tiering/export`, `export.concurrency`); `finishPartition(table, partition)` (manifest, verification, state); `markStale(tableId, momentInPartition)` |
 | `ColdLookupStrategy` SPI + `RowColdLookupStrategy` | One bean per archive unit (`findCold`, `findNewestCold`, `findFirstCold`, `findTimelineCold`); `PartitionTieringServiceComponent` is the `PARTITION` one. The component runs the hot side, validates key prefixes (known columns, leading and gap-free) and rehydrates; it never tests the unit nor casts a definition |
-| `ColdTieringServiceComponent` (extended) | every tiered read goes hot first, then the unit's strategy; new `findFirstTiered(Entity.class, keyPrefix, after, upTo)`, `findTimelineTiered(Entity.class, keyPrefix, asOf) → List<TieredHit>`, `findAllByKeysTiered(Entity.class, Collection<id>) → List<TieredHit>`; `afterWrite` on a `PARTITION` table only touches (no upload request); `delete(key)` on a `PARTITION` table deletes the hot row only and throws if the partition is archived (a cold row cannot be deleted alone from a shard; business deletes do not exist on these tables) |
-| `ColdTieringBatchServiceComponent` (extended) | `TieringBatch.EXPORT` and `TieringBatch.PARTITION_SWEEP`; the row `EVICTION` on a `PARTITION` table runs step 1's `evictExpired` on the parent (the partitioned eviction index prunes to the partitions with warm rows); `BACKFILL` is rejected at registration for `PARTITION` tables (the export is the backfill) |
+| `ColdTieringServiceComponent` (extended) | every tiered read goes hot first, then the unit's strategy; new `findFirstTiered(Entity.class, keyPrefix, after, upTo)`, `findTimelineTiered(Entity.class, keyPrefix, asOf) → List<TieredHit>`, `findAllByIdsTiered(Entity.class, Collection<id>) → List<TieredHit>`; `afterWrite` on a `PARTITION` table only touches (no upload request); `delete(key)` on a `PARTITION` table deletes the hot row only and throws if the partition is archived (a cold row cannot be deleted alone from a shard; business deletes do not exist on these tables) |
+| `ColdTieringBatchServiceComponent` (extended) | `TieringBatch.EXPORT` and `TieringBatch.PARTITION_SWEEP`; the row `EVICTION` on a `PARTITION` table runs step 1's `evictExpired` on the parent (the partitioned eviction index prunes to the partitions with warm rows); `BACKFILL` never runs nor schedules on a `PARTITION` table, and `EXPORT`/`PARTITION_SWEEP` never on a `ROW` table, whatever the properties say (the export is the backfill) |
 | `ColdTieringSchema` (extended) | `partitionArchiveStatements()` (the record table); `statements(table, …)` is unchanged (columns and a plain index: for tests); the consumer's Flyway writes the leaf-by-leaf partitioned eviction index, see *Schema* |
-| `TieredTableRegistry` (extended) | For a `PARTITION` table: the table is range-partitioned on the partition column (`pg_partitioned_table`), the shard key is the first key column and the first column of the primary key index of the parent, the partition column is a key column of type `timestamp` without time zone (`date` and `timestamptz` are rejected: the bounds and the row keys are compared as local moments); `LAST_ACCESS` + `INSERT` only; `backfill.enabled=false`; the record table exists. `validate(table)` runs the checks without registering |
+| `TieredTableRegistry` (extended) | For a `PARTITION` table: the table is range-partitioned on the partition column (`pg_partitioned_table`), the shard key is the first key column and the first column of the primary key index of the parent, the shard key is digit-only text (verified at export, which fails loudly on any other value) or a non-negative integer, so its SQL order is the canonical segment order under any collation; the partition column is the last key column, of type `timestamp` without time zone (`date` and `timestamptz` are rejected: the bounds and the row keys are compared as local moments); `LAST_ACCESS` + `INSERT` only; the record table exists. `validate(table)` runs the checks without registering |
 
 Properties, under `org.coldis.library.service.tiering.`:
 
@@ -379,7 +379,7 @@ Entry points on `ColdTieringServiceComponent`, dispatching on `ArchiveUnit.PARTI
 | `findNewestTiered(Entity, {tax_id[, version]}, asOf)` | `findNewestHot` (one probe per partition index, 46) | readable partitions with `rangeFrom <= asOf`, **newest first, only those whose range starts after the hot candidate's `cached_at`**; stop at the first hit | the newer of hot and cold; cold → rehydrate |
 | `findFirstTiered(Entity, {tax_id}, after, upTo)` (new) | `findFirstHot` in the interval | readable partitions intersecting `(after, upTo]`, oldest first, only those before the hot candidate | same |
 | `findTimelineTiered(Entity, {tax_id}, asOf)` (new) | all hot rows of the prefix | every readable partition `<= asOf` (one block read each; a partition is not skipped because a hot row falls in it: a month may hold two deliveries) | hot ∪ cold merged by the full key, the hot row winning, sorted by the last key column then the whole key, newest first; cold rows rehydrated |
-| `findAllByKeysTiered(Entity, ids)` (new) | one lookup per key | one cold lookup per missing key (grouping by block and coalescing adjacent blocks: future work) | hits in input order; cold rows rehydrated |
+| `findAllByIdsTiered(Entity, ids)` (new) | one lookup per key | one cold lookup per missing key (grouping by block and coalescing adjacent blocks: future work) | hits in input order; cold rows rehydrated |
 
 `delete(key)` on a partition-tiered table refuses a row whose partition has a readable manifest
 (`coldTiering.delete.archived`: the archive holds whole partitions) and deletes the hot row of a
@@ -610,7 +610,7 @@ eviction index on the parent, and that `cold_tiering_partition_archive` exists.
 | Change | Where |
 |---|---|
 | Two `PartitionTieredTable` beans: `boa-vista-report-full` (`tax_id, version, cached_at`; shard key `tax_id`; partition column `cached_at`; `LAST_ACCESS`, `INSERT`, entity + `BoaVistaSnapshotKey`), `boa-vista-cadastro-positivo-report-full` (`tax_id, cached_at`) | `BoaVistaOnlineTieringConfiguration` → renamed `BoaVistaTieringConfiguration` (keeps `coldTieringS3Client`) |
-| Reads: `readReportSnapshot` → `findNewestTiered(BoaVistaReportFull.class, {tax_id}, bounds.asOf())` and, on empty with a fallback, `findFirstTiered(…, bounds.asOf(), bounds.fallbackUpTo())`; `readReportTimeline` → `findTimelineTiered`; `readCadastroPositivoSnapshot` the same; the validator's `findAllByTaxIdInAndCachedAt` → `findAllByKeysTiered`. The six JPA finders stay for tests and tooling but nothing in the read path calls them | `BoaVistaFullReadServiceComponent`, `BoaVistaFullValidator` |
+| Reads: `readReportSnapshot` → `findNewestTiered(BoaVistaReportFull.class, {tax_id}, bounds.asOf())` and, on empty with a fallback, `findFirstTiered(…, bounds.asOf(), bounds.fallbackUpTo())`; `readReportTimeline` → `findTimelineTiered`; `readCadastroPositivoSnapshot` the same; the validator's `findAllByTaxIdInAndCachedAt` → `findAllByIdsTiered`. The six JPA finders stay for tests and tooling but nothing in the read path calls them | `BoaVistaFullReadServiceComponent`, `BoaVistaFullValidator` |
 | Delivery signals: when `recordApplyWorkerFinished` returns `ApplyDone`, call `partitionLoaded` for both table ids with the delivery's `cachedAt` and `totalRows` (next to `alertDeliveryFinished`); the import endpoint (`POST …/deliveries/{id}/import`) calls `markStale` for both tables when the month already has a record | `BoaVistaFullApplyExecutor.finishWorker`, `BoaVistaFullCoordinator` |
 | Flyway `V4__boa_vista_full_cold_tiering.sql` + `.sql.conf`: the record table, the two `ALTER TABLE … ADD COLUMN`s, the partitioned eviction index with its 46 concurrent leaf builds per table | `src/main/resources/db/migration` |
 | Properties: `table.boa-vista-report-full.*` and `…cadastro-positivo-report-full.*`: `enabled`, `cold-read-enabled`, `ttl=P5D`, `safety-margin=P1D`, `touch-threshold=P1D`, `export.enabled`, `export.cron`, `partition-sweep.enabled`, `partition-sweep.hold-after-load=P5D`, `partition-sweep.delay-between-chunks`, every flag from an env var defaulting to `false`; `export.concurrency=${…:4}`; `block-codec=gzip` (zstd once its dependency is approved) | `application.properties` |
@@ -668,14 +668,15 @@ Library, `src/test/java/org/coldis/library/test/service/tiering/`:
   lands in the month's partition; `findByIdTiered` of a swept key → rehydrated with the original
   `updated_at`, `archived_at = updated_at`, a second read touches; `findNewestTiered` with a hot
   newer month costs no GET; `findFirstTiered` in an interval; `findTimelineTiered` mixes tiers;
-  `findAllByKeysTiered` with keys across shards, blocks and a missing key; a key in a gap between
+  `findAllByIdsTiered` with keys across shards, blocks and a missing key; a key in a gap between
   blocks costs no block GET; clock +1 h → row `EVICTION` deletes the rehydrated and the kept rows,
   nothing else; a write into the verified month → `STALE`, sweep refused, re-export after
   `partitionLoaded`; a month inside its hold is not swept although its rows are expired; a corrupted
   block byte → CRC failure → cache dropped, retry, then `coldTiering.cold.block.corrupt`; an index
   with `formatVersion=99` is refused; a redelivered shard request writes nothing; `_plus` and an
   excluded partition are never exported; the registry rejects a table whose PK does not lead with
-  the shard key, and `backfill.enabled` on a `PARTITION` table.
+  the shard key, a non-digit shard key value at export, a shard key of another type and a
+  partition column that is not the last key column.
 - `ShardedBlockFormatUnitTest` (plain JUnit): writer/reader round trip for gzip, block cut at the size, index `first`/`last`, CRC, a tax id spanning two
   blocks, binary search edge cases, `EquiDepthShardCutter` on a stream of skewed keys
   (cuts at tax-id changes, remainder in the last shard, wrong estimate → different shard count),
@@ -778,7 +779,7 @@ What was built, and where it departs from the plan above:
   behaves like S3).
 - Blocks are cut by an estimated compressed size (the previous block's ratio), not by compressing
   incrementally.
-- `findAllByKeysTiered` does one hot lookup and, on a miss, one cold lookup per key; grouping the
+- `findAllByIdsTiered` does one hot lookup and, on a miss, one cold lookup per key; grouping the
   misses by block and coalescing adjacent blocks is future work (the validator's batch reads
   would benefit first).
 - `readablePartitions` reads the record table and the catalog on every cold path (two small
@@ -818,6 +819,15 @@ What was built, and where it departs from the plan above:
   created in `register` with `create-schema`); `verifyShard` is public for re-verification;
   tests cover the rewritten-row sweep guard, the verification failures, the empty shard and the
   resolved production defaults.
+- Fourth review pass (2026-11-10): the shard key is restricted to digit-only text or non-negative
+  integers (registration checks the type, the export the values), which is what makes the SQL
+  order equal the canonical segment order under any collation. `COLLATE "C"` was **not** added to
+  the shard queries on purpose: an expression collation cannot use the primary key index, and the
+  per-shard pages and range counts of a 240 M-row partition would become sequential scans; the
+  restriction gives the same guarantee without it. An aborted S3 upload after completion is a
+  no-op, and a failed abort is logged, so the original export error is the one rethrown. The
+  batch split by archive unit is enforced by the code, not by properties (a partition table's
+  backfill may be enabled and scheduled in the properties; it never runs).
 - Not built (no test exercises it): the registry's `require-leading-index` option named in the
   plan (the check always fails the boot), the QC endpoints (consumer side), Micrometer counters.
 
