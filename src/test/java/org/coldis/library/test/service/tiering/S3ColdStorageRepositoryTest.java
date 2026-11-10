@@ -133,6 +133,9 @@ public class S3ColdStorageRepositoryTest {
 		// An upload completed with no part (an empty shard) is an empty object, not a refused completion.
 		final ColdUpload emptyUpload = storage.beginUpload("t/a/0003.blocks", Map.of(ColdStorageRepository.CONTENT_TYPE_METADATA, "application/octet-stream"));
 		Assertions.assertEquals(0L, emptyUpload.complete().sizeBytes());
+		Assertions.assertDoesNotThrow(emptyUpload::abort, "abort after completion is a no-op");
+		Assertions.assertDoesNotThrow(upload::abort);
+		Assertions.assertEquals(total, storage.head("t/a/0001.blocks").orElseThrow().sizeBytes());
 		Assertions.assertEquals(0L, storage.head("t/a/0003.blocks").orElseThrow().sizeBytes());
 		Assertions.assertEquals(0, storage.load("t/a/0003.blocks").orElseThrow().length);
 		Assertions.assertTrue(S3ColdStorageRepositoryTest.client
