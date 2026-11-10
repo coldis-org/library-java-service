@@ -1,8 +1,6 @@
 package org.coldis.library.service.tiering.repository;
 
 import java.util.List;
-import org.coldis.library.exception.IntegrationException;
-import org.coldis.library.model.SimpleMessage;
 import org.coldis.library.service.tiering.model.ColdObject;
 import org.coldis.library.service.tiering.model.ColdUpload;
 import org.coldis.library.service.tiering.model.ObjectKeyStrategy;
@@ -60,20 +58,17 @@ public interface ColdStorageRepository {
 
 
 	/**
-	 * Reads a byte range of an object (partition tiering reads one block of a shard). Default:
-	 * unsupported, so a consumer's own implementation keeps compiling.
+	 * Reads a byte range of an object (partition tiering reads one block of a shard).
 	 *
 	 * @param  key    Object key.
 	 * @param  offset First byte.
 	 * @param  length Bytes.
 	 * @return        The range, empty when the object does not exist.
 	 */
-	default Optional<byte[]> loadRange(
+	Optional<byte[]> loadRange(
 			final String key,
 			final Long offset,
-			final Integer length) {
-		throw new IntegrationException(new SimpleMessage("coldTiering.storage.range.unsupported"));
-	}
+			final Integer length);
 
 	/**
 	 * Object size and metadata without its content.
@@ -81,10 +76,8 @@ public interface ColdStorageRepository {
 	 * @param  key Object key.
 	 * @return     The object, empty when it does not exist.
 	 */
-	default Optional<ColdObject> head(
-			final String key) {
-		throw new IntegrationException(new SimpleMessage("coldTiering.storage.head.unsupported"));
-	}
+	Optional<ColdObject> head(
+			final String key);
 
 	/**
 	 * Starts a streaming upload (parts of at least {@link #minimumPartSize()} bytes but the last).
@@ -93,19 +86,15 @@ public interface ColdStorageRepository {
 	 * @param  metadata Metadata.
 	 * @return          The upload.
 	 */
-	default ColdUpload beginUpload(
+	ColdUpload beginUpload(
 			final String key,
-			final Map<String, String> metadata) {
-		throw new IntegrationException(new SimpleMessage("coldTiering.storage.upload.unsupported"));
-	}
+			final Map<String, String> metadata);
 
 	/**
 	 * Minimum size of every part but the last of a streaming upload.
 	 *
 	 * @return Bytes.
 	 */
-	default Integer minimumPartSize() {
-		return 1;
-	}
+	Integer minimumPartSize();
 
 }

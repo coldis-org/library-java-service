@@ -2,27 +2,28 @@ package org.coldis.library.service.tiering;
 
 import java.io.Serializable;
 import java.time.LocalDateTime;
-import java.util.Map;
-import java.util.Collection;
-import java.util.Optional;
-
-import org.coldis.library.helper.DateTimeHelper;
-import org.coldis.library.service.tiering.model.ColdRow;
-import org.coldis.library.service.tiering.model.TieredRowKey;
-import org.coldis.library.service.tiering.model.TieredTable;
-import org.coldis.library.service.tiering.model.ArchiveUnit;
-import org.coldis.library.service.tiering.model.PartitionTieredTable;
-import org.coldis.library.service.tiering.PartitionTieringServiceComponent.ReadablePartition;
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.Comparator;
+import java.util.EnumMap;
 import java.util.LinkedHashMap;
 import java.util.List;
-import org.coldis.library.service.tiering.model.Rehydration;
-import org.coldis.library.service.tiering.model.ColumnValues;
-import org.coldis.library.service.tiering.model.PayloadCodec;
+import java.util.Map;
+import java.util.Optional;
+
+import org.coldis.library.exception.IntegrationException;
+import org.coldis.library.helper.DateTimeHelper;
+import org.coldis.library.model.SimpleMessage;
 import org.coldis.library.service.jms.JmsMessage;
 import org.coldis.library.service.jms.JmsTemplateHelper;
 import org.coldis.library.service.tiering.ColdTieringProperties.TableProperties;
+import org.coldis.library.service.tiering.model.ArchiveUnit;
+import org.coldis.library.service.tiering.model.ColdRow;
+import org.coldis.library.service.tiering.model.ColumnValues;
+import org.coldis.library.service.tiering.model.PayloadCodec;
+import org.coldis.library.service.tiering.model.Rehydration;
+import org.coldis.library.service.tiering.model.TieredRowKey;
+import org.coldis.library.service.tiering.model.TieredTable;
 import org.coldis.library.service.tiering.repository.ColdStorageRepository;
 import org.coldis.library.service.tiering.repository.HotTierRepository;
 import org.coldis.library.service.tiering.repository.HotTierRepository.HotRow;
@@ -38,12 +39,11 @@ import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 
 /**
- * The policy of the cold tiering: when a write is uploaded, when a read goes to the cold tier and
- * whether it rehydrates, when a read touches, how a row is archived. Everything it does with the
- * database and the store goes through the repositories ({@link TieredRepository},
- * {@link HotTierRepository}, {@link ColdStorageRepository}), never the other way round. Batches
- * (backfill, eviction) are in {@link ColdTieringBatchServiceComponent}. Design:
- * {@code doc/cold-storage-tiering.md}.
+ * Cold tiering policy: write-through and backfill archives of row-tiered tables, touches, and
+ * the tiered reads of every table (hot first, then the archive unit's {@link ColdLookupStrategy},
+ * then rehydration when the table says so). The component reaches the repositories
+ * ({@link TieredRepository}, {@link HotTierRepository}, {@link ColdStorageRepository}), never the
+ * other way round; batches live in {@link ColdTieringBatchServiceComponent}.
  */
 @Component
 @ConditionalOnProperty(
@@ -52,19 +52,19 @@ import org.springframework.transaction.annotation.Transactional;
 )
 public class ColdTieringServiceComponent {
 
-	/** Write-through upload queue. */
+	/** Upload queue (write-through). */
 	private static final String UPLOAD_QUEUE = "cold-tiering/upload";
 
-	/** Backfill archive queue: its own, so write-through uploads never wait behind a backfill. */
+	/** Backfill queue. */
 	private static final String BACKFILL_QUEUE = "cold-tiering/backfill";
 
 	/** Touch queue. */
 	private static final String TOUCH_QUEUE = "cold-tiering/touch";
 
-	/** Object metadata: the row's watermark when archived. */
+	/** Object metadata: watermark. */
 	public static final String UPDATED_AT_METADATA = "updated-at";
 
-	/** Object metadata: the table id. */
+	/** Object metadata: table. */
 	public static final String TABLE_METADATA = "table";
 
 	/** Logger. */
@@ -78,7 +78,7 @@ public class ColdTieringServiceComponent {
 	@Autowired
 	private ColdTieringProperties properties;
 
-	/** Tiered access. */
+	/** Tiered repository. */
 	@Autowired
 	private TieredRepository tieredRepository;
 
@@ -86,34 +86,34 @@ public class ColdTieringServiceComponent {
 	@Autowired
 	private HotTierRepository hotTierRepository;
 
-	/** Cold tier. */
+	/** Cold storage. */
 	@Autowired
 	private ColdStorageRepository coldStorageRepository;
 
-	/** Codec. */
+	/** Row payload codec. */
 	@Autowired
 	private PayloadCodec codec;
 
-	/** JMS template. */
+	/** JMS. */
 	@Autowired
 	private JmsTemplate jmsTemplate;
 
-	/** JMS template helper. */
+	/** JMS helper. */
 	@Autowired
 	private JmsTemplateHelper jmsTemplateHelper;
 
-	/**
-	 * Partition tiering (cold lookups of partition-tiered tables).
-	 */
+	/** Cold lookup strategies, one per archive unit. */
 	@Autowired
-	private PartitionTieringServiceComponent partitionTieringServiceComponent;
+	private List<ColdLookupStrategy> strategies;
+
+	/** Strategies by unit. */
+	private final Map<ArchiveUnit, ColdLookupStrategy> strategiesByUnit = new EnumMap<>(ArchiveUnit.class);
 
 	/**
-	 * Posts a row key to a queue after the commit when inside a transaction, so the consumer never
-	 * reads the row before the write is visible.
+	 * Sends a key to a queue after the commit.
 	 *
 	 * @param queue Queue.
-	 * @param key   Row key.
+	 * @param key   Key.
 	 */
 	private void sendAfterCommit(
 			final String queue,
@@ -122,11 +122,10 @@ public class ColdTieringServiceComponent {
 	}
 
 	/**
-	 * Posts a row key to a queue without deferring it to a commit callback (the JMS template's own
-	 * session transaction, if any, still decides when the broker releases it).
+	 * Sends a key to a queue now.
 	 *
 	 * @param queue Queue.
-	 * @param key   Row key.
+	 * @param key   Key.
 	 */
 	private void sendNow(
 			final String queue,
@@ -135,12 +134,11 @@ public class ColdTieringServiceComponent {
 	}
 
 	/**
-	 * Requests a touch when the row's clock is older than the threshold, so a hot row read many
-	 * times a day costs one update.
+	 * Requests a touch when the row's clock is older than the threshold.
 	 *
 	 * @param table           Table.
-	 * @param tableProperties Table properties.
-	 * @param key             Row key.
+	 * @param tableProperties Properties.
+	 * @param key             Key.
 	 */
 	private void requestTouchIfStale(
 			final TieredTable table,
@@ -156,14 +154,33 @@ public class ColdTieringServiceComponent {
 	}
 
 	/**
-	 * Whether a table's cold tier may be read.
+	 * Whether cold reads are on for a table.
 	 *
-	 * @param  tableProperties Table properties.
-	 * @return                 Whether cold reads are on.
+	 * @param  tableProperties Properties.
+	 * @return                 Cold readable.
 	 */
 	private static Boolean isColdReadable(
 			final TableProperties tableProperties) {
 		return tableProperties.getEnabled() && tableProperties.getColdReadEnabled();
+	}
+
+	/**
+	 * Strategy of a table's archive unit.
+	 *
+	 * @param  table Table.
+	 * @return       Strategy.
+	 */
+	private ColdLookupStrategy strategyOf(
+			final TieredTable table) {
+		synchronized (this.strategiesByUnit) {
+			if (this.strategiesByUnit.isEmpty()) {
+				for (final ColdLookupStrategy strategy : this.strategies) {
+					this.strategiesByUnit.put(strategy.unit(), strategy);
+				}
+			}
+		}
+		return Optional.ofNullable(this.strategiesByUnit.get(table.getArchiveUnit()))
+				.orElseThrow(() -> new IntegrationException(new SimpleMessage("coldTiering.table.unit.unsupported", new Object[] { table.getId() })));
 	}
 
 	/**
@@ -180,134 +197,71 @@ public class ColdTieringServiceComponent {
 	}
 
 	/**
-	 * Canonical segment of a moment on the last key column (null for null).
-	 *
-	 * @param  table  Table.
-	 * @param  moment Moment.
-	 * @return        Segment.
-	 */
-	private static String segmentOfMoment(
-			final TieredTable table,
-			final LocalDateTime moment) {
-		final String lastType = table.getColumnTypes().get(table.getLastKeyColumn());
-		return moment == null ? null : ColumnValues.toSegment(lastType, ColumnValues.ofMoment(lastType, moment));
-	}
-
-	/**
-	 * Partition column value of a row key as a moment.
-	 *
-	 * @param  table Table.
-	 * @param  key   Key.
-	 * @return       Moment.
-	 */
-	private static LocalDateTime momentOf(
-			final PartitionTieredTable table,
-			final TieredRowKey key) {
-		final String type = table.getColumnTypes().get(table.getPartitionColumn());
-		return (LocalDateTime) ColumnValues.toJavaValue(ColumnValues.parse(type, key.values().get(table.getPartitionColumn())), LocalDateTime.class);
-	}
-
-	/**
-	 * Formats a key prefix (Java values) as the formatted column values of a row key.
+	 * Validates and formats a key prefix: known columns only, leading and gap-free (the first key
+	 * column present, no column after a missing one).
 	 *
 	 * @param  table     Table.
-	 * @param  keyPrefix Prefix.
+	 * @param  keyPrefix Prefix (Java values by column).
 	 * @return           Formatted values by column, in key column order.
 	 */
-	private static Map<String, String> formattedPrefix(
+	private static Map<String, String> validatedPrefix(
 			final TieredTable table,
 			final Map<String, Object> keyPrefix) {
+		for (final String column : keyPrefix.keySet()) {
+			if (!table.getKeyColumns().contains(column)) {
+				throw new IntegrationException(new SimpleMessage("coldTiering.key.prefix.invalid", new Object[] { table.getId(), column }));
+			}
+		}
 		final Map<String, String> formatted = new LinkedHashMap<>();
+		Boolean missing = false;
 		for (final String column : table.getKeyColumns()) {
 			if (keyPrefix.containsKey(column)) {
+				if (missing) {
+					throw new IntegrationException(new SimpleMessage("coldTiering.key.prefix.invalid", new Object[] { table.getId(), column }));
+				}
 				formatted.put(column, ColumnValues.format(ColumnValues.toColumnValue(table.getColumnTypes().get(column), keyPrefix.get(column))));
 			}
+			else {
+				missing = true;
+			}
+		}
+		if (formatted.isEmpty()) {
+			throw new IntegrationException(new SimpleMessage("coldTiering.key.prefix.invalid", new Object[] { table.getId(), table.getKeyColumns().get(0) }));
 		}
 		return formatted;
 	}
 
 	/**
-	 * Rehydrates a cold row and reads it back hot.
+	 * Serves a cold row: rehydrated and read back hot on an {@code INSERT} table, as the cold row
+	 * otherwise (or when the insert could not be read back).
 	 *
-	 * @param  <Type>      Entity type.
-	 * @param  table       Table.
-	 * @param  entityClass Entity class.
-	 * @param  coldRow     Cold row.
-	 * @return             Hot entity (the cold row when the insert could not be read back).
+	 * @param  <Type>          Entity type.
+	 * @param  table           Table.
+	 * @param  tableProperties Properties.
+	 * @param  entityClass     Entity class.
+	 * @param  coldRow         Cold row.
+	 * @return                 Hit.
 	 */
-	private <Type> TieredHit<Type> rehydrate(
+	private <Type> TieredHit<Type> serveCold(
 			final TieredTable table,
+			final TableProperties tableProperties,
 			final Class<Type> entityClass,
 			final ColdRow coldRow) {
-		this.tieredRepository.rehydrate(table, coldRow, DateTimeHelper.getCurrentLocalDateTime());
-		ColdTieringServiceComponent.LOGGER.debug("[COLD_TIERING_COLD_READ] table={} tier=cold rehydrated", table.getId());
-		return this.tieredRepository.findHot(table, entityClass, coldRow.key()).map(entity -> new TieredHit<>(entity, (ColdRow) null))
-				.orElse(new TieredHit<>(null, coldRow));
-	}
-
-	/**
-	 * Cold rows of a partition-tiered table for a key prefix, over the readable partitions in the
-	 * given order, bounded by a segment range on the last key column; stops at the first partition
-	 * with a match when {@code firstOnly}.
-	 *
-	 * @param  table      Table.
-	 * @param  partitions Partitions to probe, in probe order.
-	 * @param  prefix     Formatted key prefix.
-	 * @param  after      Exclusive lower segment, or null.
-	 * @param  upTo       Inclusive upper segment, or null.
-	 * @param  firstOnly  Stop at the first partition with a match.
-	 * @return            Matching rows.
-	 */
-	private List<ColdRow> coldRows(
-			final PartitionTieredTable table,
-			final List<ReadablePartition> partitions,
-			final Map<String, String> prefix,
-			final String after,
-			final String upTo,
-			final Boolean firstOnly) {
-		final List<ColdRow> rows = new ArrayList<>();
-		for (final ReadablePartition readable : partitions) {
-			if (!firstOnly || rows.isEmpty()) {
-				for (final ColdRow row : this.partitionTieringServiceComponent.readMatching(table, readable.partition().name(), prefix)) {
-					final String segment = ColdTieringServiceComponent.lastSegmentOf(table, row.key());
-					if (((after == null) || (segment.compareTo(after) > 0)) && ((upTo == null) || (segment.compareTo(upTo) <= 0))) {
-						rows.add(row);
-					}
-				}
-			}
+		TieredHit<Type> hit = new TieredHit<>(null, coldRow);
+		if (tableProperties.getRehydration() == Rehydration.INSERT) {
+			this.tieredRepository.rehydrate(table, coldRow, DateTimeHelper.getCurrentLocalDateTime());
+			hit = this.tieredRepository.findHot(table, entityClass, coldRow.key()).map(entity -> new TieredHit<>(entity, (ColdRow) null)).orElse(hit);
 		}
-		return rows;
+		ColdTieringServiceComponent.LOGGER.debug("[COLD_TIERING_COLD_READ] table={} tier=cold rehydrated={}", table.getId(), hit.hot().isPresent());
+		return hit;
 	}
 
 	/**
-	 * Readable partitions intersecting a moment range.
-	 *
-	 * @param  table Table.
-	 * @param  after Exclusive lower moment, or null.
-	 * @param  upTo  Inclusive upper moment, or null.
-	 * @return       Partitions, oldest first.
-	 */
-	private List<ReadablePartition> partitionsBetween(
-			final PartitionTieredTable table,
-			final LocalDateTime after,
-			final LocalDateTime upTo) {
-		final List<ReadablePartition> partitions = new ArrayList<>();
-		for (final ReadablePartition readable : this.partitionTieringServiceComponent.readablePartitions(table)) {
-			final Boolean startsInTime = (upTo == null) || (readable.partition().from() == null) || !readable.partition().from().isAfter(upTo);
-			final Boolean endsInTime = (after == null) || (readable.partition().to() == null) || readable.partition().to().isAfter(after);
-			if (startsInTime && endsInTime) {
-				partitions.add(readable);
-			}
-		}
-		return partitions;
-	}
-
-	/**
-	 * The row key of a table from column values (any JDBC-compatible objects).
+	 * Row key of a table from column values.
 	 *
 	 * @param  tableId Table id.
-	 * @param  values  Key column values.
-	 * @return         The key.
+	 * @param  values  Values by column.
+	 * @return         Key.
 	 */
 	public TieredRowKey keyOf(
 			final String tableId,
@@ -316,11 +270,11 @@ public class ColdTieringServiceComponent {
 	}
 
 	/**
-	 * The row key of an entity id.
+	 * Row key of an entity id.
 	 *
-	 * @param  entityClass Entity class bound to a table.
-	 * @param  id          Entity id.
-	 * @return             The key.
+	 * @param  entityClass Entity class.
+	 * @param  id          Id.
+	 * @return             Key.
 	 */
 	public TieredRowKey keyOf(
 			final Class<?> entityClass,
@@ -329,10 +283,10 @@ public class ColdTieringServiceComponent {
 	}
 
 	/**
-	 * The cold-tier object key of a row.
+	 * Object key of a row (row tiering).
 	 *
-	 * @param  key Row key.
-	 * @return     The object key.
+	 * @param  key Key.
+	 * @return     Object key.
 	 */
 	public String objectKeyOf(
 			final TieredRowKey key) {
@@ -340,10 +294,10 @@ public class ColdTieringServiceComponent {
 	}
 
 	/**
-	 * To be called after a row is written (in the same transaction): starts its hot-tier clock,
-	 * drops its archive mark and requests its write-through upload after the commit.
+	 * After the consumer's write: resets the lifecycle columns and, on a row-tiered table,
+	 * requests the upload after the commit.
 	 *
-	 * @param key Row key.
+	 * @param key Key.
 	 */
 	public void afterWrite(
 			final TieredRowKey key) {
@@ -357,14 +311,9 @@ public class ColdTieringServiceComponent {
 	}
 
 	/**
-	 * Requests the archive of a row through the backfill queue: the backfill's request, not tied to
-	 * a business write, so not deferred to a commit callback (a session-transacted JMS template
-	 * still releases it when its transaction commits). The backfill listener archives it in its
-	 * own transaction; a duplicate request (a restarted run re-enqueueing pending keys, a key also
-	 * written meanwhile) is harmless, since {@link #archive(TieredRowKey)} uploads nothing for
-	 * content already archived.
+	 * Enqueues a key to the backfill queue.
 	 *
-	 * @param key Row key.
+	 * @param key Key.
 	 */
 	public void requestArchive(
 			final TieredRowKey key) {
@@ -372,16 +321,11 @@ public class ColdTieringServiceComponent {
 	}
 
 	/**
-	 * Archives a row in the caller's transaction (the upload listener for write-through requests,
-	 * the backfill listener for backfill requests): under the row's lock, uploads the whole row to
-	 * its derived key and marks
-	 * the hot row archived at the watermark uploaded, if it was not rewritten meanwhile. The lock is
-	 * what orders concurrent archives of one key, since every one of them writes the same object:
-	 * the holder reads the current content, so an object is never overwritten with older content.
-	 * A row whose current content is already archived is left alone (a duplicate request).
+	 * Archives a row (row tiering): locks it, uploads its current content, marks it archived at
+	 * the uploaded watermark.
 	 *
-	 * @param  key Row key.
-	 * @return     Whether an object was written (false: the row is not hot, or already archived).
+	 * @param  key Key.
+	 * @return     Whether an upload happened.
 	 */
 	@Transactional(
 			propagation = Propagation.REQUIRED,
@@ -409,9 +353,9 @@ public class ColdTieringServiceComponent {
 	}
 
 	/**
-	 * Write-through upload consumer: one row per message, in its own transaction.
+	 * Write-through upload listener.
 	 *
-	 * @param key Row key.
+	 * @param key Key.
 	 */
 	@JmsListener(
 			destination = ColdTieringServiceComponent.UPLOAD_QUEUE,
@@ -428,10 +372,9 @@ public class ColdTieringServiceComponent {
 	}
 
 	/**
-	 * Backfill archive consumer: one row per message, in its own transaction, so the row lock
-	 * covers only that row's upload; its concurrency sets the backfill's throughput.
+	 * Backfill listener: one row per transaction, so a row's lock covers only its own upload.
 	 *
-	 * @param key Row key.
+	 * @param key Key.
 	 */
 	@JmsListener(
 			destination = ColdTieringServiceComponent.BACKFILL_QUEUE,
@@ -448,9 +391,9 @@ public class ColdTieringServiceComponent {
 	}
 
 	/**
-	 * Touch consumer: extends the hot-tier clock, never backwards.
+	 * Touch listener.
 	 *
-	 * @param key Row key.
+	 * @param key Key.
 	 */
 	@JmsListener(
 			destination = ColdTieringServiceComponent.TOUCH_QUEUE,
@@ -464,35 +407,34 @@ public class ColdTieringServiceComponent {
 	public void touch(
 			final TieredRowKey key) {
 		final TieredTable table = this.registry.getTable(key.tableId());
-		if (table.isTouching()) {
+		if (this.properties.of(table).getEnabled() && table.isTouching()) {
 			this.hotTierRepository.touch(table, key, DateTimeHelper.getCurrentLocalDateTime());
 		}
 	}
 
 	/**
-	 * Reads a row from the cold tier, whatever its hot state, when the table allows cold reads.
-	 * Never writes the hot table (the read path of {@link Rehydration#NONE} tables).
+	 * Cold row by key, when cold reads are on.
 	 *
-	 * @param  key Row key.
-	 * @return     The cold row, or empty when there is no object or cold reads are off.
+	 * @param  key Key.
+	 * @return     Row.
 	 */
 	public Optional<ColdRow> readCold(
 			final TieredRowKey key) {
 		final TieredTable table = this.registry.getTable(key.tableId());
 		Optional<ColdRow> coldRow = Optional.empty();
 		if (ColdTieringServiceComponent.isColdReadable(this.properties.of(table))) {
-			coldRow = this.tieredRepository.loadCold(table, key);
+			coldRow = this.strategyOf(table).findCold(table, key);
 			ColdTieringServiceComponent.LOGGER.debug("[COLD_TIERING_COLD_READ] table={} found={}", table.getId(), coldRow.isPresent());
 		}
 		return coldRow;
 	}
 
 	/**
-	 * Reads a row from the cold tier by entity id.
+	 * Cold row by entity id.
 	 *
-	 * @param  entityClass Entity class bound to a table.
-	 * @param  id          Entity id.
-	 * @return             The cold row, or empty.
+	 * @param  entityClass Entity class.
+	 * @param  id          Id.
+	 * @return             Row.
 	 */
 	public Optional<ColdRow> findColdRow(
 			final Class<?> entityClass,
@@ -501,15 +443,12 @@ public class ColdTieringServiceComponent {
 	}
 
 	/**
-	 * Reads a row: hot (touching its clock when stale), else, on a table that rehydrates and
-	 * allows cold reads, from the cold tier, rehydrated and read again. On a
-	 * {@link Rehydration#NONE} table a cold row is a miss here: {@link #findColdRow(Class, Object)}
-	 * serves it.
+	 * Row by id: hot (touched when stale), else cold and rehydrated on an {@code INSERT} table.
 	 *
 	 * @param  <Type>      Entity type.
-	 * @param  entityClass Entity class bound to a table.
-	 * @param  id          Entity id.
-	 * @return             The entity, or empty.
+	 * @param  entityClass Entity class.
+	 * @param  id          Id.
+	 * @return             Entity.
 	 */
 	@Transactional(
 			propagation = Propagation.REQUIRED,
@@ -526,30 +465,21 @@ public class ColdTieringServiceComponent {
 			this.requestTouchIfStale(table, tableProperties, key);
 		}
 		else if ((tableProperties.getRehydration() == Rehydration.INSERT) && ColdTieringServiceComponent.isColdReadable(tableProperties)) {
-			final Optional<ColdRow> coldRow = table.getArchiveUnit() == ArchiveUnit.PARTITION
-					? this.partitionTieringServiceComponent
-							.readMatchingAt((PartitionTieredTable) table, ColdTieringServiceComponent.momentOf((PartitionTieredTable) table, key), key.values()).stream()
-							.filter(row -> row.key().equals(key)).findFirst()
-					: this.tieredRepository.loadCold(table, key);
-			if (coldRow.isPresent()) {
-				this.tieredRepository.rehydrate(table, coldRow.get(), DateTimeHelper.getCurrentLocalDateTime());
-				entity = this.tieredRepository.findHot(table, entityClass, key);
-			}
+			final Optional<ColdRow> coldRow = this.strategyOf(table).findCold(table, key);
+			entity = coldRow.flatMap(row -> this.serveCold(table, tableProperties, entityClass, row).hot());
 			ColdTieringServiceComponent.LOGGER.debug("[COLD_TIERING_COLD_READ] table={} found={}", table.getId(), coldRow.isPresent());
 		}
 		return entity;
 	}
 
 	/**
-	 * The newest row of a key prefix on or before a moment, hot or cold (a versioned table): the
-	 * newer of the newest hot row and the newest archived one. A cold winner is rehydrated and
-	 * served hot on a table that rehydrates, served as a cold row otherwise.
+	 * Newest row of a key prefix on or before a moment, across tiers.
 	 *
 	 * @param  <Type>      Entity type.
-	 * @param  entityClass Entity class bound to a table.
-	 * @param  keyPrefix   Values of every key column but the last, by column name.
-	 * @param  asOf        Upper bound of the last key column, or null for the newest.
-	 * @return             The hit, or empty.
+	 * @param  entityClass Entity class.
+	 * @param  keyPrefix   Key prefix.
+	 * @param  asOf        Inclusive upper bound, or null.
+	 * @return             Hit.
 	 */
 	@Transactional(
 			propagation = Propagation.REQUIRED,
@@ -561,71 +491,15 @@ public class ColdTieringServiceComponent {
 			final LocalDateTime asOf) {
 		final TieredTable table = this.registry.getTable(entityClass);
 		final TableProperties tableProperties = this.properties.of(table);
+		final Map<String, String> prefix = ColdTieringServiceComponent.validatedPrefix(table, keyPrefix);
 		final Optional<Type> newestHot = this.tieredRepository.findNewestHot(table, entityClass, keyPrefix, asOf);
-		final Optional<TieredRowKey> newestColdKey = ColdTieringServiceComponent.isColdReadable(tableProperties) && (table.getArchiveUnit() == ArchiveUnit.ROW)
-				? this.tieredRepository.findNewestColdKey(table, keyPrefix, asOf)
-				: Optional.empty();
-		Optional<TieredHit<Type>> hit = newestHot.map(entity -> new TieredHit<>(entity, null));
-		if (newestColdKey.isPresent()) {
-			final String lastColumn = table.getLastKeyColumn();
-			final String lastSegment = ColumnValues.toSegment(table.getColumnTypes().get(lastColumn), newestColdKey.get().values().get(lastColumn));
-			final Boolean isColdNewer = newestHot.isEmpty() || (ColumnValues.toSegment(table.getColumnTypes().get(lastColumn),
-					this.tieredRepository.keyOfEntity(table, newestHot.get()).values().get(lastColumn)).compareTo(lastSegment) < 0);
-			if (isColdNewer) {
-				final Optional<ColdRow> coldRow = this.tieredRepository.loadCold(table, newestColdKey.get());
-				if (coldRow.isPresent() && (tableProperties.getRehydration() == Rehydration.INSERT)) {
-					this.tieredRepository.rehydrate(table, coldRow.get(), DateTimeHelper.getCurrentLocalDateTime());
-					hit = this.tieredRepository.findHot(table, entityClass, newestColdKey.get()).map(entity -> new TieredHit<>(entity, null));
-				}
-				else if (coldRow.isPresent()) {
-					hit = Optional.of(new TieredHit<>(null, coldRow.get()));
-				}
-				ColdTieringServiceComponent.LOGGER.debug("[COLD_TIERING_COLD_READ] table={} found={}", table.getId(), coldRow.isPresent());
-			}
-			else if (newestHot.isPresent()) {
-				this.requestTouchIfStale(table, tableProperties, this.tieredRepository.keyOfEntity(table, newestHot.get()));
-			}
-		}
-		else if (table.getArchiveUnit() == ArchiveUnit.PARTITION && ColdTieringServiceComponent.isColdReadable(tableProperties)) {
-			hit = this.findNewestPartitioned((PartitionTieredTable) table, tableProperties, entityClass, keyPrefix, asOf, newestHot);
-		}
-		else if (newestHot.isPresent()) {
-			this.requestTouchIfStale(table, tableProperties, this.tieredRepository.keyOfEntity(table, newestHot.get()));
-		}
-		return hit;
-	}
-
-	/**
-	 * Newest row of a partition-tiered table: the hot candidate against the readable partitions
-	 * newer than it (newest first, stopping at the first match).
-	 *
-	 * @param  <Type>          Entity type.
-	 * @param  table           Table.
-	 * @param  tableProperties Properties.
-	 * @param  entityClass     Entity class.
-	 * @param  keyPrefix       Key prefix.
-	 * @param  asOf            Upper bound, or null.
-	 * @param  newestHot       Hot candidate.
-	 * @return                 Hit.
-	 */
-	private <Type> Optional<TieredHit<Type>> findNewestPartitioned(
-			final PartitionTieredTable table,
-			final TableProperties tableProperties,
-			final Class<Type> entityClass,
-			final Map<String, Object> keyPrefix,
-			final LocalDateTime asOf,
-			final Optional<Type> newestHot) {
 		final Optional<TieredRowKey> hotKey = newestHot.map(entity -> this.tieredRepository.keyOfEntity(table, entity));
-		final LocalDateTime hotMoment = hotKey.map(key -> ColdTieringServiceComponent.momentOf(table, key)).orElse(null);
-		final List<ReadablePartition> partitions = new ArrayList<>(this.partitionsBetween(table, hotMoment, asOf));
-		partitions.sort(Comparator.comparing((ReadablePartition readable) -> readable.partition().from(), Comparator.nullsFirst(Comparator.naturalOrder())).reversed());
-		final String after = hotKey.map(key -> ColdTieringServiceComponent.lastSegmentOf(table, key)).orElse(null);
-		final Optional<ColdRow> newestCold = this.coldRows(table, partitions, ColdTieringServiceComponent.formattedPrefix(table, keyPrefix), after,
-				ColdTieringServiceComponent.segmentOfMoment(table, asOf), true).stream()
-				.max(Comparator.comparing(row -> ColdTieringServiceComponent.lastSegmentOf(table, row.key())));
+		final Optional<ColdRow> newestCold = ColdTieringServiceComponent.isColdReadable(tableProperties)
+				? this.strategyOf(table).findNewestCold(table, prefix, asOf, hotKey)
+				: Optional.empty();
 		Optional<TieredHit<Type>> hit;
 		if (newestCold.isPresent()) {
-			hit = Optional.of(this.rehydrate(table, entityClass, newestCold.get()));
+			hit = Optional.of(this.serveCold(table, tableProperties, entityClass, newestCold.get()));
 		}
 		else {
 			hit = newestHot.map(entity -> new TieredHit<>(entity, (ColdRow) null));
@@ -635,8 +509,7 @@ public class ColdTieringServiceComponent {
 	}
 
 	/**
-	 * First row of a key prefix with the version in {@code (after, upTo]}: hot first, then the
-	 * readable partitions of the interval oldest first, before the hot candidate.
+	 * First row of a key prefix with the version in {@code (after, upTo]}, across tiers.
 	 *
 	 * @param  <Type>      Entity type.
 	 * @param  entityClass Entity class.
@@ -656,30 +529,26 @@ public class ColdTieringServiceComponent {
 			final LocalDateTime upTo) {
 		final TieredTable table = this.registry.getTable(entityClass);
 		final TableProperties tableProperties = this.properties.of(table);
+		final Map<String, String> prefix = ColdTieringServiceComponent.validatedPrefix(table, keyPrefix);
 		final Optional<Type> firstHot = this.tieredRepository.findFirstHot(table, entityClass, keyPrefix, after, upTo);
 		final Optional<TieredRowKey> hotKey = firstHot.map(entity -> this.tieredRepository.keyOfEntity(table, entity));
-		Optional<TieredHit<Type>> hit = firstHot.map(entity -> new TieredHit<>(entity, (ColdRow) null));
-		if ((table.getArchiveUnit() == ArchiveUnit.PARTITION) && ColdTieringServiceComponent.isColdReadable(tableProperties)) {
-			final PartitionTieredTable partitioned = (PartitionTieredTable) table;
-			final LocalDateTime hotMoment = hotKey.map(key -> ColdTieringServiceComponent.momentOf(partitioned, key)).orElse(upTo);
-			final String ceiling = hotKey.map(key -> ColdTieringServiceComponent.lastSegmentOf(table, key)).orElse(ColdTieringServiceComponent.segmentOfMoment(table, upTo));
-			final Optional<ColdRow> firstCold = this.coldRows(partitioned, this.partitionsBetween(partitioned, after, hotMoment),
-					ColdTieringServiceComponent.formattedPrefix(table, keyPrefix), ColdTieringServiceComponent.segmentOfMoment(table, after), ceiling, true).stream()
-					.filter(row -> hotKey.isEmpty() || !row.key().equals(hotKey.get()))
-					.min(Comparator.comparing(row -> ColdTieringServiceComponent.lastSegmentOf(table, row.key())));
-			if (firstCold.isPresent()) {
-				hit = Optional.of(this.rehydrate(table, entityClass, firstCold.get()));
-			}
+		final Optional<ColdRow> firstCold = ColdTieringServiceComponent.isColdReadable(tableProperties)
+				? this.strategyOf(table).findFirstCold(table, prefix, after, upTo, hotKey)
+				: Optional.empty();
+		Optional<TieredHit<Type>> hit;
+		if (firstCold.isPresent()) {
+			hit = Optional.of(this.serveCold(table, tableProperties, entityClass, firstCold.get()));
 		}
-		if (hit.isPresent() && hit.get().hot().isPresent() && (hit.get().hot().get() == firstHot.orElse(null))) {
+		else {
+			hit = firstHot.map(entity -> new TieredHit<>(entity, (ColdRow) null));
 			hotKey.ifPresent(key -> this.requestTouchIfStale(table, tableProperties, key));
 		}
 		return hit;
 	}
 
 	/**
-	 * Every row of a key prefix on or before a moment, newest first: hot rows, plus the cold rows
-	 * of the readable partitions not represented by a hot row (rehydrated).
+	 * Every row of a key prefix on or before a moment, newest first: the hot rows, plus the cold
+	 * rows whose key no hot row holds (hot wins per key), served through the table's rehydration.
 	 *
 	 * @param  <Type>      Entity type.
 	 * @param  entityClass Entity class.
@@ -697,25 +566,19 @@ public class ColdTieringServiceComponent {
 			final LocalDateTime asOf) {
 		final TieredTable table = this.registry.getTable(entityClass);
 		final TableProperties tableProperties = this.properties.of(table);
+		final Map<String, String> prefix = ColdTieringServiceComponent.validatedPrefix(table, keyPrefix);
 		final Map<String, TieredHit<Type>> hits = new LinkedHashMap<>();
 		for (final Type entity : this.tieredRepository.findAllHot(table, entityClass, keyPrefix, asOf)) {
 			final TieredRowKey key = this.tieredRepository.keyOfEntity(table, entity);
 			hits.put(ColdTieringServiceComponent.lastSegmentOf(table, key), new TieredHit<>(entity, (ColdRow) null));
 			this.requestTouchIfStale(table, tableProperties, key);
 		}
-		if ((table.getArchiveUnit() == ArchiveUnit.PARTITION) && ColdTieringServiceComponent.isColdReadable(tableProperties)) {
-			final PartitionTieredTable partitioned = (PartitionTieredTable) table;
-			final List<ReadablePartition> partitions = new ArrayList<>();
-			for (final ReadablePartition readable : this.partitionsBetween(partitioned, null, asOf)) {
-				final Boolean hasHot = hits.values().stream().anyMatch(hit -> readable.partition()
-						.contains(ColdTieringServiceComponent.momentOf(partitioned, this.tieredRepository.keyOfEntity(table, hit.hot().orElseThrow()))));
-				if (!hasHot) {
-					partitions.add(readable);
+		if (ColdTieringServiceComponent.isColdReadable(tableProperties)) {
+			for (final ColdRow row : this.strategyOf(table).findTimelineCold(table, prefix, asOf)) {
+				final String segment = ColdTieringServiceComponent.lastSegmentOf(table, row.key());
+				if (!hits.containsKey(segment)) {
+					hits.put(segment, this.serveCold(table, tableProperties, entityClass, row));
 				}
-			}
-			for (final ColdRow row : this.coldRows(partitioned, partitions, ColdTieringServiceComponent.formattedPrefix(table, keyPrefix), null,
-					ColdTieringServiceComponent.segmentOfMoment(table, asOf), false)) {
-				hits.putIfAbsent(ColdTieringServiceComponent.lastSegmentOf(table, row.key()), this.rehydrate(table, entityClass, row));
 			}
 		}
 		final List<String> segments = new ArrayList<>(hits.keySet());
@@ -728,8 +591,8 @@ public class ColdTieringServiceComponent {
 	}
 
 	/**
-	 * Rows by full keys: hot hits, then the missing keys read cold (partition-tiered tables: one
-	 * block read per key) and rehydrated. Keys with no row are left out.
+	 * Rows by full keys: hot hits, then the missing keys read cold and rehydrated. Keys with no
+	 * row are left out.
 	 *
 	 * @param  <Type>      Entity type.
 	 * @param  entityClass Entity class.
@@ -751,9 +614,10 @@ public class ColdTieringServiceComponent {
 	}
 
 	/**
-	 * Removes a row from both tiers (a business delete must not leave the cold copy behind).
+	 * Deletes a row from both tiers (row tiering); a partition-tiered table loses its hot row
+	 * only.
 	 *
-	 * @param key Row key.
+	 * @param key Key.
 	 */
 	@Transactional(
 			propagation = Propagation.REQUIRED,
@@ -761,7 +625,13 @@ public class ColdTieringServiceComponent {
 	)
 	public void delete(
 			final TieredRowKey key) {
-		this.tieredRepository.delete(this.registry.getTable(key.tableId()), key);
+		final TieredTable table = this.registry.getTable(key.tableId());
+		if (table.getArchiveUnit() == ArchiveUnit.ROW) {
+			this.tieredRepository.delete(table, key);
+		}
+		else {
+			this.hotTierRepository.delete(table, key);
+		}
 	}
 
 }

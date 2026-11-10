@@ -1,6 +1,9 @@
 package org.coldis.library.service.tiering.repository;
 
+import java.nio.ByteBuffer;
 import java.util.ArrayList;
+import java.util.Base64;
+import java.util.zip.CRC32C;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -11,6 +14,7 @@ import org.coldis.library.service.tiering.model.ColdUpload;
 import software.amazon.awssdk.core.sync.RequestBody;
 import software.amazon.awssdk.services.s3.S3Client;
 import software.amazon.awssdk.services.s3.model.AbortMultipartUploadRequest;
+import software.amazon.awssdk.services.s3.model.ChecksumAlgorithm;
 import software.amazon.awssdk.services.s3.model.CompleteMultipartUploadRequest;
 import software.amazon.awssdk.services.s3.model.CompletedMultipartUpload;
 import software.amazon.awssdk.services.s3.model.CompletedPart;
@@ -24,6 +28,7 @@ import software.amazon.awssdk.services.s3.model.NoSuchKeyException;
 import software.amazon.awssdk.services.s3.model.PutObjectRequest;
 import software.amazon.awssdk.services.s3.model.S3Object;
 import software.amazon.awssdk.services.s3.model.UploadPartRequest;
+import software.amazon.awssdk.services.s3.model.UploadPartResponse;
 
 /**
  * Cold storage on S3, through the consumer's {@link S3Client}. Integrity in transit is the SDK's
@@ -134,7 +139,7 @@ public class S3ColdStorageRepository implements ColdStorageRepository {
 			final String key,
 			final Map<String, String> metadata) {
 		final String uploadId = this.s3Client.createMultipartUpload(CreateMultipartUploadRequest.builder().bucket(this.bucket).key(key)
-				.contentType(metadata.get(ColdStorageRepository.CONTENT_TYPE_METADATA)).metadata(metadata).build()).uploadId();
+				.contentType(metadata.get(ColdStorageRepository.CONTENT_TYPE_METADATA)).metadata(metadata).checksumAlgorithm(ChecksumAlgorithm.CRC32_C).build()).uploadId();
 		return new ColdUpload() {
 
 			/** Completed parts. */
@@ -147,9 +152,15 @@ public class S3ColdStorageRepository implements ColdStorageRepository {
 			public void part(
 					final byte[] content) {
 				final int number = this.parts.size() + 1;
-				final String etag = S3ColdStorageRepository.this.s3Client.uploadPart(UploadPartRequest.builder().bucket(S3ColdStorageRepository.this.bucket)
-						.key(key).uploadId(uploadId).partNumber(number).build(), RequestBody.fromBytes(content)).eTag();
-				this.parts.add(CompletedPart.builder().partNumber(number).eTag(etag).build());
+				// The part's CRC32C is computed here and sent as a header (no trailer), so S3 verifies the
+				// bytes it received against it and the completion names the same checksum per part.
+				final CRC32C crc = new CRC32C();
+				crc.update(content);
+				final String checksum = Base64.getEncoder().encodeToString(ByteBuffer.allocate(4).putInt((int) crc.getValue()).array());
+				final UploadPartResponse response = S3ColdStorageRepository.this.s3Client.uploadPart(UploadPartRequest.builder()
+						.bucket(S3ColdStorageRepository.this.bucket).key(key).uploadId(uploadId).partNumber(number).checksumCRC32C(checksum).build(),
+						RequestBody.fromBytes(content));
+				this.parts.add(CompletedPart.builder().partNumber(number).eTag(response.eTag()).checksumCRC32C(checksum).build());
 				this.size += content.length;
 			}
 

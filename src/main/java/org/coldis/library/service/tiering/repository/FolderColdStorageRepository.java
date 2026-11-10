@@ -278,6 +278,14 @@ public class FolderColdStorageRepository implements ColdStorageRepository {
 	}
 
 	/**
+	 * @see ColdStorageRepository#minimumPartSize()
+	 */
+	@Override
+	public Integer minimumPartSize() {
+		return 1;
+	}
+
+	/**
 	 * @see ColdStorageRepository#beginUpload(String, Map)
 	 */
 	@Override
