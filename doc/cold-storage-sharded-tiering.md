@@ -127,10 +127,10 @@ Model (`tiering.model`):
 | `PartitionTieredTable extends TieredTable` | `new PartitionTieredTable(id, tableName, keyColumns)` `.withShardKeyColumn("tax_id")` (must be the first key column) `.withPartitionColumn("cached_at")` (must be a key column, and the table's range partition key); inherits `withWatermarkColumn`, `withLastAccessedColumn`, `withArchivedAtColumn`, `withEntity`, `withTtlClock` (only `LAST_ACCESS`), `withRehydration` (only `INSERT`); `isVersioned()` is forced true (the partition column is the version) |
 | Boundaries | A list of lower bounds (canonical segments of the shard key, the first is `""`) on `PartitionManifest.boundaries`, `shardOf(segment)` by binary search; produced by the export's boundaries pass and **recorded in the manifest**, so readers never recompute them and resolve the shard with no extra S3 call |
 | `ShardStrategy` enum + `EquiDepthShardCutter` | `EQUI_DEPTH` (default: the cutter closes a shard at the first key change after `target` rows during the key pass, below), `PREFIX` (`EquiDepthShardCutter.prefixBoundaries(digits)`, for a key known to be uniform; not the default, see the distribution above). Selected by `table.<id>.export.shard-strategy` |
-| `BlockCodec` SPI | `compress(byte[])`, `decompress(byte[], expectedLength)`, `name()`; built-in `gzip` (JDK, the default); `zstd` (`com.github.luben:zstd-jni`, `<optional>` in this pom, `@ConditionalOnClass`) selected by property when the consumer adds the dependency; the index names the codec, so a partition exported with one is readable after the default changes |
+| `BlockCodec` SPI | `compress(byte[])`, `decompress(byte[], maxLength)`, `name()`; `gzip` (JDK) is the only built-in codec. A consumer may declare another (`block-codec=<name>` plus its own bean); zstd was dropped from this change because a new native dependency (`zstd-jni`) needs the lead's approval first. The index names the codec, so a partition exported with one is readable after the default changes |
 | `PartitionManifest`, `ShardIndex`, `BlockEntry` | Records of the formats below, with `formatVersion`; Jackson, through the existing `GzipJsonPayloadCodec` for the bytes |
-| `PartitionArchive` | The DB record: `tableId`, `partitionName`, `rangeFrom`, `rangeTo`, `state`, timestamps (`loadedAt`, `exportStartedAt`, `exportedAt`, `verifiedAt`, `sweptAt`), `shardCount`, `shardsDone`, `rowCount`, `sizeBytes`, `formatVersion`, `manifestKey`, `sweepCursor`, `sweepDeleted`, `sweepKept` |
-| `PartitionArchiveState { LOADED, EXPORTING, VERIFIED, STALE }` | The guard. Only `VERIFIED` may be swept and read cold (`STALE` is read cold too, see *Reprocess*); a row may be deleted only in a `VERIFIED` partition and only when the export covers it (`updated_at <= exported_at`) |
+| `PartitionArchive` | The DB record: `tableId`, `partitionName`, `rangeFrom`, `rangeTo`, `state`, `generation`, `loadedRows`, timestamps (`loadedAt`, `exportStartedAt`, `exportedAt`, `verifiedAt`, `sweptAt`), `shardCount`, `shardsDone`, `rowCount`, `sizeBytes`, `formatVersion`, `manifestKey`, `sweepCursor`, `sweepDeleted`, `sweepKept` |
+| `PartitionArchiveState { LOADED, EXPORTING, VERIFIED, STALE, NEEDS_ATTENTION }` | The guard. Cold reads follow the record's `manifest_key` whatever the state (the previous generation stays readable through a reload and a re-export); only `VERIFIED` may be swept; a row may be deleted only when the export covers it (`updated_at <= export_started_at`). `NEEDS_ATTENTION`: a partition swept before and reloaded with fewer hot rows than its archive; never exported nor swept until an operator decides |
 | `TieredRowKey`, `ColdRow`, `TieredHit` | Unchanged, reused |
 
 Repository (`tiering.repository`):
@@ -148,7 +148,8 @@ Policy (`tiering`):
 | Type | Role |
 |---|---|
 | `PartitionTieringServiceComponent` | `partitionLoaded(tableId, momentInPartition)` (the consumer's signal, starts the hold); `computeBoundaries(table, partition)`; `exportShard(ShardExportRequest)` (JMS listener on `cold-tiering/export`, `export.concurrency`); `finishPartition(table, partition)` (manifest, verification, state); `markStale(tableId, momentInPartition)` |
-| `ColdTieringServiceComponent` (extended) | `findByIdTiered` and `findNewestTiered` dispatch on `ArchiveUnit`; new `findFirstTiered(Entity.class, keyPrefix, after, upTo)`, `findTimelineTiered(Entity.class, keyPrefix, asOf) → List<TieredHit>`, `findAllByKeysTiered(Entity.class, Collection<id>) → List<TieredHit>`; `afterWrite` on a `PARTITION` table only touches (no upload request); `delete(key)` on a `PARTITION` table deletes the hot row only and throws if the partition is archived (a cold row cannot be deleted alone from a shard; business deletes do not exist on these tables) |
+| `ColdLookupStrategy` SPI + `RowColdLookupStrategy` | One bean per archive unit (`findCold`, `findNewestCold`, `findFirstCold`, `findTimelineCold`); `PartitionTieringServiceComponent` is the `PARTITION` one. The component runs the hot side, validates key prefixes (known columns, leading and gap-free) and rehydrates; it never tests the unit nor casts a definition |
+| `ColdTieringServiceComponent` (extended) | every tiered read goes hot first, then the unit's strategy; new `findFirstTiered(Entity.class, keyPrefix, after, upTo)`, `findTimelineTiered(Entity.class, keyPrefix, asOf) → List<TieredHit>`, `findAllByKeysTiered(Entity.class, Collection<id>) → List<TieredHit>`; `afterWrite` on a `PARTITION` table only touches (no upload request); `delete(key)` on a `PARTITION` table deletes the hot row only and throws if the partition is archived (a cold row cannot be deleted alone from a shard; business deletes do not exist on these tables) |
 | `ColdTieringBatchServiceComponent` (extended) | `TieringBatch.EXPORT` and `TieringBatch.PARTITION_SWEEP`; the row `EVICTION` on a `PARTITION` table runs step 1's `evictExpired` on the parent (the partitioned eviction index prunes to the partitions with warm rows); `BACKFILL` is rejected at registration for `PARTITION` tables (the export is the backfill) |
 | `ColdTieringSchema` (extended) | `partitionArchiveStatements()` (the record table); `statements(table, …)` for a `PARTITION` table emits the columns on the parent and the eviction index as a partitioned index (parent `ONLY`, one `CONCURRENTLY` per leaf, `ATTACH PARTITION`), see *Schema* |
 | `TieredTableRegistry` (extended) | For a `PARTITION` table: the table is range-partitioned on the partition column (`pg_partitioned_table`), the shard key is the first key column and the first column of the primary key index of the parent, the partition column is a key column; `LAST_ACCESS` + `INSERT` only; `backfill.enabled=false`; the record table exists |
@@ -158,14 +159,14 @@ Properties, under `org.coldis.library.service.tiering.`:
 | Property | Default | Meaning |
 |---|---|---|
 | `export.concurrency` | `1` | Listeners per instance on `cold-tiering/export`; one shard in flight per listener, so memory ≈ listeners × (`part-size` + one block + one page) |
-| `block-codec` | `gzip` | `gzip` or `zstd` (needs zstd-jni on the consumer's classpath) for new exports; reads follow the index |
+| `block-codec` | `gzip` | Codec of new exports (`gzip` built in; another name needs a consumer bean); reads follow the index |
 | `index-cache.ttl` | `PT5M` | Process-local TTL cache of manifests and shard indexes; bounded by the TTL, not by a size (an entry is ~40 KB: at 10 cold reads a second with no repeated shard, 3,000 entries ≈ 120 MB worst case, far less in practice since a shard serves ~240 k keys). A shared Redis level is future work |
 | `table.<id>.export.{enabled,cron,finish-within}` | `false`, `0 15 * * * *`, `P2D` | The export batch (boundaries pass, then enqueues shards) |
 | `table.<id>.export.quiet-period` | `P2D` | Heuristic eligibility: a partition with no `loaded_at` signal is exported when its newest `updated_at` is older than this and its range end is in the past (backfill of existing months) |
 | `table.<id>.export.exclude-partitions` | `*_legacy` | Leaf partitions never exported nor swept (glob on the name); open-ended ranges (`MAXVALUE`) are always excluded |
 | `table.<id>.export.shard-strategy` / `shards` / `shard-digits` | `equi-depth` / `1000` / `3` | Boundaries for new exports; `shards` is the equi-depth target, `shard-digits` the prefix option |
 | `table.<id>.export.block-size` / `page-size` / `key-page-size` / `part-size` | `1MB` (compressed, 256 KB–4 MB) / `2000` rows / `1000000` keys / `16MB` | Block cut when its estimated compressed size reaches the target (the previous block's ratio, 4:1 at first); rows per keyset page of the data pass; keys per page of the boundaries pass; multipart part |
-| `table.<id>.export.verify-sample-every` | `50000` | One row in every N written is read back through the cold path after the shard completes |
+| `table.<id>.export.verify-sample-every` | `50000` | One row in every N written (the first, the N+1-th, …; `1` samples every row) is read back through the cold path after the shard completes |
 | `table.<id>.partition-sweep.{enabled,cron,chunk-blocks,delay-between-chunks,finish-within}` | `false`, `0 0 22 * * *`, `1024`, `PT1S`, `P3D` | The sweep: heap pages per chunk (1,024 × 8 KB = 8 MB of heap, ~2,700 rows), the pause between chunks (sets the WAL rate), the run's horizon (a month's sweep lasts hours, resumed across runs) |
 | `table.<id>.partition-sweep.hold-after-load` | `P5D` | The month stays fully hot for this long after `loaded_at` (the consumer's signal) or, for a partition exported without a signal (backfill), after `verified_at`; the sweep starts after `max(hold, ttl + safety-margin)` from that moment, so its first pass finds the bulk expired |
 | `table.<id>.prefix` | the global `prefix` | Object key prefix of every object of the table (blocks, indexes, manifests; a row table's objects too), so the full tables live under `boa-vista/full/` while the online ones keep `boa-vista/online/` |
@@ -177,11 +178,19 @@ Object keys through `ObjectKeyStrategy` (`PathObjectKeyStrategy` shown), segment
 file]`, so a custom layout (hashed segments, another prefix shape) applies to both units:
 
 ```
-<prefix><tableId>/<partition>/manifest.json.gz                    PartitionManifest
-<prefix><tableId>/<partition>/<shard %04d>.index.json.gz          ShardIndex
-<prefix><tableId>/<partition>/<shard %04d>.blocks                 frames, back to back
-e.g. boa-vista/full/boa-vista-report-full/boa_vista_report_full_2026_08/0042.blocks
+<prefix><tableId>/<partition>/<generation>/manifest.json.gz          PartitionManifest
+<prefix><tableId>/<partition>/<generation>/<shard %04d>.index.json.gz ShardIndex
+<prefix><tableId>/<partition>/<generation>/<shard %04d>.blocks        frames, back to back
+e.g. boa-vista/full/boa-vista-report-full/boa_vista_report_full_2026_08/20261110T031500123/0042.blocks
 ```
+
+**Generations.** Every export of a partition writes under its own generation (the export start,
+`yyyyMMddTHHmmssSSS`), never over the previous objects; the archive record's `manifest_key` is
+the pointer readers follow and it is switched **last**, in the same update that sets the final
+state. A failed or refused re-export therefore never damages the readable archive, and the
+previous generation stays readable while a partition is `LOADED` or `EXPORTING`. Old generations
+are not deleted by the library (a lifecycle rule on the prefix, or a later cleanup batch: future
+work).
 
 **`.blocks`**: a concatenation of independently decompressible frames. A frame is the `BlockCodec`
 compression of `N` lines, each line the `CAST(row_to_json(part) AS text)` of one row, `\n`
@@ -199,7 +208,7 @@ index, so a block is readable with one range GET and one `decompress`. Object me
   "blocks": [
     { "first": ["04213398710", "6B%2C6H", "2026-08-05T00:00:00.000000"],
       "last":  ["04213412233", "6B%2C6H", "2026-08-05T00:00:00.000000"],
-      "offset": 0, "length": 1048231, "rows": 412, "crc32c": "a1b2c3d4" },
+      "offset": 0, "length": 1048231, "uncompressedLength": 7340032, "rows": 412, "crc32c": "a1b2c3d4" },
     { "first": ["04213412301", …], "last": [...], "offset": 1048231, "length": 1047990, "rows": 409, "crc32c": "…" }
   ] }
 ```
@@ -211,9 +220,10 @@ run across a boundary (`last` of block *i* has the same shard-key segment as the
 At 1 MB blocks a shard of 240 k rows has ~600 blocks, an index ~35–40 KB compressed; 1,000 shards
 ≈ 40 MB of index per partition and table, loaded one shard at a time on demand, never all at once.
 `crc32c` is checked after every range GET (in-transit integrity of a range GET is not covered by the
-SDK's object checksum).
+SDK's object checksum), and a frame is refused if it expands past `uncompressedLength` (a bound
+on memory per read).
 
-**`manifest.json.gz`** (`PartitionManifest`): `formatVersion`, `tableId`, `partition`, `rangeFrom`,
+**`manifest.json.gz`** (`PartitionManifest`): `formatVersion`, `tableId`, `partition`, `generation`, `rangeFrom`,
 `rangeTo` (the bounds as `pg_get_expr` prints them), `keyColumns`, `shardStrategy` (`{type:
 "equi-depth", target: 1000, rowsPerShard: 240000}` or `{type: "prefix", digits: 3}`),
 `boundaries` (the lower bound of every shard: the authority for `shardOf`; the first is the empty
@@ -297,8 +307,10 @@ instances`, independent of the batch.
 
 `exportShard`, one shard, no long transaction:
 
-1. Skip if the shard's index object exists with metadata `export-started-at` equal to the
-   request's (a redelivered or re-enqueued shard after a restart): idempotent.
+1. If the shard's index object of this generation exists with the request's `exportStartedAt`
+   (a redelivered or re-enqueued shard after a restart), nothing is written; the shard is still
+   recorded from the index's summary and the finish check runs, so a partition never stays
+   `EXPORTING` with every shard written.
 2. Keyset pages, each its own short read-only transaction (no cursor held across S3 calls, no
    `long-timeout` risk):
    ```sql
@@ -322,18 +334,19 @@ instances`, independent of the batch.
    `part-size` (multipart). Memory per listener: a page (2,000 × ~20 KiB ≈ 40 MB uncompressed:
    lower `page-size` if heap is tight), one block, one part. The index grows in memory (~600
    entries).
-4. `complete()` the blocks object, write the index with `export-started-at` in its metadata,
-   update the record's shard progress (`shards_done`, `rows`, `size_bytes`; one `UPDATE … FOR
-   UPDATE`, no row lock on the hot table at any point).
+4. `complete()` the blocks object, write the index (it carries the generation and
+   `exportStartedAt`), then record the shard: `completeShard` (idempotent per shard and
+   generation) and, when it was the last one, the manifest and the record's final state run in
+   **one transaction** (`recordShard`), so the record never names a manifest that does not exist
+   and the final state is a single update. No row lock on the hot table at any point.
 5. Verification of the shard, in the same listener: `countInRange(partition, from, to)` (index
    range count) must equal the rows written; every `verify-sample-every`-th key seen (kept in a
    small list) is read back through `PartitionTieredRepository.readRow` and compared byte for byte
    with the line written. A mismatch fails the shard (exception → retry → DLQ) and the partition
    never reaches `VERIFIED`.
-6. The listener that completes the last shard writes the manifest, checks that the shard counts
-   sum to the boundaries pass's count, re-checks `countWrittenAfter(partition, export_started_at)
-   = 0` (nothing changed under the export) and sets `VERIFIED` (`exported_at`, `verified_at`,
-   totals). If rows changed: `STALE` (see *Reprocess*).
+6. The listener that completes the last shard writes the manifest under the generation, checks
+   that no row has a watermark after `export_started_at` (nothing changed under the export) and
+   sets `VERIFIED` with the manifest pointer, or `STALE` (see *Reprocess*), in one update.
 
 Resumability: a restart loses the in-flight shards only; their messages are redelivered
 (`abort()` of a dangling multipart is done by a bucket lifecycle rule for incomplete uploads, 1 day,
@@ -347,12 +360,11 @@ Throughput, to measure on one shard first and extrapolate (the plan's estimate, 
 the database read is the bound. Per month and table ≈ 240 M rows × ~19 KiB JSON ≈ 4.3 TiB of text
 out of Postgres (TOAST decompression plus `row_to_json` serialisation, CPU on the database). At
 ~300 MB/s aggregate from 8 listeners that is ~4 h; gzip at ~50 MB/s per core adds ~3 h of service
-CPU unless spread across 8+ cores, zstd (~400 MB/s per core) makes compression negligible, which
-is why data-gathering plugs `zstd` in. Expect 4–8 h per big month per table with
+CPU unless spread across 8+ cores (a zstd codec, ~400 MB/s per core, would make compression
+negligible: it waits for the dependency's approval). Expect 4–8 h per big month per table with
 `export.concurrency=4` on 2 instances, plus 5–10 minutes for the boundaries pass; plan the first
 backfill month at night. S3 requests: 1,000 shards × (~40 parts + complete + index) + manifest ≈
-42,000 PUT-class requests ≈ US$ 0.21 per month and table. Storage: JSON compresses 6–8× (gzip; zstd
-at level 3 is similar) → ~0.5–0.7 TB per big month and table (vs 1.1 TB on EBS); the existing
+42,000 PUT-class requests ≈ US$ 0.21 per month and table. Storage: JSON compresses 6–8× (gzip) → ~0.5–0.7 TB per big month and table (vs 1.1 TB on EBS); the existing
 4.9 TB of both tables minus `_legacy` ≈ 2–2.5 TB in S3 ≈ US$ 50–60 a month at Standard, the only
 storage class in this step.
 
@@ -365,12 +377,13 @@ Entry points on `ColdTieringServiceComponent`, dispatching on `ArchiveUnit.PARTI
 | `findByIdTiered(Entity, id)` | JPQL by key (the parent, pruned to one partition by `cached_at`) | partition of `cached_at` → record readable? → `readRow` | rehydrate, hot read again, touch |
 | `findNewestTiered(Entity, {tax_id[, version]}, asOf)` | `findNewestHot` (one probe per partition index, 46) | readable partitions with `rangeFrom <= asOf`, **newest first, only those whose range starts after the hot candidate's `cached_at`**; stop at the first hit | the newer of hot and cold; cold → rehydrate |
 | `findFirstTiered(Entity, {tax_id}, after, upTo)` (new) | `findFirstHot` in the interval | readable partitions intersecting `(after, upTo]`, oldest first, only those before the hot candidate | same |
-| `findTimelineTiered(Entity, {tax_id}, asOf)` (new) | all hot rows of the prefix | every readable partition `<= asOf` not already represented by a hot row of that partition, probed in parallel (bounded executor, `index-cache` warm) | hot ∪ cold, newest first; cold rows rehydrated |
+| `findTimelineTiered(Entity, {tax_id}, asOf)` (new) | all hot rows of the prefix | every readable partition `<= asOf` (one block read each; a partition is not skipped because a hot row falls in it: a month may hold two deliveries) | hot ∪ cold merged per key, the hot row winning, newest first; cold rows rehydrated |
 | `findAllByKeysTiered(Entity, ids)` (new) | one lookup per key | one cold lookup per missing key (grouping by block and coalescing adjacent blocks: future work) | hits in input order; cold rows rehydrated |
 
-"Readable" = record state `VERIFIED` or `STALE` with a manifest. A partition with another state or
-no record is **hot by definition** (every row of it is still in Postgres: nothing deletes a row
-before `VERIFIED`), so a hot miss on such a partition is a true miss and costs no GET. The guard is
+"Readable" = the record points at a manifest (`manifest_key`), whatever its state: the previous
+generation serves cold reads through a reload and a re-export. A partition with no manifest is
+**hot by definition** (every row of it is still in Postgres: nothing deletes a row before
+`VERIFIED`), so a hot miss on such a partition is a true miss and costs no GET. The guard is
 explicit: `sweepChunk` and `evictExpired` take the partition only from `VERIFIED` records, and a
 monitoring query (below) flags a partition whose live row count is below its manifest count while
 its record is not `VERIFIED`.
@@ -380,7 +393,7 @@ One cold read: `manifest` (cache hit after the first read of the partition on th
 `first` → `last` check (a gap is a miss without a GET) → one range GET of ≤ `block-size` bytes →
 CRC32C → decompress → scan the lines for the key (Jackson streaming parser reading the key fields
 only; a line is ~19 KiB, a block ~400 lines) → `ColdRow`. Latency budget, same region: S3 range GET
-TTFB 30–70 ms + 1 MB transfer ~10 ms + decompress 5–10 ms (gzip; ~3 ms zstd) +
+TTFB 30–70 ms + 1 MB transfer ~10 ms + decompress 5–10 ms (gzip) +
 `json_populate_record` INSERT ~5 ms + the touch request: **~100–150 ms p50, ~250 ms p99** for a
 key hit, ~0 ms extra for a key miss in a gap, ~70 ms for a miss inside a block. A cold index fetch
 adds one GET (~40 ms). The hot hit path is unchanged (one JPQL, one touch when stale).
@@ -415,7 +428,12 @@ retries once.
 Two batches, both deletes, no DDL, no change of the partition layout:
 
 **Partition sweep** (`PARTITION_SWEEP`, new): one paced pass per verified month, in **heap order**,
-that deletes every row of the month past its TTL and marks the ones it keeps. GET = the next
+that deletes every row of the month past its TTL and marks the ones it keeps. Its first chunk
+re-counts the partition (`count(*)`, an index range count over the whole key) and requires it to
+equal the manifest's rows: a difference means rows the archive does not cover, the record goes
+`STALE` (ERROR log) and nothing is deleted. Every chunk also counts the rows it could not lock
+(`FOR UPDATE SKIP LOCKED`, another transaction touching them) and logs them as `skipped`; they are
+revisited by a later run since the cursor only advances by block. GET = the next
 `VERIFIED` partition with `swept_at IS NULL` whose hold start (`loaded_at`, else `verified_at`)
 plus `max(hold-after-load, ttl + safety-margin)` is in the past; the item is a block range, cursor
 `sweep_cursor` on the record (resumes across runs and restarts). EXECUTE, one chunk per
@@ -427,7 +445,7 @@ WITH picked AS (
   SELECT ctid, (COALESCE(last_accessed_at, updated_at) < :before) AS expired
   FROM ONLY <partition>
   WHERE ctid >= :fromTid AND ctid < :toTid                    -- '(fromBlock,0)' .. '(toBlock,0)'
-    AND updated_at <= :exportedAt                              -- covered by the export (immutable rows)
+    AND updated_at <= :exportStartedAt                         -- covered by the export (immutable rows)
   FOR UPDATE SKIP LOCKED
 ), deleted AS (
   DELETE FROM ONLY <partition> part USING picked
@@ -490,6 +508,16 @@ not in the catalog's children of the table.
 
 ### Reprocess of an archived delivery
 
+**Guard against replacing a complete archive with a partial one.** Once a sweep has started on a
+partition (`swept_at` or `sweep_cursor` set), most of its rows live only in S3. A reload signal
+(`partitionLoaded`) then puts the record back to `LOADED` but keeps the manifest pointer and the
+sweep marks; when the export batch picks the partition, `startExport` counts the hot rows and
+refuses the export when they are fewer than the archive's `row_count`: the record goes
+`NEEDS_ATTENTION` with an ERROR log, nothing is written, the previous generation keeps serving
+cold reads, and an operator decides (a full reload brings the count back and the next
+`partitionLoaded` re-enables the export; a merge of the previous shards with the hot rows is not
+built). A re-export of a partition never swept (every row still hot) needs no guard.
+
 A delivery reprocessed after its month is `VERIFIED` rewrites rows with a newer `updated_at`;
 after the sweep it re-inserts the whole population into the partition. The consumer's import
 endpoint calls `markStale(tableId, moment)` when the month already has a record (a reprocess of a
@@ -522,6 +550,8 @@ CREATE TABLE IF NOT EXISTS cold_tiering_partition_archive (
   shard_count        integer,
   shards_done        integer,
   row_count          bigint,
+  loaded_rows        bigint,
+  generation         text,
   size_bytes         bigint,
   boundaries         jsonb,
   sweep_cursor       bigint,
@@ -571,7 +601,7 @@ eviction index on the parent, and that `cold_tiering_partition_archive` exists.
 | Reads: `readReportSnapshot` → `findNewestTiered(BoaVistaReportFull.class, {tax_id}, bounds.asOf())` and, on empty with a fallback, `findFirstTiered(…, bounds.asOf(), bounds.fallbackUpTo())`; `readReportTimeline` → `findTimelineTiered`; `readCadastroPositivoSnapshot` the same; the validator's `findAllByTaxIdInAndCachedAt` → `findAllByKeysTiered`. The six JPA finders stay for tests and tooling but nothing in the read path calls them | `BoaVistaFullReadServiceComponent`, `BoaVistaFullValidator` |
 | Delivery signals: when `recordApplyWorkerFinished` returns `ApplyDone`, call `partitionLoaded` for both table ids with the delivery's `cachedAt` and `totalRows` (next to `alertDeliveryFinished`); the import endpoint (`POST …/deliveries/{id}/import`) calls `markStale` for both tables when the month already has a record | `BoaVistaFullApplyExecutor.finishWorker`, `BoaVistaFullCoordinator` |
 | Flyway `V4__boa_vista_full_cold_tiering.sql` + `.sql.conf`: the record table, the two `ALTER TABLE … ADD COLUMN`s, the partitioned eviction index with its 46 concurrent leaf builds per table | `src/main/resources/db/migration` |
-| Properties: `table.boa-vista-report-full.*` and `…cadastro-positivo-report-full.*`: `enabled`, `cold-read-enabled`, `ttl=P5D`, `safety-margin=P1D`, `touch-threshold=P1D`, `export.enabled`, `export.cron`, `partition-sweep.enabled`, `partition-sweep.hold-after-load=P5D`, `partition-sweep.delay-between-chunks`, every flag from an env var defaulting to `false`; `export.concurrency=${…:4}`; `block-codec=zstd` with `zstd-jni` added to the service pom | `application.properties`, `pom.xml` |
+| Properties: `table.boa-vista-report-full.*` and `…cadastro-positivo-report-full.*`: `enabled`, `cold-read-enabled`, `ttl=P5D`, `safety-margin=P1D`, `touch-threshold=P1D`, `export.enabled`, `export.cron`, `partition-sweep.enabled`, `partition-sweep.hold-after-load=P5D`, `partition-sweep.delay-between-chunks`, every flag from an env var defaulting to `false`; `export.concurrency=${…:4}`; `block-codec=gzip` (zstd once its dependency is approved) | `application.properties` |
 | S3 prefix: the online tables use `boa-vista/online/`; the full tables need their own. `table.<id>.prefix` (built; falls back to the global `prefix`) set to `boa-vista/full/` on the two tables | `application.properties` |
 | QC endpoint on `BoaVistaFullDeliveryService`: `GET …/deliveries/archive` listing the partition records; `POST …/archive/{partition}/export`, `/sweep`, `/stale` to run or mark on demand (scope `VENDOR_REPORT_GATHER`) | `service/…/full` |
 | Docs: `doc/boa-vista-base-full.md` gains the tiering section; this plan's consumer part becomes `doc/boa-vista-full-report-tiering.md` | `doc/` |
@@ -634,8 +664,7 @@ Library, `src/test/java/org/coldis/library/test/service/tiering/`:
   with `formatVersion=99` is refused; a redelivered shard request writes nothing; `_plus` and an
   excluded partition are never exported; the registry rejects a table whose PK does not lead with
   the shard key, and `backfill.enabled` on a `PARTITION` table.
-- `ShardedBlockFormatUnitTest` (plain JUnit): writer/reader round trip for gzip (and zstd when on
-  the test classpath), block cut at the size, index `first`/`last`, CRC, a tax id spanning two
+- `ShardedBlockFormatUnitTest` (plain JUnit): writer/reader round trip for gzip, block cut at the size, index `first`/`last`, CRC, a tax id spanning two
   blocks, binary search edge cases, `EquiDepthShardCutter` on a stream of skewed keys
   (cuts at tax-id changes, remainder in the last shard, wrong estimate → different shard count),
   prefix boundaries, code-point order assertion.
@@ -686,8 +715,8 @@ partitioned tables come from Flyway `V1` already (`spring.flyway.enabled=true` i
 - **No partition swap, no drop**: eviction is row delete only (the heap-order sweep per verified
   month, then step 1's batch); every month keeps its single partition; disk reclaim is out of
   scope (database replaced through a new replica later).
-- Block codec `gzip` by default in the library, `zstd` an optional plug-in; data-gathering uses
-  `zstd`.
+- Block codec `gzip` built in; zstd is future work pending the lead's approval of `zstd-jni`
+  (the `BlockCodec` SPI takes a consumer bean meanwhile).
 - Index cache in memory, TTL-bounded; Redis later if S3 GET counts call for it.
 - Time-based hold: a month stays fully hot for `hold-after-load` (`P5D`) after the loader's
   signal (after `verified_at` for a backfilled month); no validator release signal.
@@ -744,6 +773,14 @@ What was built, and where it departs from the plan above:
 - The registry creates `cold_tiering_partition_archive` with `create-schema=true` and refuses a
   partition table with `backfill.enabled=true`, a non-range partitioning, a partition column that
   is not temporal, or a primary key not led by the shard key.
+- Review round (2026-11-10): exports write under generations with the pointer switched last;
+  a reload of a swept partition with fewer hot rows is refused (`NEEDS_ATTENTION`); the shard
+  record and the partition finish are one transaction and one final update; the sweep's first
+  chunk re-counts coverage and the cutoff is `export_started_at`; `blocksFor` finds every block a
+  prefix spans; frames are bounded by the index's `uncompressedLength`; zstd dropped (dependency
+  approval); `ColdStorageRepository`'s range, head, upload and minimum part size are abstract;
+  cold lookups moved behind `ColdLookupStrategy`; `timestamptz` partition columns rejected;
+  `S3ColdStorageRepositoryTest` runs the S3 adapter against LocalStack (pinned by digest).
 - Not built (no test exercises it): the registry's `require-leading-index` option named in the
   plan (the check always fails the boot), the QC endpoints (consumer side), Micrometer counters.
 
@@ -754,6 +791,8 @@ What was built, and where it departs from the plan above:
 - A shared Redis level for manifests and shard indexes (`index-cache.cache-manager`).
 - Micrometer counters (`cold.tiering.read{tier}`, `cold.tiering.export.rows`,
   `cold.tiering.sweep{result}`).
+- A zstd `BlockCodec` (`zstd-jni`), once the dependency is approved; cleanup of superseded
+  generations; a restart of exports stuck in `EXPORTING` past a timeout.
 - A Bloom filter per shard (~300 KB at 10 bits per key) to make a miss inside a block cost no GET.
 - Disk reclaim of swept partitions, if the replica replacement does not happen: `pg_repack` per
   partition, or the swap procedure of this plan's first draft (`git log` of this file).
