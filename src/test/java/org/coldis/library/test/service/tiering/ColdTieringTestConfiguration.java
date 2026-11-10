@@ -43,6 +43,9 @@ public class ColdTieringTestConfiguration {
 	/** Partition-tiered table name. */
 	public static final String MONTHLY_TABLE_NAME = "tiered_monthly_snapshot";
 
+	/** A disabled partition-tiered definition of the same table. */
+	public static final String MONTHLY_DISABLED_TABLE = "tiered-monthly-snapshot-disabled";
+
 	/**
 	 * Snapshots: composite key with a time version, JSONB payload, sliding TTL, rehydration.
 	 *
@@ -131,6 +134,17 @@ public class ColdTieringTestConfiguration {
 	public PartitionTieredTable tieredMonthlySnapshotTable() {
 		return new PartitionTieredTable(ColdTieringTestConfiguration.MONTHLY_TABLE, ColdTieringTestConfiguration.MONTHLY_TABLE_NAME, List.of("owner_id", "cached_at"))
 				.withShardKeyColumn("owner_id").withPartitionColumn("cached_at").withEntity(TieredMonthlySnapshot.class, null);
+	}
+
+	/**
+	 * Partition-tiered definition disabled by property (no entity binding: one per entity).
+	 *
+	 * @return Definition.
+	 */
+	@Bean
+	public PartitionTieredTable tieredMonthlySnapshotDisabledTable() {
+		return new PartitionTieredTable(ColdTieringTestConfiguration.MONTHLY_DISABLED_TABLE, ColdTieringTestConfiguration.MONTHLY_TABLE_NAME,
+				List.of("owner_id", "cached_at"));
 	}
 
 	/**

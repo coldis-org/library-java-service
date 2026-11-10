@@ -106,6 +106,7 @@ public class PartitionTieringServiceTest extends ContainerTestHelper {
 	private KeyValueServiceComponent keyValueService;
 
 	@Autowired
+	@Qualifier("tieredMonthlySnapshotTable")
 	private PartitionTieredTable table;
 
 	@Autowired
@@ -443,6 +444,12 @@ public class PartitionTieringServiceTest extends ContainerTestHelper {
 		jdbcTemplate.execute("DROP TABLE IF EXISTS tiered_daily_snapshot CASCADE");
 		jdbcTemplate.execute("CREATE TABLE tiered_daily_snapshot (owner_id varchar(255) NOT NULL, cached_on date NOT NULL, data jsonb, created_at timestamptz NOT NULL,"
 				+ " updated_at timestamp(6) NOT NULL, last_accessed_at timestamp(6), archived_at timestamp(6), PRIMARY KEY (owner_id, cached_on)) PARTITION BY RANGE (cached_on)");
+		jdbcTemplate.execute("DROP TABLE IF EXISTS tiered_plain CASCADE");
+		jdbcTemplate.execute("CREATE TABLE tiered_plain (owner_id varchar(255) NOT NULL, cached_at timestamp(6) NOT NULL, data jsonb, created_at timestamptz NOT NULL,"
+				+ " updated_at timestamp(6) NOT NULL, last_accessed_at timestamp(6), archived_at timestamp(6), PRIMARY KEY (owner_id, cached_at))");
+		jdbcTemplate.execute("DROP TABLE IF EXISTS tiered_pk_order CASCADE");
+		jdbcTemplate.execute("CREATE TABLE tiered_pk_order (owner_id varchar(255) NOT NULL, cached_at timestamp(6) NOT NULL, data jsonb, created_at timestamptz NOT NULL,"
+				+ " updated_at timestamp(6) NOT NULL, last_accessed_at timestamp(6), archived_at timestamp(6), PRIMARY KEY (cached_at, owner_id)) PARTITION BY RANGE (cached_at)");
 		jdbcTemplate.execute("DROP TABLE IF EXISTS tiered_bad_shard CASCADE");
 		jdbcTemplate.execute("CREATE TABLE tiered_bad_shard (owner_at timestamp(6) NOT NULL, cached_at timestamp(6) NOT NULL, data jsonb, created_at timestamptz NOT NULL,"
 				+ " updated_at timestamp(6) NOT NULL, last_accessed_at timestamp(6), archived_at timestamp(6), PRIMARY KEY (owner_at, cached_at)) PARTITION BY RANGE (cached_at)");
@@ -454,12 +461,23 @@ public class PartitionTieringServiceTest extends ContainerTestHelper {
 					() -> this.registry.validate(new PartitionTieredTable("tiered-bad-shard", "tiered_bad_shard", List.of("owner_at", "cached_at"))));
 			Assertions.assertThrows(IntegrationException.class, () -> new PartitionTieredTable("tiered-bad-partition", ColdTieringTestConfiguration.MONTHLY_TABLE_NAME,
 					List.of("owner_id", "cached_at")).withPartitionColumn("owner_id"));
+			Assertions.assertEquals("coldTiering.table.partition.strategy.invalid", Assertions.assertThrows(IntegrationException.class,
+					() -> this.registry.validate(new PartitionTieredTable("tiered-plain", "tiered_plain", List.of("owner_id", "cached_at")))).getInternalMessage().getCode());
+			Assertions.assertEquals("coldTiering.table.shard.index.invalid", Assertions.assertThrows(IntegrationException.class,
+					() -> this.registry.validate(new PartitionTieredTable("tiered-pk-order", "tiered_pk_order", List.of("owner_id", "cached_at")))).getInternalMessage().getCode());
 			this.registry.validate(this.table);
 		}
 		finally {
 			jdbcTemplate.execute("DROP TABLE IF EXISTS tiered_daily_snapshot CASCADE");
 			jdbcTemplate.execute("DROP TABLE IF EXISTS tiered_bad_shard CASCADE");
+			jdbcTemplate.execute("DROP TABLE IF EXISTS tiered_plain CASCADE");
+			jdbcTemplate.execute("DROP TABLE IF EXISTS tiered_pk_order CASCADE");
 		}
+		// Row tiering has no first-in-interval nor timeline cold side.
+		Assertions.assertEquals("coldTiering.lookup.unsupported", Assertions.assertThrows(IntegrationException.class, () -> this.tieringServiceComponent
+				.findFirstTiered(TieredSnapshot.class, Map.of("owner_id", "owner-1"), null, null)).getInternalMessage().getCode());
+		Assertions.assertEquals("coldTiering.lookup.unsupported", Assertions.assertThrows(IntegrationException.class,
+				() -> this.tieringServiceComponent.findTimelineTiered(TieredSnapshot.class, Map.of("owner_id", "owner-1"), null)).getInternalMessage().getCode());
 		// A shard key that is not digit-only fails the export loudly before anything is written.
 		this.seed("bad-1", PartitionTieringServiceTest.FEBRUARY_MOMENT);
 		this.partitionTieringServiceComponent.partitionLoaded(ColdTieringTestConfiguration.MONTHLY_TABLE, PartitionTieringServiceTest.FEBRUARY_MOMENT, null);
@@ -534,6 +552,36 @@ public class PartitionTieringServiceTest extends ContainerTestHelper {
 		Assertions.assertTrue(this.partitionTieredRepository.readMatching(this.table, PartitionTieringServiceTest.JANUARY, empty, List.of("999999999")).isEmpty());
 		Assertions.assertEquals(rangeReads, this.partitionTieredRepository.getRangeReads());
 		Assertions.assertEquals(exported.shardsDone(), this.archive().orElseThrow().shardsDone());
+	}
+
+	@Transactional
+	private void afterWrite(
+			final TieredMonthlySnapshotKey key) {
+		this.tieringServiceComponent.afterWrite(this.tieringServiceComponent.keyOf(TieredMonthlySnapshot.class, key));
+	}
+
+	@Test
+	@DisplayName("Write hook: resets the lifecycle columns and uploads no per-row object; touch on a disabled definition does nothing")
+	public void testWriteHookAndDisabledTouch() throws Exception {
+		final TieredMonthlySnapshotKey key = new TieredMonthlySnapshotKey("100001", PartitionTieringServiceTest.JANUARY_MOMENT);
+		this.seed("100001", PartitionTieringServiceTest.JANUARY_MOMENT);
+		Assertions.assertNull(this.repository.findById(key).orElseThrow().getLastAccessedAt());
+		this.afterWrite(key);
+		final TieredMonthlySnapshot written = this.repository.findById(key).orElseThrow();
+		Assertions.assertNotNull(written.getLastAccessedAt());
+		Assertions.assertNull(written.getArchivedAt());
+		Thread.sleep(TestHelper.SHORT_WAIT);
+		final String rowObjectKey = this.tieringServiceComponent.objectKeyOf(this.tieringServiceComponent.keyOf(TieredMonthlySnapshot.class, key));
+		Assertions.assertTrue(this.coldStorage.load(rowObjectKey).isEmpty());
+		Assertions.assertTrue(this.coldStorage.list("cold-tiering-full/tiered-monthly-snapshot/").isEmpty());
+		// A touch through a disabled definition of the same table leaves the clock untouched.
+		final TieredMonthlySnapshotKey otherKey = new TieredMonthlySnapshotKey("100002", PartitionTieringServiceTest.JANUARY_MOMENT);
+		this.seed("100002", PartitionTieringServiceTest.JANUARY_MOMENT);
+		this.tieringServiceComponent.touch(this.tieringServiceComponent.keyOf(ColdTieringTestConfiguration.MONTHLY_DISABLED_TABLE,
+				Map.of("owner_id", "100002", "cached_at", PartitionTieringServiceTest.JANUARY_MOMENT)));
+		Assertions.assertNull(this.repository.findById(otherKey).orElseThrow().getLastAccessedAt());
+		this.tieringServiceComponent.touch(this.tieringServiceComponent.keyOf(TieredMonthlySnapshot.class, otherKey));
+		Assertions.assertNotNull(this.repository.findById(otherKey).orElseThrow().getLastAccessedAt());
 	}
 
 	@Test

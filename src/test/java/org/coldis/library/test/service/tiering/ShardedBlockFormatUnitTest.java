@@ -104,8 +104,15 @@ public class ShardedBlockFormatUnitTest {
 		// Gaps and outside keys: no candidate block.
 		Assertions.assertTrue(index.blocksFor(List.of("a00")).isEmpty());
 		Assertions.assertTrue(index.blocksFor(List.of("a99")).isEmpty());
-		final List<BlockEntry> gap = index.blocksFor(List.of("a04"));
-		Assertions.assertTrue(gap.size() <= 1);
+		// "a04" was never written: the only candidate is the last block starting below it, and only
+		// when that block's last key reaches it (then the row is a miss inside the block).
+		int expectedGapBlocks = 0;
+		for (final BlockEntry entry : blocks) {
+			if ((BlockEntry.compareKeys(entry.first(), List.of("a04")) < 0) && (BlockEntry.compareKeys(entry.last(), List.of("a04")) >= 0)) {
+				expectedGapBlocks++;
+			}
+		}
+		Assertions.assertEquals(expectedGapBlocks, index.blocksFor(List.of("a04")).size());
 		// A corrupted frame fails the CRC.
 		final BlockEntry first = blocks.get(0);
 		final byte[] corrupted = storage.loadRange("shard.blocks", first.offset(), first.length()).orElseThrow();
