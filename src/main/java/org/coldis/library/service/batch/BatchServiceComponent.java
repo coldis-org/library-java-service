@@ -379,25 +379,34 @@ public class BatchServiceComponent {
 		final String key = this.getKey(executor.getKeySuffix());
 		final KeyValue<Typable> batchExecutor = this.keyValueService.lock(key, LockBehavior.WAIT_AND_LOCK);
 
-		// If there is no previous record for the batch, saves the given one.
-		if (batchExecutor.getValue() == null) {
-			batchExecutor.setValue(new BatchExecutor<>());
-		}
-		// Updates fields.
-		BeanUtils.copyProperties(executor, batchExecutor.getValue(), "lastStartedAt", "lastFinishedAt", "lastTotalProcessingTime", "lastCancelledAt",
-				"lastProcessed", "lastBatchStartedAt", "lastBatchFinishedAt", "lastProcessedCount");
-		BatchServiceComponent.LOGGER.debug("Starting batch for: " + ObjectMapperHelper.serialize(this.objectMapper, batchExecutor, null, false));
-
-		// If the executor should be restarted, resets it.
+		// A running batch (neither finished nor expired) is only changed by a restart: a scheduled batch is
+		// started by every instance, and a later start would replace the running batch's arguments.
 		@SuppressWarnings("unchecked")
-		final BatchExecutor<Type> batchExecutorValue = (BatchExecutor<Type>) batchExecutor.getValue();
-		if (restart || batchExecutorValue.isExpired() || batchExecutorValue.isFinished()) {
-			batchExecutorValue.reset(useLastCountAsExpected);
+		final BatchExecutor<Type> previousValue = (BatchExecutor<Type>) batchExecutor.getValue();
+		if (!restart && (previousValue != null) && !previousValue.isExpired() && !previousValue.isFinished()) {
+			BatchServiceComponent.LOGGER.debug("Batch '{}' is already running: start ignored.", key);
 		}
+		else {
+			// If there is no previous record for the batch, saves the given one.
+			if (previousValue == null) {
+				batchExecutor.setValue(new BatchExecutor<>());
+			}
+			// Updates fields.
+			BeanUtils.copyProperties(executor, batchExecutor.getValue(), "lastStartedAt", "lastFinishedAt", "lastTotalProcessingTime",
+					"lastCancelledAt", "lastProcessed", "lastBatchStartedAt", "lastBatchFinishedAt", "lastProcessedCount");
+			BatchServiceComponent.LOGGER.debug("Starting batch for: " + ObjectMapperHelper.serialize(this.objectMapper, batchExecutor, null, false));
 
-		// Saves and resumes the batch.
-		this.keyValueService.getRepository().save(batchExecutor);
-		this.queueResumeAsync(batchExecutorValue.getKeySuffix(), DateTimeHelper.getCurrentLocalDateTime());
+			// If the executor should be restarted, resets it.
+			@SuppressWarnings("unchecked")
+			final BatchExecutor<Type> batchExecutorValue = (BatchExecutor<Type>) batchExecutor.getValue();
+			if (restart || batchExecutorValue.isExpired() || batchExecutorValue.isFinished()) {
+				batchExecutorValue.reset(useLastCountAsExpected);
+			}
+
+			// Saves and resumes the batch.
+			this.keyValueService.getRepository().save(batchExecutor);
+			this.queueResumeAsync(batchExecutorValue.getKeySuffix(), DateTimeHelper.getCurrentLocalDateTime());
+		}
 	}
 
 	/**

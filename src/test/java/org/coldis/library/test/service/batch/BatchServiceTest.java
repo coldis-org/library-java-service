@@ -6,6 +6,7 @@ import java.time.Duration;
 import java.time.LocalDateTime;
 import java.time.temporal.ChronoUnit;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
@@ -382,6 +383,49 @@ public class BatchServiceTest extends ContainerTestHelper {
 			final long elapsed = concurrentResume.get(5, TimeUnit.SECONDS);
 			Assertions.assertTrue(elapsed < 500,
 					"Concurrent resume took " + elapsed + "ms — expected < 500ms (SKIP LOCKED); a result near 1000ms means WAIT_AND_LOCK is in effect");
+		}
+		finally {
+			BatchTestService.executingSignal = null;
+			BatchTestService.holdLatch = null;
+		}
+	}
+
+	/**
+	 * A scheduled batch is started by every instance: a start while the batch is running (neither
+	 * finished nor expired) does not change it. Here the second start waits for the row lock held by
+	 * the running batch, and then finds it running: the batch keeps the first start's arguments.
+	 */
+	@Test
+	@SuppressWarnings("unchecked")
+	public void testStartKeepsRunningBatch() throws Exception {
+		final CountDownLatch batchExecuting = new CountDownLatch(1);
+		final CountDownLatch batchCanProceed = new CountDownLatch(1);
+		BatchTestService.executingSignal = batchExecuting;
+		BatchTestService.holdLatch = batchCanProceed;
+		try {
+			final BatchExecutor<BatchObject> firstStart = BatchExecutor.withFixedRate(BatchObject.class, "testStartKeepsRunningBatch", 10L,
+					Duration.ofSeconds(1), Duration.ofMinutes(5), "batchTestService", null, Map.of("start", "first"));
+			this.batchService.start(firstStart, false, false);
+			Assertions.assertTrue(batchExecuting.await(10, TimeUnit.SECONDS), "Batch should start executing");
+
+			// Another instance starts the same batch while it runs.
+			final BatchExecutor<BatchObject> secondStart = BatchExecutor.withFixedRate(BatchObject.class, "testStartKeepsRunningBatch", 10L,
+					Duration.ofSeconds(1), Duration.ofMinutes(5), "batchTestService", null, Map.of("start", "second"));
+			final CompletableFuture<Void> concurrentStart = CompletableFuture.runAsync(() -> {
+				try {
+					this.batchService.start(secondStart, false, false);
+				}
+				catch (final BusinessException exception) {
+					throw new IllegalStateException(exception);
+				}
+			});
+			batchCanProceed.countDown();
+			concurrentStart.get(10, TimeUnit.SECONDS);
+
+			final BatchExecutor<BatchObject> batchRecord = (BatchExecutor<BatchObject>) this.keyValueService
+					.findById(this.batchServiceComponent.getKey(firstStart.getKeySuffix()), LockBehavior.NO_LOCK, false).getValue();
+			Assertions.assertFalse(batchRecord.isFinished());
+			Assertions.assertEquals("first", batchRecord.getArguments().get("start"));
 		}
 		finally {
 			BatchTestService.executingSignal = null;
