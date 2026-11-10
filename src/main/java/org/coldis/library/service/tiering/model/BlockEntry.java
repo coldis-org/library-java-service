@@ -4,9 +4,10 @@ import java.util.List;
 
 /**
  * One block of a shard: the canonical key segments of its first and last row, its byte range in
- * the blocks object, its row count and the CRC32C of the frame.
+ * the blocks object, its compressed and uncompressed sizes, its row count and the CRC32C of the
+ * frame.
  */
-public record BlockEntry(List<String> first, List<String> last, Long offset, Integer length, Integer rows, String crc32c) {
+public record BlockEntry(List<String> first, List<String> last, Long offset, Integer length, Integer uncompressedLength, Integer rows, String crc32c) {
 
 	/**
 	 * Compares two canonical key segment lists element by element (a prefix compares as its

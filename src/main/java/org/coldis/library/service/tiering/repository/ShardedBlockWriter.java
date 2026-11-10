@@ -103,7 +103,7 @@ public class ShardedBlockWriter {
 		if (this.blockRows > 0) {
 			final byte[] content = this.block.toByteArray();
 			final byte[] frame = this.codec.compress(content);
-			this.entries.add(new BlockEntry(this.blockFirst, this.last, this.sizeBytes, frame.length, this.blockRows, ShardedBlockWriter.crc32c(frame)));
+			this.entries.add(new BlockEntry(this.blockFirst, this.last, this.sizeBytes, frame.length, content.length, this.blockRows, ShardedBlockWriter.crc32c(frame)));
 			this.part.writeBytes(frame);
 			this.sizeBytes += frame.length;
 			this.ratio = Math.max(1.0, (double) content.length / Math.max(1, frame.length));

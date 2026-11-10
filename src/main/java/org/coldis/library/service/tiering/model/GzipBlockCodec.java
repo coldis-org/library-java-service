@@ -50,13 +50,18 @@ public class GzipBlockCodec implements BlockCodec {
 	}
 
 	/**
-	 * @see BlockCodec#decompress(byte[])
+	 * @see BlockCodec#decompress(byte[], Integer)
 	 */
 	@Override
 	public byte[] decompress(
-			final byte[] frame) {
+			final byte[] frame,
+			final Integer maxLength) {
 		try (GZIPInputStream gzip = new GZIPInputStream(new ByteArrayInputStream(frame))) {
-			return gzip.readAllBytes();
+			final byte[] content = gzip.readNBytes(maxLength);
+			if (gzip.read() >= 0) {
+				throw new IntegrationException(new SimpleMessage("coldTiering.block.size.exceeded", new Object[] { maxLength }));
+			}
+			return content;
 		}
 		catch (final IOException exception) {
 			throw new IntegrationException(new SimpleMessage("coldTiering.block.decompress.error"), exception);

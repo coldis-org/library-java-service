@@ -80,13 +80,6 @@
 			<version>2.0.61</version>
 			<optional>true</optional>
 		</dependency>
-		<!-- Cold storage tiering, zstd block codec (partition tiering): the consumer declares the dependency and sets block-codec=zstd. -->
-		<dependency>
-			<groupId>com.github.luben</groupId>
-			<artifactId>zstd-jni</artifactId>
-			<version>1.5.6-3</version>
-			<optional>true</optional>
-		</dependency>
 		<!-- Cold storage tiering, S3 cold tier: the consumer declares the SDK (and its S3 client bean). -->
 		<dependency>
 			<groupId>software.amazon.awssdk</groupId>

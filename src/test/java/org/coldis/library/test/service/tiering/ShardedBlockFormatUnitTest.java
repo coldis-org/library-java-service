@@ -1,6 +1,7 @@
 package org.coldis.library.test.service.tiering;
 
 import java.nio.charset.StandardCharsets;
+import java.util.zip.CRC32C;
 import java.util.List;
 import java.util.Map;
 
@@ -84,8 +85,8 @@ public class ShardedBlockFormatUnitTest {
 		Assertions.assertEquals(8L, writer.getRows());
 		final byte[] object = storage.load("shard.blocks").orElseThrow();
 		Assertions.assertEquals(writer.getSizeBytes(), (long) object.length);
-		final ShardIndex index = new ShardIndex(ShardIndex.FORMAT_VERSION, "unit", "p", 0, "now", ShardedBlockFormatUnitTest.CODEC.name(), List.of("owner_id", "cached_at"), 8L,
-				writer.getSizeBytes(), blocks);
+		final ShardIndex index = new ShardIndex(ShardIndex.FORMAT_VERSION, "unit", "p", "g1", 0, "now", ShardedBlockFormatUnitTest.CODEC.name(),
+				List.of("owner_id", "cached_at"), 8L, writer.getSizeBytes(), blocks);
 		// Every row is found through its block(s) by owner prefix.
 		int found = 0;
 		for (final String owner : List.of("a01", "a02", "a03", "a05", "a06", "a07", "a08")) {
@@ -117,6 +118,39 @@ public class ShardedBlockFormatUnitTest {
 	}
 
 	@Test
+	@DisplayName("A prefix spanning several blocks is found in every one of them; a bigger frame is refused")
+	public void testPrefixSpanningBlocks() {
+		final InMemoryColdStorageRepository storage = new InMemoryColdStorageRepository();
+		final ShardedBlockWriter writer = new ShardedBlockWriter(ShardedBlockFormatUnitTest.CODEC, storage.beginUpload("span.blocks", Map.of()), 40, 300, 1);
+		writer.add(ShardedBlockFormatUnitTest.key("a01", 1), ShardedBlockFormatUnitTest.line("a01", 1));
+		for (int day = 1; day <= 12; day++) {
+			writer.add(ShardedBlockFormatUnitTest.key("a02", day), ShardedBlockFormatUnitTest.line("a02", day));
+		}
+		writer.add(ShardedBlockFormatUnitTest.key("a03", 1), ShardedBlockFormatUnitTest.line("a03", 1));
+		final List<BlockEntry> blocks = writer.finish();
+		Assertions.assertTrue(blocks.size() >= 4, "blocks: " + blocks.size());
+		final ShardIndex index = new ShardIndex(ShardIndex.FORMAT_VERSION, "unit", "p", "g1", 0, "now", ShardedBlockFormatUnitTest.CODEC.name(),
+				List.of("owner_id", "cached_at"), 14L, writer.getSizeBytes(), blocks);
+		final List<BlockEntry> candidates = index.blocksFor(List.of("a02"));
+		Assertions.assertTrue(candidates.size() >= 3, "candidate blocks: " + candidates.size());
+		int found = 0;
+		for (final BlockEntry entry : candidates) {
+			final byte[] frame = storage.loadRange("span.blocks", entry.offset(), entry.length()).orElseThrow();
+			for (final ColdRow row : ShardedBlockReader.rows(ShardedBlockFormatUnitTest.table(), ShardedBlockFormatUnitTest.CODEC, entry, frame)) {
+				found += "a02".equals(row.key().values().get("owner_id")) ? 1 : 0;
+			}
+		}
+		Assertions.assertEquals(12, found);
+		Assertions.assertEquals(1, index.blocksFor(List.of("a01")).size());
+		Assertions.assertEquals(1, index.blocksFor(List.of("a03")).size());
+		// A frame expanding past the recorded size is refused.
+		final BlockEntry first = blocks.get(0);
+		final BlockEntry smaller = new BlockEntry(first.first(), first.last(), first.offset(), first.length(), first.uncompressedLength() - 1, first.rows(), first.crc32c());
+		final byte[] frame = storage.loadRange("span.blocks", first.offset(), first.length()).orElseThrow();
+		Assertions.assertThrows(IntegrationException.class, () -> ShardedBlockReader.rows(ShardedBlockFormatUnitTest.table(), ShardedBlockFormatUnitTest.CODEC, smaller, frame));
+	}
+
+	@Test
 	@DisplayName("Equi-depth cutter cuts at key changes, prefix boundaries and shardOf, partition bounds parse")
 	public void testBoundaries() {
 		final EquiDepthShardCutter cutter = new EquiDepthShardCutter(3L);
@@ -142,7 +176,12 @@ public class ShardedBlockFormatUnitTest {
 		Assertions.assertTrue(LeafPartition.of("t_default", "DEFAULT").openEnded());
 		Assertions.assertEquals(0, BlockEntry.compareKeys(List.of("a"), List.of("a", "x")));
 		Assertions.assertTrue(BlockEntry.compareKeys(List.of("a", "b"), List.of("a", "c")) < 0);
-		Assertions.assertEquals(ShardedBlockWriter.crc32c("abc".getBytes(StandardCharsets.UTF_8)), ShardedBlockWriter.crc32c("abc".getBytes(StandardCharsets.UTF_8)));
+		// CRC32C check value (RFC 3720): "123456789" -> 0xE3069283; and the JDK implementation agrees.
+		final byte[] check = "123456789".getBytes(StandardCharsets.US_ASCII);
+		final CRC32C jdk = new CRC32C();
+		jdk.update(check);
+		Assertions.assertEquals("e3069283", ShardedBlockWriter.crc32c(check));
+		Assertions.assertEquals(Long.toHexString(jdk.getValue()), ShardedBlockWriter.crc32c(check));
 	}
 
 }

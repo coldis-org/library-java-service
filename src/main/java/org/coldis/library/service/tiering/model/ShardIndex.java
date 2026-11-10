@@ -6,16 +6,16 @@ import java.util.List;
 /**
  * Index of one shard: the blocks object's layout, so a key is located with no read of the object.
  */
-public record ShardIndex(Integer formatVersion, String tableId, String partition, Integer shard, String exportStartedAt, String blockCodec, List<String> keyColumns, Long rows,
+public record ShardIndex(Integer formatVersion, String tableId, String partition, String generation, Integer shard, String exportStartedAt, String blockCodec, List<String> keyColumns, Long rows,
 		Long sizeBytes, List<BlockEntry> blocks) {
 
 	/** Current format version. */
 	public static final Integer FORMAT_VERSION = 1;
 
 	/**
-	 * Blocks that may hold rows starting with the given key prefix (segments): the block whose
-	 * first key is the greatest not above the prefix, and every following block whose first key
-	 * still matches the prefix.
+	 * Blocks that may hold rows starting with the given key prefix (segments): the last block whose
+	 * first key is strictly below the prefix (kept when its last key reaches the prefix), then
+	 * every following block whose first key starts with the prefix.
 	 *
 	 * @param  prefix Canonical key segments (a prefix of the key).
 	 * @return        Candidate blocks, in order; empty when the prefix falls in a gap or outside.
@@ -28,7 +28,7 @@ public record ShardIndex(Integer formatVersion, String tableId, String partition
 		int found = -1;
 		while (low <= high) {
 			final int middle = (low + high) >>> 1;
-			if (BlockEntry.compareKeys(this.blocks.get(middle).first(), prefix) <= 0) {
+			if (BlockEntry.compareKeys(this.blocks.get(middle).first(), prefix) < 0) {
 				found = middle;
 				low = middle + 1;
 			}

@@ -22,12 +22,15 @@ public interface BlockCodec {
 			byte[] content);
 
 	/**
-	 * Decompresses a frame.
+	 * Decompresses a frame, refusing one that expands past the bound (the size recorded in the
+	 * index).
 	 *
-	 * @param  frame Frame bytes.
-	 * @return       Block bytes.
+	 * @param  frame     Frame bytes.
+	 * @param  maxLength Maximum block bytes.
+	 * @return           Block bytes.
 	 */
 	byte[] decompress(
-			byte[] frame);
+			byte[] frame,
+			Integer maxLength);
 
 }

@@ -93,7 +93,7 @@ public final class ShardedBlockReader {
 			throw new IntegrationException(new SimpleMessage("coldTiering.cold.block.corrupt", new Object[] { table.getId() }));
 		}
 		final List<ColdRow> rows = new ArrayList<>(entry.rows());
-		for (final String line : new String(codec.decompress(frame), StandardCharsets.UTF_8).split("\n")) {
+		for (final String line : new String(codec.decompress(frame, entry.uncompressedLength()), StandardCharsets.UTF_8).split("\n")) {
 			if (!line.isEmpty()) {
 				try {
 					rows.add(new ColdRow(new TieredRowKey(table.getId(), ShardedBlockReader.keyOf(table, ShardedBlockReader.OBJECT_MAPPER.readTree(line))), line));
