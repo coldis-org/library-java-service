@@ -151,8 +151,8 @@ Policy (`tiering`):
 | `ColdLookupStrategy` SPI + `RowColdLookupStrategy` | One bean per archive unit (`findCold`, `findNewestCold`, `findFirstCold`, `findTimelineCold`); `PartitionTieringServiceComponent` is the `PARTITION` one. The component runs the hot side, validates key prefixes (known columns, leading and gap-free) and rehydrates; it never tests the unit nor casts a definition |
 | `ColdTieringServiceComponent` (extended) | every tiered read goes hot first, then the unit's strategy; new `findFirstTiered(Entity.class, keyPrefix, after, upTo)`, `findTimelineTiered(Entity.class, keyPrefix, asOf) → List<TieredHit>`, `findAllByKeysTiered(Entity.class, Collection<id>) → List<TieredHit>`; `afterWrite` on a `PARTITION` table only touches (no upload request); `delete(key)` on a `PARTITION` table deletes the hot row only and throws if the partition is archived (a cold row cannot be deleted alone from a shard; business deletes do not exist on these tables) |
 | `ColdTieringBatchServiceComponent` (extended) | `TieringBatch.EXPORT` and `TieringBatch.PARTITION_SWEEP`; the row `EVICTION` on a `PARTITION` table runs step 1's `evictExpired` on the parent (the partitioned eviction index prunes to the partitions with warm rows); `BACKFILL` is rejected at registration for `PARTITION` tables (the export is the backfill) |
-| `ColdTieringSchema` (extended) | `partitionArchiveStatements()` (the record table); `statements(table, …)` for a `PARTITION` table emits the columns on the parent and the eviction index as a partitioned index (parent `ONLY`, one `CONCURRENTLY` per leaf, `ATTACH PARTITION`), see *Schema* |
-| `TieredTableRegistry` (extended) | For a `PARTITION` table: the table is range-partitioned on the partition column (`pg_partitioned_table`), the shard key is the first key column and the first column of the primary key index of the parent, the partition column is a key column; `LAST_ACCESS` + `INSERT` only; `backfill.enabled=false`; the record table exists |
+| `ColdTieringSchema` (extended) | `partitionArchiveStatements()` (the record table); `statements(table, …)` is unchanged (columns and a plain index: for tests); the consumer's Flyway writes the leaf-by-leaf partitioned eviction index, see *Schema* |
+| `TieredTableRegistry` (extended) | For a `PARTITION` table: the table is range-partitioned on the partition column (`pg_partitioned_table`), the shard key is the first key column and the first column of the primary key index of the parent, the partition column is a key column of type `timestamp` without time zone (`date` and `timestamptz` are rejected: the bounds and the row keys are compared as local moments); `LAST_ACCESS` + `INSERT` only; `backfill.enabled=false`; the record table exists. `validate(table)` runs the checks without registering |
 
 Properties, under `org.coldis.library.service.tiering.`:
 
@@ -300,9 +300,10 @@ per-shard index range counts (verification) must agree with it. `pg_stat_user_ta
 is useless here until `ANALYZE` runs.
 
 EXECUTE of the batch: set the record `EXPORTING` (`export_started_at`), run the boundaries pass,
-then enqueue one `ShardExportRequest(tableId, partition, shard, from, to, exportStartedAt)` per
-shard to `cold-tiering/export` (the batch cursor is the shard number; chunk and delay as the
-backfill's). The listeners do the work, N per instance, so parallelism is `export.concurrency ×
+then enqueue one `ShardExportRequest(tableId, partition, generation, shard, from, to,
+exportStartedAt)` per shard to `cold-tiering/export`, sent **after the record's commit** (the
+batch step is one transaction); a request that still overtakes the record (an unseen generation)
+is redelivered by the broker. The listeners do the work, N per instance, so parallelism is `export.concurrency ×
 instances`, independent of the batch.
 
 `exportShard`, one shard, no long transaction:
@@ -377,8 +378,12 @@ Entry points on `ColdTieringServiceComponent`, dispatching on `ArchiveUnit.PARTI
 | `findByIdTiered(Entity, id)` | JPQL by key (the parent, pruned to one partition by `cached_at`) | partition of `cached_at` → record readable? → `readRow` | rehydrate, hot read again, touch |
 | `findNewestTiered(Entity, {tax_id[, version]}, asOf)` | `findNewestHot` (one probe per partition index, 46) | readable partitions with `rangeFrom <= asOf`, **newest first, only those whose range starts after the hot candidate's `cached_at`**; stop at the first hit | the newer of hot and cold; cold → rehydrate |
 | `findFirstTiered(Entity, {tax_id}, after, upTo)` (new) | `findFirstHot` in the interval | readable partitions intersecting `(after, upTo]`, oldest first, only those before the hot candidate | same |
-| `findTimelineTiered(Entity, {tax_id}, asOf)` (new) | all hot rows of the prefix | every readable partition `<= asOf` (one block read each; a partition is not skipped because a hot row falls in it: a month may hold two deliveries) | hot ∪ cold merged per key, the hot row winning, newest first; cold rows rehydrated |
+| `findTimelineTiered(Entity, {tax_id}, asOf)` (new) | all hot rows of the prefix | every readable partition `<= asOf` (one block read each; a partition is not skipped because a hot row falls in it: a month may hold two deliveries) | hot ∪ cold merged by the full key, the hot row winning, sorted by the last key column then the whole key, newest first; cold rows rehydrated |
 | `findAllByKeysTiered(Entity, ids)` (new) | one lookup per key | one cold lookup per missing key (grouping by block and coalescing adjacent blocks: future work) | hits in input order; cold rows rehydrated |
+
+`delete(key)` on a partition-tiered table refuses a row whose partition has a readable manifest
+(`coldTiering.delete.archived`: the archive holds whole partitions) and deletes the hot row of a
+partition not archived.
 
 "Readable" = the record points at a manifest (`manifest_key`), whatever its state: the previous
 generation serves cold reads through a reload and a re-export. A partition with no manifest is
@@ -431,9 +436,12 @@ Two batches, both deletes, no DDL, no change of the partition layout:
 that deletes every row of the month past its TTL and marks the ones it keeps. Its first chunk
 re-counts the partition (`count(*)`, an index range count over the whole key) and requires it to
 equal the manifest's rows: a difference means rows the archive does not cover, the record goes
-`STALE` (ERROR log) and nothing is deleted. Every chunk also counts the rows it could not lock
-(`FOR UPDATE SKIP LOCKED`, another transaction touching them) and logs them as `skipped`; they are
-revisited by a later run since the cursor only advances by block. GET = the next
+`STALE` (ERROR log, committed by the chunk's own step) and nothing is deleted; the next candidate
+query skips it. Every chunk also counts the rows it could not lock
+(`FOR UPDATE SKIP LOCKED`, another transaction touching them) and logs them as `skipped`; the
+cursor advances by block, so they are not revisited: they stay hot (and were being read or
+written, so inside the TTL anyway) and leave through the row-delete batch once marked, or on a
+later `partitionLoaded` + export cycle. GET = the next
 `VERIFIED` partition with `swept_at IS NULL` whose hold start (`loaded_at`, else `verified_at`)
 plus `max(hold-after-load, ttl + safety-margin)` is in the past; the item is a block range, cursor
 `sweep_cursor` on the record (resumes across runs and restarts). EXECUTE, one chunk per
@@ -512,11 +520,13 @@ not in the catalog's children of the table.
 partition (`swept_at` or `sweep_cursor` set), most of its rows live only in S3. A reload signal
 (`partitionLoaded`) then puts the record back to `LOADED` but keeps the manifest pointer and the
 sweep marks; when the export batch picks the partition, `startExport` counts the hot rows and
-refuses the export when they are fewer than the archive's `row_count`: the record goes
-`NEEDS_ATTENTION` with an ERROR log, nothing is written, the previous generation keeps serving
-cold reads, and an operator decides (a full reload brings the count back and the next
-`partitionLoaded` re-enables the export; a merge of the previous shards with the hot rows is not
-built). A re-export of a partition never swept (every row still hot) needs no guard.
+refuses **any** re-export (a count would not tell a second delivery from a reload): the record
+goes `NEEDS_ATTENTION` with an ERROR log, nothing is written, the previous generation keeps
+serving cold reads, and an operator decides. `confirmReexport(tableId, moment)` (the consumer's
+QC endpoint) records the decision and puts the record back to `LOADED`; the next export then
+runs under a new generation over the hot rows only (the rows only the previous generation held
+are orphaned, which is what the operator confirmed; the flag is cleared when that export
+finishes). A re-export of a partition never swept (every row still hot) needs no guard.
 
 A delivery reprocessed after its month is `VERIFIED` rewrites rows with a newer `updated_at`;
 after the sweep it re-inserts the whole population into the partition. The consumer's import
@@ -553,6 +563,7 @@ CREATE TABLE IF NOT EXISTS cold_tiering_partition_archive (
   loaded_rows        bigint,
   generation         text,
   size_bytes         bigint,
+  reexport_confirmed boolean NOT NULL DEFAULT FALSE,
   boundaries         jsonb,
   sweep_cursor       bigint,
   sweep_deleted      bigint,
@@ -569,13 +580,14 @@ and `statements(table, watermarkType, concurrently)` for a `PARTITION` table:
 ```sql
 ALTER TABLE boa_vista_report_full ADD COLUMN IF NOT EXISTS last_accessed_at TIMESTAMPTZ,
                                   ADD COLUMN IF NOT EXISTS archived_at TIMESTAMPTZ;
--- the eviction index, partitioned: CONCURRENTLY is not allowed on the parent, so one per leaf
+-- the eviction index, partitioned: CONCURRENTLY is not allowed on the parent, so one per leaf.
+-- The consumer's Flyway migration spells these out (the library ships no generator for them).
 CREATE INDEX IF NOT EXISTS boa_vista_report_full_cold_evict_idx
   ON ONLY boa_vista_report_full ((COALESCE(last_accessed_at, updated_at))) WHERE archived_at IS NOT NULL;
 CREATE INDEX CONCURRENTLY IF NOT EXISTS boa_vista_report_full_2026_08_cold_evict_idx
   ON boa_vista_report_full_2026_08 ((COALESCE(last_accessed_at, updated_at))) WHERE archived_at IS NOT NULL;
 ALTER INDEX boa_vista_report_full_cold_evict_idx ATTACH PARTITION boa_vista_report_full_2026_08_cold_evict_idx;
--- … one pair per leaf partition (46 per table), generated by the helper from the catalog
+-- … one pair per leaf partition (46 per table), listed in the migration
 ```
 
 Adding nullable columns without a default to a partitioned table propagates to every partition
@@ -603,7 +615,7 @@ eviction index on the parent, and that `cold_tiering_partition_archive` exists.
 | Flyway `V4__boa_vista_full_cold_tiering.sql` + `.sql.conf`: the record table, the two `ALTER TABLE … ADD COLUMN`s, the partitioned eviction index with its 46 concurrent leaf builds per table | `src/main/resources/db/migration` |
 | Properties: `table.boa-vista-report-full.*` and `…cadastro-positivo-report-full.*`: `enabled`, `cold-read-enabled`, `ttl=P5D`, `safety-margin=P1D`, `touch-threshold=P1D`, `export.enabled`, `export.cron`, `partition-sweep.enabled`, `partition-sweep.hold-after-load=P5D`, `partition-sweep.delay-between-chunks`, every flag from an env var defaulting to `false`; `export.concurrency=${…:4}`; `block-codec=gzip` (zstd once its dependency is approved) | `application.properties` |
 | S3 prefix: the online tables use `boa-vista/online/`; the full tables need their own. `table.<id>.prefix` (built; falls back to the global `prefix`) set to `boa-vista/full/` on the two tables | `application.properties` |
-| QC endpoint on `BoaVistaFullDeliveryService`: `GET …/deliveries/archive` listing the partition records; `POST …/archive/{partition}/export`, `/sweep`, `/stale` to run or mark on demand (scope `VENDOR_REPORT_GATHER`) | `service/…/full` |
+| QC endpoint on `BoaVistaFullDeliveryService`: `GET …/deliveries/archive` listing the partition records; `POST …/archive/{partition}/export`, `/sweep`, `/stale`, `/confirm-reexport` to run or mark on demand (scope `VENDOR_REPORT_GATHER`) | `service/…/full` |
 | Docs: `doc/boa-vista-base-full.md` gains the tiering section; this plan's consumer part becomes `doc/boa-vista-full-report-tiering.md` | `doc/` |
 
 Rollout, every flag off at deploy:
@@ -734,6 +746,16 @@ partitioned tables come from Flyway `V1` already (`spring.flyway.enabled=true` i
   and the library keeps knowing nothing about the consumer's columns.
 - `ColdStorageRepository` grows range reads and multipart uploads as default methods.
 
+## Operational notes
+
+- **Bucket**: the objects of a partition-tiered table are the only copy of the swept rows, and
+  they hold PII. The bucket must enforce default server-side encryption (SSE-S3 or SSE-KMS) and
+  block public access; versioning or object lock is a consumer's choice (the library never
+  overwrites a generation).
+- **Release note (library)**: `ColdStorageRepository` gained abstract methods `loadRange`,
+  `head`, `beginUpload` and `minimumPartSize`; a consumer with its own implementation must add
+  them (the folder and in-memory storages show the contract).
+
 ## Implementation notes (2026-11-09)
 
 What was built, and where it departs from the plan above:
@@ -781,6 +803,13 @@ What was built, and where it departs from the plan above:
   approval); `ColdStorageRepository`'s range, head, upload and minimum part size are abstract;
   cold lookups moved behind `ColdLookupStrategy`; `timestamptz` partition columns rejected;
   `S3ColdStorageRepositoryTest` runs the S3 adapter against LocalStack (pinned by digest).
+- Second review pass (2026-11-10): `date`/`timestamptz` partition columns rejected (`timestamp`
+  only); any re-export of a swept partition needs `confirmReexport`; `delete` refuses rows of
+  archived partitions; the sweep's coverage mismatch commits `STALE` without throwing; shard
+  requests leave after the record's commit and an unseen generation is redelivered; the
+  timeline merges by the full key; `partitionedEvictionIndexStatements` removed (the consumer's
+  Flyway lists the leaf indexes); tests for the two data-loss guards, the schedule decision, the
+  delete rule and the column-type rejection.
 - Not built (no test exercises it): the registry's `require-leading-index` option named in the
   plan (the check always fails the boot), the QC endpoints (consumer side), Micrometer counters.
 
