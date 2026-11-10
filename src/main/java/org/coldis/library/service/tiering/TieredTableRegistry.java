@@ -184,7 +184,7 @@ public class TieredTableRegistry implements SmartInitializingSingleton {
 		if (!"r".equals(this.partitionHotTierRepository.partitionStrategy(table.getTableName()).orElse(null))) {
 			throw new IntegrationException(new SimpleMessage("coldTiering.table.partition.strategy.invalid", new Object[] { table.getId(), table.getTableName() }));
 		}
-		if (!ColumnValues.TEMPORAL_TYPES.contains(columnTypes.get(table.getPartitionColumn()))) {
+		if (!ColumnValues.TEMPORAL_TYPES.contains(columnTypes.get(table.getPartitionColumn())) || ColumnValues.TIMESTAMPTZ.equals(columnTypes.get(table.getPartitionColumn()))) {
 			throw new IntegrationException(new SimpleMessage("coldTiering.table.partition.column.invalid", new Object[] { table.getId(), table.getPartitionColumn() }));
 		}
 		final List<String> primaryKey = this.partitionHotTierRepository.primaryKeyColumns(table.getTableName());

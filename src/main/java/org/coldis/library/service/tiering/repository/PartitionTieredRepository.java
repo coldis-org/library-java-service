@@ -189,47 +189,54 @@ public class PartitionTieredRepository {
 	}
 
 	/**
-	 * Manifest key.
+	 * Manifest key of a generation.
 	 *
-	 * @param  table     Table.
-	 * @param  partition Partition.
-	 * @return           Key.
+	 * @param  table      Table.
+	 * @param  partition  Partition.
+	 * @param  generation Generation.
+	 * @return            Key.
 	 */
 	public String manifestKey(
 			final PartitionTieredTable table,
-			final String partition) {
-		return this.objectKeyStrategy.keyOf(this.prefixOf(table), table, List.of(partition, PartitionTieredRepository.MANIFEST_SEGMENT), this.payloadCodec.extension());
+			final String partition,
+			final String generation) {
+		return this.objectKeyStrategy.keyOf(this.prefixOf(table), table, List.of(partition, generation, PartitionTieredRepository.MANIFEST_SEGMENT),
+				this.payloadCodec.extension());
 	}
 
 	/**
 	 * Index key.
 	 *
-	 * @param  table     Table.
-	 * @param  partition Partition.
-	 * @param  shard     Shard.
-	 * @return           Key.
+	 * @param  table      Table.
+	 * @param  partition  Partition.
+	 * @param  generation Generation.
+	 * @param  shard      Shard.
+	 * @return            Key.
 	 */
 	public String indexKey(
 			final PartitionTieredTable table,
 			final String partition,
+			final String generation,
 			final Integer shard) {
-		return this.objectKeyStrategy.keyOf(this.prefixOf(table), table, List.of(partition, PartitionTieredRepository.shardName(shard)),
+		return this.objectKeyStrategy.keyOf(this.prefixOf(table), table, List.of(partition, generation, PartitionTieredRepository.shardName(shard)),
 				PartitionTieredRepository.INDEX_EXTENSION);
 	}
 
 	/**
 	 * Blocks key.
 	 *
-	 * @param  table     Table.
-	 * @param  partition Partition.
-	 * @param  shard     Shard.
-	 * @return           Key.
+	 * @param  table      Table.
+	 * @param  partition  Partition.
+	 * @param  generation Generation.
+	 * @param  shard      Shard.
+	 * @return            Key.
 	 */
 	public String blocksKey(
 			final PartitionTieredTable table,
 			final String partition,
+			final String generation,
 			final Integer shard) {
-		return this.objectKeyStrategy.keyOf(this.prefixOf(table), table, List.of(partition, PartitionTieredRepository.shardName(shard)),
+		return this.objectKeyStrategy.keyOf(this.prefixOf(table), table, List.of(partition, generation, PartitionTieredRepository.shardName(shard)),
 				PartitionTieredRepository.BLOCKS_EXTENSION);
 	}
 
@@ -244,22 +251,20 @@ public class PartitionTieredRepository {
 	public Optional<ShardIndex> loadIndex(
 			final PartitionTieredTable table,
 			final String partition,
+			final String generation,
 			final Integer shard) {
-		return this.coldStorageRepository.load(this.indexKey(table, partition, shard))
+		return this.coldStorageRepository.load(this.indexKey(table, partition, generation, shard))
 				.map(content -> PartitionTieredRepository.fromJson(this.payloadCodec.decode(content), ShardIndex.class));
 	}
 
 	/**
-	 * Manifest of a partition (cached).
+	 * Manifest at a key (cached).
 	 *
-	 * @param  table     Table.
-	 * @param  partition Partition.
-	 * @return           Manifest.
+	 * @param  key Manifest key (the record's pointer).
+	 * @return     Manifest.
 	 */
 	public Optional<PartitionManifest> manifest(
-			final PartitionTieredTable table,
-			final String partition) {
-		final String key = this.manifestKey(table, partition);
+			final String key) {
 		return this.cached(key, () -> this.coldStorageRepository.load(key)
 				.map(content -> PartitionTieredRepository.fromJson(this.payloadCodec.decode(content), PartitionManifest.class)).filter(manifest -> {
 					if (manifest.formatVersion() > PartitionManifest.FORMAT_VERSION) {
@@ -280,8 +285,9 @@ public class PartitionTieredRepository {
 	public Optional<ShardIndex> index(
 			final PartitionTieredTable table,
 			final String partition,
+			final String generation,
 			final Integer shard) {
-		return this.cached(this.indexKey(table, partition, shard), () -> this.loadIndex(table, partition, shard).filter(index -> {
+		return this.cached(this.indexKey(table, partition, generation, shard), () -> this.loadIndex(table, partition, generation, shard).filter(index -> {
 			if (index.formatVersion() > ShardIndex.FORMAT_VERSION) {
 				throw new IntegrationException(new SimpleMessage("coldTiering.cold.format.version", new Object[] { index.formatVersion() }));
 			}
@@ -319,7 +325,7 @@ public class PartitionTieredRepository {
 	public String writeIndex(
 			final PartitionTieredTable table,
 			final ShardIndex index) {
-		final String key = this.indexKey(table, index.partition(), index.shard());
+		final String key = this.indexKey(table, index.partition(), index.generation(), index.shard());
 		this.coldStorageRepository.store(key, this.payloadCodec.encode(PartitionTieredRepository.toJson(index)),
 				Map.of(ColdStorageRepository.CONTENT_TYPE_METADATA, this.payloadCodec.contentType(), "table", table.getId(), "partition", index.partition(),
 						"export-started-at", index.exportStartedAt()));
@@ -337,7 +343,7 @@ public class PartitionTieredRepository {
 	public String writeManifest(
 			final PartitionTieredTable table,
 			final PartitionManifest manifest) {
-		final String key = this.manifestKey(table, manifest.partition());
+		final String key = this.manifestKey(table, manifest.partition(), manifest.generation());
 		this.coldStorageRepository.store(key, this.payloadCodec.encode(PartitionTieredRepository.toJson(manifest)),
 				Map.of(ColdStorageRepository.CONTENT_TYPE_METADATA, this.payloadCodec.contentType(), "table", table.getId(), "partition", manifest.partition()));
 		this.forget(table, manifest.partition());
@@ -356,9 +362,10 @@ public class PartitionTieredRepository {
 	public ColdUpload beginBlocks(
 			final PartitionTieredTable table,
 			final String partition,
+			final String generation,
 			final Integer shard,
 			final String exportStartedAt) {
-		return this.coldStorageRepository.beginUpload(this.blocksKey(table, partition, shard), Map.of(ColdStorageRepository.CONTENT_TYPE_METADATA,
+		return this.coldStorageRepository.beginUpload(this.blocksKey(table, partition, generation, shard), Map.of(ColdStorageRepository.CONTENT_TYPE_METADATA,
 				"application/octet-stream", "table", table.getId(), "partition", partition, "export-started-at", exportStartedAt));
 	}
 
@@ -389,7 +396,7 @@ public class PartitionTieredRepository {
 			final List<String> prefix) {
 		final List<ColdRow> rows = new ArrayList<>();
 		final BlockCodec codec = this.blockCodec(index.blockCodec());
-		final String blocksKey = this.blocksKey(table, partition, index.shard());
+		final String blocksKey = this.blocksKey(table, partition, index.generation(), index.shard());
 		for (final BlockEntry entry : index.blocksFor(prefix)) {
 			final byte[] frame = this.coldStorageRepository.loadRange(blocksKey, entry.offset(), entry.length())
 					.orElseThrow(() -> new IntegrationException(new SimpleMessage("coldTiering.cold.blocks.missing", new Object[] { table.getId() })));
@@ -406,30 +413,34 @@ public class PartitionTieredRepository {
 	}
 
 	/**
-	 * Rows of a partition whose key starts with the prefix (the shard from the manifest's
-	 * boundaries, the blocks from the cached index). Empty when the partition has no manifest.
+	 * Rows of a partition whose key starts with the prefix, through the manifest the record
+	 * points at (the shard from its boundaries, the blocks from the cached index). Empty when the
+	 * manifest is missing.
 	 *
-	 * @param  table     Table.
-	 * @param  partition Partition.
-	 * @param  prefix    Canonical key segments (shard key first).
-	 * @return           Matching rows.
+	 * @param  table       Table.
+	 * @param  partition   Partition.
+	 * @param  manifestKey Manifest key.
+	 * @param  prefix      Canonical key segments (shard key first).
+	 * @return             Matching rows.
 	 */
 	public List<ColdRow> readMatching(
 			final PartitionTieredTable table,
 			final String partition,
+			final String manifestKey,
 			final List<String> prefix) {
 		List<ColdRow> rows = List.of();
-		final Optional<PartitionManifest> manifest = this.manifest(table, partition);
+		final Optional<PartitionManifest> manifest = this.manifest(manifestKey);
 		if (manifest.isPresent()) {
 			final Integer shard = manifest.get().shardOf(prefix.get(0));
-			final Optional<ShardIndex> index = this.index(table, partition, shard);
+			final String generation = manifest.get().generation();
+			final Optional<ShardIndex> index = this.index(table, partition, generation, shard);
 			if (index.isPresent()) {
 				try {
 					rows = this.readMatching(table, partition, index.get(), prefix);
 				}
 				catch (final IntegrationException exception) {
 					this.forget(table, partition);
-					rows = this.index(table, partition, shard).map(fresh -> this.readMatching(table, partition, fresh, prefix)).orElse(List.of());
+					rows = this.index(table, partition, generation, shard).map(fresh -> this.readMatching(table, partition, fresh, prefix)).orElse(List.of());
 				}
 			}
 		}

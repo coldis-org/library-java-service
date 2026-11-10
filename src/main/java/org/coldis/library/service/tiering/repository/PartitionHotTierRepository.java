@@ -36,7 +36,7 @@ public class PartitionHotTierRepository {
 	}
 
 	/** Result of a sweep chunk. */
-	public record SweepResult(Integer deleted, Integer kept) {
+	public record SweepResult(Integer deleted, Integer kept, Integer skipped) {
 
 	}
 
@@ -291,7 +291,7 @@ public class PartitionHotTierRepository {
 	 * @param  toBlock    Last block (exclusive).
 	 * @param  before     Clock cutoff.
 	 * @param  exportedAt Export moment.
-	 * @return            Deleted and kept rows.
+	 * @return            Deleted, kept and skipped (locked by another transaction) rows.
 	 */
 	public SweepResult sweepChunk(
 			final PartitionTieredTable table,
@@ -306,12 +306,14 @@ public class PartitionHotTierRepository {
 				+ " <= :exported_at FOR UPDATE SKIP LOCKED), deleted AS (DELETE FROM ONLY " + name
 				+ " part USING picked WHERE part.ctid = picked.tid_ AND picked.expired_ RETURNING 1), kept AS (UPDATE ONLY " + name + " part SET "
 				+ table.getArchivedAtColumn() + " = part." + table.getWatermarkColumn() + " FROM picked WHERE part.ctid = picked.tid_ AND NOT picked.expired_ AND part."
-				+ table.getArchivedAtColumn() + " IS NULL RETURNING 1) SELECT (SELECT count(*) FROM deleted) AS deleted_, (SELECT count(*) FROM kept) AS kept_";
+				+ table.getArchivedAtColumn() + " IS NULL RETURNING 1) SELECT (SELECT count(*) FROM deleted) AS deleted_, (SELECT count(*) FROM kept) AS kept_,"
+				+ " (SELECT count(*) FROM ONLY " + name + " WHERE ctid >= CAST(:from_tid AS tid) AND ctid < CAST(:to_tid AS tid) AND " + table.getWatermarkColumn()
+				+ " <= :exported_at) - (SELECT count(*) FROM picked) AS skipped_";
 		final MapSqlParameterSource parameters = new MapSqlParameterSource().addValue("from_tid", "(" + fromBlock + ",0)").addValue("to_tid", "(" + toBlock + ",0)")
 				.addValue("before", before).addValue("exported_at", exportedAt);
 		return this.jdbcTemplate.queryForObject(sql, parameters, (
 				resultSet,
-				rowNumber) -> new SweepResult(resultSet.getInt("deleted_"), resultSet.getInt("kept_")));
+				rowNumber) -> new SweepResult(resultSet.getInt("deleted_"), resultSet.getInt("kept_"), resultSet.getInt("skipped_")));
 	}
 
 }

@@ -15,15 +15,21 @@ public enum PartitionArchiveState {
 	VERIFIED,
 
 	/** Rows changed after the export: readable cold (the hot row wins), never swept, re-exported. */
-	STALE;
+	STALE,
 
 	/**
-	 * Whether cold reads may use the partition's objects.
-	 *
-	 * @return Readable.
+	 * A reload of a swept partition holds fewer rows than its archive: not exported (it would
+	 * replace a complete archive with a partial one), not swept; an operator decides.
 	 */
-	public Boolean isReadable() {
-		return (this == PartitionArchiveState.VERIFIED) || (this == PartitionArchiveState.STALE);
+	NEEDS_ATTENTION;
+
+	/**
+	 * Whether the partition may be swept.
+	 *
+	 * @return Sweepable.
+	 */
+	public Boolean isSweepable() {
+		return this == PartitionArchiveState.VERIFIED;
 	}
 
 }

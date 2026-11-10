@@ -3,6 +3,7 @@ package org.coldis.library.service.tiering;
 import java.io.Serializable;
 import java.time.Duration;
 import java.time.LocalDateTime;
+import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.LinkedHashMap;
@@ -19,6 +20,7 @@ import org.coldis.library.service.jms.JmsTemplateHelper;
 import org.coldis.library.service.tiering.ColdTieringProperties.ExportProperties;
 import org.coldis.library.service.tiering.ColdTieringProperties.SweepProperties;
 import org.coldis.library.service.tiering.ColdTieringProperties.TableProperties;
+import org.coldis.library.service.tiering.model.ArchiveUnit;
 import org.coldis.library.service.tiering.model.BlockCodec;
 import org.coldis.library.service.tiering.model.BlockEntry;
 import org.coldis.library.service.tiering.model.ColdRow;
@@ -34,6 +36,7 @@ import org.coldis.library.service.tiering.model.PartitionTieredTable;
 import org.coldis.library.service.tiering.model.ShardExportRequest;
 import org.coldis.library.service.tiering.model.ShardIndex;
 import org.coldis.library.service.tiering.model.ShardStrategy;
+import org.coldis.library.service.tiering.model.TieredRowKey;
 import org.coldis.library.service.tiering.model.TieredTable;
 import org.coldis.library.service.tiering.repository.PartitionArchiveRepository;
 import org.coldis.library.service.tiering.repository.PartitionHotTierRepository;
@@ -49,27 +52,33 @@ import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.jms.annotation.JmsListener;
 import org.springframework.jms.core.JmsTemplate;
 import org.springframework.stereotype.Component;
+import org.springframework.transaction.annotation.Propagation;
+import org.springframework.transaction.annotation.Transactional;
 
 /**
- * Partition tiering policy: the consumer's signals, the export (boundaries pass, shard
- * listener, manifest and verification), the sweep, and the cold lookups
- * {@link ColdTieringServiceComponent} composes into tiered reads. No transaction spans an S3
- * call: pages and record updates are short statements of their own.
+ * Partition tiering policy: the consumer's signals, the export (boundaries pass, shard listener,
+ * manifest and verification, one generation per export), the sweep, and the cold lookups of
+ * partition-tiered tables ({@link ColdLookupStrategy}). No transaction spans an S3 call but the
+ * manifest write that finishes a partition, which runs inside the record's final transaction so
+ * the record never names a manifest that does not exist.
  */
 @Component
 @ConditionalOnProperty(
 		name = ColdTieringProperties.ENABLED_PROPERTY,
 		matchIfMissing = false
 )
-public class PartitionTieringServiceComponent {
-
-	/** Export queue. */
-	public static final String EXPORT_QUEUE = "cold-tiering/export";
+public class PartitionTieringServiceComponent implements ColdLookupStrategy {
 
 	/** A readable partition: catalog entry and record. */
 	public record ReadablePartition(LeafPartition partition, PartitionArchive archive) {
 
 	}
+
+	/** Export queue. */
+	private static final String EXPORT_QUEUE = "cold-tiering/export";
+
+	/** Generation format. */
+	private static final DateTimeFormatter GENERATION = DateTimeFormatter.ofPattern("yyyyMMdd'T'HHmmssSSS");
 
 	/** Logger. */
 	private static final Logger LOGGER = LoggerFactory.getLogger(PartitionTieringServiceComponent.class);
@@ -107,20 +116,6 @@ public class PartitionTieringServiceComponent {
 	private JmsTemplateHelper jmsTemplateHelper;
 
 	/**
-	 * Partition of a table holding a moment.
-	 *
-	 * @param  table  Table.
-	 * @param  moment Moment (partition column value).
-	 * @return        Partition.
-	 */
-	private LeafPartition partitionOf(
-			final PartitionTieredTable table,
-			final LocalDateTime moment) {
-		return this.partitionHotTierRepository.leafPartitions(table).stream().filter(partition -> !partition.openEnded() && partition.contains(moment)).findFirst()
-				.orElseThrow(() -> new IntegrationException(new SimpleMessage("coldTiering.partition.missing", new Object[] { table.getId() })));
-	}
-
-	/**
 	 * Partition table by id.
 	 *
 	 * @param  tableId Table id.
@@ -133,6 +128,20 @@ public class PartitionTieringServiceComponent {
 			throw new IntegrationException(new SimpleMessage("coldTiering.table.unit.invalid", new Object[] { tableId }));
 		}
 		return (PartitionTieredTable) table;
+	}
+
+	/**
+	 * Partition of a table holding a moment.
+	 *
+	 * @param  table  Table.
+	 * @param  moment Moment (partition column value).
+	 * @return        Partition.
+	 */
+	private LeafPartition partitionOf(
+			final PartitionTieredTable table,
+			final LocalDateTime moment) {
+		return this.partitionHotTierRepository.leafPartitions(table).stream().filter(partition -> !partition.openEnded() && partition.contains(moment)).findFirst()
+				.orElseThrow(() -> new IntegrationException(new SimpleMessage("coldTiering.partition.missing", new Object[] { table.getId() })));
 	}
 
 	/**
@@ -155,8 +164,50 @@ public class PartitionTieringServiceComponent {
 	}
 
 	/**
+	 * Canonical segment of a row key's last key column.
+	 *
+	 * @param  table Table.
+	 * @param  key   Key.
+	 * @return       Segment.
+	 */
+	private static String lastSegmentOf(
+			final TieredTable table,
+			final TieredRowKey key) {
+		return ColumnValues.toSegment(table.getColumnTypes().get(table.getLastKeyColumn()), key.values().get(table.getLastKeyColumn()));
+	}
+
+	/**
+	 * Canonical segment of a moment on the last key column (null for null).
+	 *
+	 * @param  table  Table.
+	 * @param  moment Moment.
+	 * @return        Segment.
+	 */
+	private static String segmentOfMoment(
+			final TieredTable table,
+			final LocalDateTime moment) {
+		final String lastType = table.getColumnTypes().get(table.getLastKeyColumn());
+		return moment == null ? null : ColumnValues.toSegment(lastType, ColumnValues.ofMoment(lastType, moment));
+	}
+
+	/**
+	 * Partition column value of a row key as a moment.
+	 *
+	 * @param  table Table.
+	 * @param  key   Key.
+	 * @return       Moment.
+	 */
+	private static LocalDateTime momentOf(
+			final PartitionTieredTable table,
+			final TieredRowKey key) {
+		final String type = table.getColumnTypes().get(table.getPartitionColumn());
+		return (LocalDateTime) ColumnValues.toJavaValue(ColumnValues.parse(type, key.values().get(table.getPartitionColumn())), LocalDateTime.class);
+	}
+
+	/**
 	 * Signals a partition loaded (the consumer, when a delivery is complete). Starts the hold and
-	 * makes the partition exportable; on an already exported partition it means a reload.
+	 * makes the partition exportable; on an already exported partition it means a reload (the
+	 * previous export stays readable until the new one is verified).
 	 *
 	 * @param tableId  Table id.
 	 * @param moment   A moment inside the partition (the delivery's partition column value).
@@ -200,7 +251,7 @@ public class PartitionTieringServiceComponent {
 	}
 
 	/**
-	 * Readable partitions (verified or stale, with a manifest), oldest first.
+	 * Readable partitions (a manifest exists), oldest first.
 	 *
 	 * @param  table Table.
 	 * @return       Partitions.
@@ -209,7 +260,7 @@ public class PartitionTieringServiceComponent {
 			final PartitionTieredTable table) {
 		final Map<String, PartitionArchive> archives = new LinkedHashMap<>();
 		for (final PartitionArchive archive : this.archiveRepository.findAll(table.getId())) {
-			if (archive.state().isReadable() && (archive.manifestKey() != null)) {
+			if (archive.isReadable()) {
 				archives.put(archive.partitionName(), archive);
 			}
 		}
@@ -224,40 +275,169 @@ public class PartitionTieringServiceComponent {
 	}
 
 	/**
-	 * Cold rows of a partition whose key starts with the given values (shard key first).
+	 * Readable partitions intersecting a moment range, oldest first.
+	 *
+	 * @param  table Table.
+	 * @param  after Exclusive lower moment, or null.
+	 * @param  upTo  Inclusive upper moment, or null.
+	 * @return       Partitions.
+	 */
+	private List<ReadablePartition> partitionsBetween(
+			final PartitionTieredTable table,
+			final LocalDateTime after,
+			final LocalDateTime upTo) {
+		final List<ReadablePartition> partitions = new ArrayList<>();
+		for (final ReadablePartition readable : this.readablePartitions(table)) {
+			final Boolean startsInTime = (upTo == null) || (readable.partition().from() == null) || !readable.partition().from().isAfter(upTo);
+			final Boolean endsInTime = (after == null) || (readable.partition().to() == null) || readable.partition().to().isAfter(after);
+			if (startsInTime && endsInTime) {
+				partitions.add(readable);
+			}
+		}
+		return partitions;
+	}
+
+	/**
+	 * Cold rows of a readable partition whose key starts with the given values (shard key first).
+	 *
+	 * @param  table    Table.
+	 * @param  readable Partition.
+	 * @param  prefix   Formatted key values, by column (a prefix of the key columns).
+	 * @return          Rows.
+	 */
+	public List<ColdRow> readMatching(
+			final PartitionTieredTable table,
+			final ReadablePartition readable,
+			final Map<String, String> prefix) {
+		return this.partitionTieredRepository.readMatching(table, readable.partition().name(), readable.archive().manifestKey(),
+				ShardedBlockReader.segmentsOf(table, prefix));
+	}
+
+	/**
+	 * Cold rows of a partition by name (tests and tooling).
 	 *
 	 * @param  table     Table.
-	 * @param  partition Partition.
-	 * @param  prefix    Formatted key values, by column (a prefix of the key columns).
+	 * @param  partition Partition name.
+	 * @param  prefix    Formatted key values.
 	 * @return           Rows.
 	 */
 	public List<ColdRow> readMatching(
 			final PartitionTieredTable table,
 			final String partition,
 			final Map<String, String> prefix) {
-		return this.partitionTieredRepository.readMatching(table, partition, ShardedBlockReader.segmentsOf(table, prefix));
+		return this.readablePartitions(table).stream().filter(readable -> readable.partition().name().equals(partition)).findFirst()
+				.map(readable -> this.readMatching(table, readable, prefix)).orElse(List.of());
 	}
 
 	/**
-	 * Cold rows of the partition holding a moment, when it is readable.
+	 * Cold rows of a key prefix over partitions, in the given order, bounded by a segment range
+	 * on the last key column; stops at the first partition with a match when {@code firstOnly}.
 	 *
-	 * @param  table  Table.
-	 * @param  moment Partition column value.
-	 * @param  prefix Formatted key values.
-	 * @return        Rows.
+	 * @param  table      Table.
+	 * @param  partitions Partitions to probe, in probe order.
+	 * @param  prefix     Formatted key prefix.
+	 * @param  after      Exclusive lower segment, or null.
+	 * @param  upTo       Inclusive upper segment, or null.
+	 * @param  firstOnly  Stop at the first partition with a match.
+	 * @return            Matching rows.
 	 */
-	public List<ColdRow> readMatchingAt(
+	private List<ColdRow> coldRows(
 			final PartitionTieredTable table,
-			final LocalDateTime moment,
-			final Map<String, String> prefix) {
-		return this.readablePartitions(table).stream().filter(readable -> readable.partition().contains(moment)).findFirst()
-				.map(readable -> this.readMatching(table, readable.partition().name(), prefix)).orElse(List.of());
+			final List<ReadablePartition> partitions,
+			final Map<String, String> prefix,
+			final String after,
+			final String upTo,
+			final Boolean firstOnly) {
+		final List<ColdRow> rows = new ArrayList<>();
+		for (final ReadablePartition readable : partitions) {
+			if (!firstOnly || rows.isEmpty()) {
+				for (final ColdRow row : this.readMatching(table, readable, prefix)) {
+					final String segment = PartitionTieringServiceComponent.lastSegmentOf(table, row.key());
+					if (((after == null) || (segment.compareTo(after) > 0)) && ((upTo == null) || (segment.compareTo(upTo) <= 0))) {
+						rows.add(row);
+					}
+				}
+			}
+		}
+		return rows;
+	}
+
+	/**
+	 * @see ColdLookupStrategy#unit()
+	 */
+	@Override
+	public ArchiveUnit unit() {
+		return ArchiveUnit.PARTITION;
+	}
+
+	/**
+	 * @see ColdLookupStrategy#findCold(TieredTable, TieredRowKey)
+	 */
+	@Override
+	public Optional<ColdRow> findCold(
+			final TieredTable table,
+			final TieredRowKey key) {
+		final PartitionTieredTable partitioned = this.tableOf(table.getId());
+		final LocalDateTime moment = PartitionTieringServiceComponent.momentOf(partitioned, key);
+		return this.readablePartitions(partitioned).stream().filter(readable -> readable.partition().contains(moment)).findFirst()
+				.flatMap(readable -> this.readMatching(partitioned, readable, key.values()).stream().filter(row -> row.key().equals(key)).findFirst());
+	}
+
+	/**
+	 * @see ColdLookupStrategy#findNewestCold(TieredTable, Map, LocalDateTime, Optional)
+	 */
+	@Override
+	public Optional<ColdRow> findNewestCold(
+			final TieredTable table,
+			final Map<String, String> prefix,
+			final LocalDateTime asOf,
+			final Optional<TieredRowKey> hotCandidate) {
+		final PartitionTieredTable partitioned = this.tableOf(table.getId());
+		final LocalDateTime hotMoment = hotCandidate.map(key -> PartitionTieringServiceComponent.momentOf(partitioned, key)).orElse(null);
+		final List<ReadablePartition> partitions = new ArrayList<>(this.partitionsBetween(partitioned, hotMoment, asOf));
+		partitions.sort(Comparator.comparing((ReadablePartition readable) -> readable.partition().from(), Comparator.nullsFirst(Comparator.naturalOrder())).reversed());
+		final String after = hotCandidate.map(key -> PartitionTieringServiceComponent.lastSegmentOf(table, key)).orElse(null);
+		return this.coldRows(partitioned, partitions, prefix, after, PartitionTieringServiceComponent.segmentOfMoment(table, asOf), true).stream()
+				.max(Comparator.comparing(row -> PartitionTieringServiceComponent.lastSegmentOf(table, row.key())));
+	}
+
+	/**
+	 * @see ColdLookupStrategy#findFirstCold(TieredTable, Map, LocalDateTime, LocalDateTime, Optional)
+	 */
+	@Override
+	public Optional<ColdRow> findFirstCold(
+			final TieredTable table,
+			final Map<String, String> prefix,
+			final LocalDateTime after,
+			final LocalDateTime upTo,
+			final Optional<TieredRowKey> hotCandidate) {
+		final PartitionTieredTable partitioned = this.tableOf(table.getId());
+		final LocalDateTime hotMoment = hotCandidate.map(key -> PartitionTieringServiceComponent.momentOf(partitioned, key)).orElse(upTo);
+		final String ceiling = hotCandidate.map(key -> PartitionTieringServiceComponent.lastSegmentOf(table, key))
+				.orElse(PartitionTieringServiceComponent.segmentOfMoment(table, upTo));
+		return this.coldRows(partitioned, this.partitionsBetween(partitioned, after, hotMoment), prefix, PartitionTieringServiceComponent.segmentOfMoment(table, after),
+				ceiling, true).stream().filter(row -> hotCandidate.isEmpty() || !row.key().equals(hotCandidate.get()))
+				.min(Comparator.comparing(row -> PartitionTieringServiceComponent.lastSegmentOf(table, row.key())));
+	}
+
+	/**
+	 * @see ColdLookupStrategy#findTimelineCold(TieredTable, Map, LocalDateTime)
+	 */
+	@Override
+	public List<ColdRow> findTimelineCold(
+			final TieredTable table,
+			final Map<String, String> prefix,
+			final LocalDateTime asOf) {
+		final PartitionTieredTable partitioned = this.tableOf(table.getId());
+		return this.coldRows(partitioned, this.partitionsBetween(partitioned, null, asOf), prefix, null, PartitionTieringServiceComponent.segmentOfMoment(table, asOf),
+				false);
 	}
 
 	/**
 	 * Next partition to export: excluded and open-ended ones aside, a partition whose record is
 	 * {@code LOADED} with the consumer's signal, or ({@code LOADED} without one, {@code STALE} or
-	 * no record) past the quiet period with rows and a range already closed.
+	 * no record) past the quiet period with rows and a range already closed. A partition needing
+	 * attention or being exported is never a candidate.
 	 *
 	 * @param  table Table.
 	 * @return       Partition.
@@ -287,25 +467,25 @@ public class PartitionTieringServiceComponent {
 
 	/**
 	 * Boundaries of a partition: equi-depth from a key-only pass (target rows per shard from the
-	 * record's row count, the planner estimate or an exact count), or fixed prefixes.
+	 * loader's row count, the planner estimate or an exact count), or fixed prefixes.
 	 *
 	 * @param  table     Table.
 	 * @param  partition Partition.
 	 * @param  archive   Record, when any.
-	 * @return           Boundaries and the rows counted (null for prefixes).
+	 * @return           Boundaries.
 	 */
-	private Map.Entry<List<String>, Long> computeBoundaries(
+	private List<String> computeBoundaries(
 			final PartitionTieredTable table,
 			final LeafPartition partition,
 			final PartitionArchive archive) {
 		final ExportProperties export = this.properties.of(table).getExport();
-		Map.Entry<List<String>, Long> boundaries;
+		List<String> boundaries;
 		if (export.getShardStrategy() == ShardStrategy.PREFIX) {
-			boundaries = Map.entry(EquiDepthShardCutter.prefixBoundaries(export.getShardDigits()), -1L);
+			boundaries = EquiDepthShardCutter.prefixBoundaries(export.getShardDigits());
 		}
 		else {
-			Long estimate = (archive == null) || (archive.rowCount() == null) || (archive.rowCount() <= 0) ? this.partitionHotTierRepository.estimateRows(partition.name())
-					: archive.rowCount();
+			Long estimate = (archive == null) || (archive.loadedRows() == null) || (archive.loadedRows() <= 0) ? this.partitionHotTierRepository.estimateRows(partition.name())
+					: archive.loadedRows();
 			if (estimate <= 0) {
 				estimate = this.partitionHotTierRepository.countInRange(table, partition.name(), "", null);
 			}
@@ -320,37 +500,52 @@ public class PartitionTieringServiceComponent {
 				lastKey = page.get(page.size() - 1);
 				page = page.size() < export.getKeyPageSize() ? List.of() : this.partitionHotTierRepository.nextKeys(table, partition.name(), lastKey, export.getKeyPageSize());
 			}
-			boundaries = Map.entry(cutter.getBoundaries(), cutter.getRows());
+			boundaries = cutter.getBoundaries();
 		}
 		return boundaries;
 	}
 
 	/**
-	 * Starts a partition's export: boundaries, record to {@code EXPORTING}, one shard request per
-	 * shard on the export queue.
+	 * Starts a partition's export under a new generation: boundaries, record to
+	 * {@code EXPORTING} (the previous manifest stays the readable one), one shard request per
+	 * shard on the export queue. A partition whose sweep started and whose hot rows are fewer
+	 * than its archive is not exported (the archive would be replaced by a partial one): it is
+	 * marked {@code NEEDS_ATTENTION} for an operator.
 	 *
 	 * @param  table     Table.
 	 * @param  partition Partition.
-	 * @return           Shards enqueued.
+	 * @return           Shards enqueued (0 when refused).
 	 */
 	public Integer startExport(
 			final PartitionTieredTable table,
 			final LeafPartition partition) {
 		final LocalDateTime startedAt = DateTimeHelper.getCurrentLocalDateTime();
-		final Map.Entry<List<String>, Long> boundaries = this.computeBoundaries(table, partition, this.archiveRepository.find(table.getId(), partition.name()).orElse(null));
-		this.archiveRepository.startExport(table.getId(), partition.name(), partition.rangeFrom(), partition.rangeTo(), startedAt, boundaries.getKey(),
-				boundaries.getValue() < 0 ? null : boundaries.getValue());
-		this.partitionTieredRepository.forget(table, partition.name());
-		final List<String> bounds = boundaries.getKey();
-		for (int shard = 0; shard < bounds.size(); shard++) {
-			final ShardExportRequest request = new ShardExportRequest(table.getId(), partition.name(), shard, bounds.get(shard),
-					shard + 1 < bounds.size() ? bounds.get(shard + 1) : null, startedAt.toString());
-			this.jmsTemplateHelper.send(this.jmsTemplate,
-					new JmsMessage<Serializable>().withDestination(PartitionTieringServiceComponent.EXPORT_QUEUE).withMessage(request).withAfterCommit(false));
+		final PartitionArchive archive = this.archiveRepository.find(table.getId(), partition.name()).orElse(null);
+		Integer enqueued = 0;
+		final Long hotRows = (archive != null) && archive.isSweepStarted() && (archive.rowCount() != null)
+				? this.partitionHotTierRepository.countInRange(table, partition.name(), "", null)
+				: null;
+		if ((hotRows != null) && (hotRows < archive.rowCount())) {
+			this.archiveRepository.markState(table.getId(), partition.name(), PartitionArchiveState.NEEDS_ATTENTION, startedAt);
+			PartitionTieringServiceComponent.LOGGER.error(
+					"[COLD_TIERING_EXPORT] table={} partition={} swept before and reloaded with {} hot rows against {} archived: export refused, needs attention",
+					table.getId(), partition.name(), hotRows, archive.rowCount());
 		}
-		PartitionTieringServiceComponent.LOGGER.info("[COLD_TIERING_EXPORT] table={} partition={} shards={} rows={} enqueued", table.getId(), partition.name(),
-				bounds.size(), boundaries.getValue());
-		return bounds.size();
+		else {
+			final List<String> bounds = this.computeBoundaries(table, partition, archive);
+			final String generation = startedAt.format(PartitionTieringServiceComponent.GENERATION);
+			this.archiveRepository.startExport(table.getId(), partition.name(), partition.rangeFrom(), partition.rangeTo(), startedAt, generation, bounds);
+			for (int shard = 0; shard < bounds.size(); shard++) {
+				final ShardExportRequest request = new ShardExportRequest(table.getId(), partition.name(), generation, shard, bounds.get(shard),
+						(shard + 1) < bounds.size() ? bounds.get(shard + 1) : null, startedAt.toString());
+				this.jmsTemplateHelper.send(this.jmsTemplate,
+						new JmsMessage<Serializable>().withDestination(PartitionTieringServiceComponent.EXPORT_QUEUE).withMessage(request).withAfterCommit(false));
+			}
+			enqueued = bounds.size();
+			PartitionTieringServiceComponent.LOGGER.info("[COLD_TIERING_EXPORT] table={} partition={} generation={} shards={} enqueued", table.getId(),
+					partition.name(), generation, enqueued);
+		}
+		return enqueued;
 	}
 
 	/**
@@ -360,7 +555,7 @@ public class PartitionTieringServiceComponent {
 	 * @param table   Table.
 	 * @param request Request.
 	 * @param index   Index just written.
-	 * @param samples Sampled rows (key segments → line).
+	 * @param samples Sampled rows (key segments to line).
 	 */
 	private void verifyShard(
 			final PartitionTieredTable table,
@@ -381,46 +576,71 @@ public class PartitionTieringServiceComponent {
 	}
 
 	/**
-	 * Finishes a partition once every shard is done: manifest, final checks, {@code VERIFIED} (or
-	 * {@code STALE} when rows changed under the export).
+	 * Finishes a generation once every shard is done: manifest under the generation, the record's
+	 * final state in one update ({@code VERIFIED}, or {@code STALE} when rows changed under the
+	 * export) with the manifest pointer switched last.
 	 *
-	 * @param table     Table.
-	 * @param partition Partition.
+	 * @param table   Table.
+	 * @param archive Record.
 	 */
 	private void finishPartition(
 			final PartitionTieredTable table,
-			final String partition) {
-		final PartitionArchive archive = this.archiveRepository.find(table.getId(), partition).orElseThrow();
+			final PartitionArchive archive) {
 		final List<ShardSummary> shards = new ArrayList<>(archive.shards());
 		shards.sort(Comparator.comparing(ShardSummary::shard));
 		final Long rows = shards.stream().mapToLong(ShardSummary::rows).sum();
 		final Long sizeBytes = shards.stream().mapToLong(ShardSummary::sizeBytes).sum();
 		final LocalDateTime now = DateTimeHelper.getCurrentLocalDateTime();
-		if ((archive.rowCount() != null) && !archive.rowCount().equals(rows)) {
-			throw new IntegrationException(new SimpleMessage("coldTiering.export.total.mismatch", new Object[] { table.getId(), partition, archive.rowCount(), rows }));
-		}
 		final ExportProperties export = this.properties.of(table).getExport();
 		final Map<String, Object> strategy = export.getShardStrategy() == ShardStrategy.PREFIX ? Map.of("type", "prefix", "digits", export.getShardDigits())
 				: Map.of("type", "equi-depth", "target", export.getShards());
 		final String manifestKey = this.partitionTieredRepository.writeManifest(table,
-				new PartitionManifest(PartitionManifest.FORMAT_VERSION, table.getId(), partition, archive.rangeFrom(), archive.rangeTo(), table.getKeyColumns(), strategy,
-						archive.boundaries(), shards, rows, archive.exportStartedAt().toString(), now.toString()));
-		if (this.partitionHotTierRepository.hasWatermarkAfter(table, partition, archive.exportStartedAt())) {
-			this.archiveRepository.markVerified(table.getId(), partition, manifestKey, rows, sizeBytes, now);
-			this.archiveRepository.markState(table.getId(), partition, PartitionArchiveState.STALE, now);
-			PartitionTieringServiceComponent.LOGGER.warn("[COLD_TIERING_EXPORT] table={} partition={} rows changed during the export: STALE", table.getId(), partition);
+				new PartitionManifest(PartitionManifest.FORMAT_VERSION, table.getId(), archive.partitionName(), archive.generation(), archive.rangeFrom(),
+						archive.rangeTo(), table.getKeyColumns(), strategy, archive.boundaries(), shards, rows, archive.exportStartedAt().toString(), now.toString()));
+		final Boolean changed = this.partitionHotTierRepository.hasWatermarkAfter(table, archive.partitionName(), archive.exportStartedAt());
+		this.archiveRepository.finishExport(table.getId(), archive.partitionName(), changed ? PartitionArchiveState.STALE : PartitionArchiveState.VERIFIED, manifestKey,
+				rows, sizeBytes, now);
+		if (changed) {
+			PartitionTieringServiceComponent.LOGGER.warn("[COLD_TIERING_EXPORT] table={} partition={} generation={} rows changed during the export: STALE", table.getId(),
+					archive.partitionName(), archive.generation());
 		}
 		else {
-			this.archiveRepository.markVerified(table.getId(), partition, manifestKey, rows, sizeBytes, now);
-			PartitionTieringServiceComponent.LOGGER.info("[COLD_TIERING_EXPORT] table={} partition={} rows={} bytes={} verified", table.getId(), partition, rows,
-					sizeBytes);
+			PartitionTieringServiceComponent.LOGGER.info("[COLD_TIERING_EXPORT] table={} partition={} generation={} rows={} bytes={} verified", table.getId(),
+					archive.partitionName(), archive.generation(), rows, sizeBytes);
+		}
+	}
+
+	/**
+	 * Records a shard done and finishes the partition when it was the last one, in one
+	 * transaction. A shard already recorded (a redelivery) changes nothing but still runs the
+	 * finish check, so a partition never stays exporting with every shard written.
+	 *
+	 * @param table   Table.
+	 * @param request Request.
+	 * @param summary Shard summary.
+	 */
+	@Transactional(
+			propagation = Propagation.REQUIRED,
+			timeoutString = "${org.coldis.library.service.transaction.long-timeout}"
+	)
+	public void recordShard(
+			final PartitionTieredTable table,
+			final ShardExportRequest request,
+			final ShardSummary summary) {
+		final Integer done = this.archiveRepository.completeShard(table.getId(), request.partition(), request.generation(), summary,
+				DateTimeHelper.getCurrentLocalDateTime());
+		final PartitionArchive archive = this.archiveRepository.find(table.getId(), request.partition()).orElseThrow();
+		PartitionTieringServiceComponent.LOGGER.info("[COLD_TIERING_EXPORT] table={} partition={} shard={} rows={} blocks={} bytes={} done={}", table.getId(),
+				request.partition(), request.shard(), summary.rows(), summary.blocks(), summary.sizeBytes(), done == null ? archive.shardsDone() : done);
+		if ((archive.state() == PartitionArchiveState.EXPORTING) && request.generation().equals(archive.generation()) && archive.shardsDone().equals(archive.shardCount())) {
+			this.finishPartition(table, archive);
 		}
 	}
 
 	/**
 	 * Exports one shard (the export queue listener): keyset pages in key order into blocks and
-	 * parts, the index, verification, the record's progress; the last shard finishes the
-	 * partition. A shard already written for this export is skipped.
+	 * parts, the index, verification, then the record. A shard already written for this
+	 * generation is only recorded again.
 	 *
 	 * @param request Request.
 	 */
@@ -433,16 +653,19 @@ public class PartitionTieringServiceComponent {
 			final ShardExportRequest request) {
 		final PartitionTieredTable table = this.tableOf(request.tableId());
 		final ExportProperties export = this.properties.of(table).getExport();
-		final Optional<ShardIndex> existing = this.partitionTieredRepository.loadIndex(table, request.partition(), request.shard());
+		final Optional<ShardIndex> existing = this.partitionTieredRepository.loadIndex(table, request.partition(), request.generation(), request.shard());
 		if (existing.isPresent() && request.exportStartedAt().equals(existing.get().exportStartedAt())) {
 			PartitionTieringServiceComponent.LOGGER.debug("[COLD_TIERING_EXPORT] table={} partition={} shard={} already written", table.getId(), request.partition(),
 					request.shard());
+			this.recordShard(table, request, new ShardSummary(request.shard(), existing.get().rows(), existing.get().blocks().size(), existing.get().sizeBytes()));
 		}
 		else {
-			final ColdUpload upload = this.partitionTieredRepository.beginBlocks(table, request.partition(), request.shard(), request.exportStartedAt());
+			final ColdUpload upload = this.partitionTieredRepository.beginBlocks(table, request.partition(), request.generation(), request.shard(),
+					request.exportStartedAt());
 			final ShardedBlockWriter writer = new ShardedBlockWriter(this.blockCodec, upload, export.getBlockSize(), export.getPartSize(),
 					this.partitionTieredRepository.minimumPartSize());
 			final Map<List<String>, String> samples = new LinkedHashMap<>();
+			List<BlockEntry> blocks;
 			try {
 				Map<String, String> lastKey = null;
 				List<ExportRow> page = this.partitionHotTierRepository.nextPage(table, request.partition(), request.from(), request.to(), null, export.getPageSize());
@@ -450,7 +673,7 @@ public class PartitionTieringServiceComponent {
 					for (final ExportRow row : page) {
 						final List<String> segments = ShardedBlockReader.segmentsOf(table, row.key());
 						writer.add(segments, row.rowJson());
-						if ((writer.getRows() % export.getVerifySampleEvery()) == 1) {
+						if (((writer.getRows() - 1) % export.getVerifySampleEvery()) == 0) {
 							samples.put(segments, row.rowJson());
 						}
 					}
@@ -458,23 +681,17 @@ public class PartitionTieringServiceComponent {
 					page = page.size() < export.getPageSize() ? List.of()
 							: this.partitionHotTierRepository.nextPage(table, request.partition(), request.from(), request.to(), lastKey, export.getPageSize());
 				}
-				final List<BlockEntry> blocks = writer.finish();
-				final ShardIndex index = new ShardIndex(ShardIndex.FORMAT_VERSION, table.getId(), request.partition(), request.shard(), request.exportStartedAt(),
-						this.blockCodec.name(), table.getKeyColumns(), writer.getRows(), writer.getSizeBytes(), blocks);
+				blocks = writer.finish();
+				final ShardIndex index = new ShardIndex(ShardIndex.FORMAT_VERSION, table.getId(), request.partition(), request.generation(), request.shard(),
+						request.exportStartedAt(), this.blockCodec.name(), table.getKeyColumns(), writer.getRows(), writer.getSizeBytes(), blocks);
 				this.verifyShard(table, request, index, samples);
 				this.partitionTieredRepository.writeIndex(table, index);
-				final Integer done = this.archiveRepository.completeShard(table.getId(), request.partition(),
-						new ShardSummary(request.shard(), writer.getRows(), blocks.size(), writer.getSizeBytes()), DateTimeHelper.getCurrentLocalDateTime());
-				PartitionTieringServiceComponent.LOGGER.info("[COLD_TIERING_EXPORT] table={} partition={} shard={} rows={} blocks={} bytes={} done={}", table.getId(),
-						request.partition(), request.shard(), writer.getRows(), blocks.size(), writer.getSizeBytes(), done);
-				if ((done != null) && done.equals(this.archiveRepository.find(table.getId(), request.partition()).map(PartitionArchive::shardCount).orElse(-1))) {
-					this.finishPartition(table, request.partition());
-				}
 			}
 			catch (final RuntimeException exception) {
 				upload.abort();
 				throw exception;
 			}
+			this.recordShard(table, request, new ShardSummary(request.shard(), writer.getRows(), blocks.size(), writer.getSizeBytes()));
 		}
 	}
 
@@ -502,13 +719,15 @@ public class PartitionTieringServiceComponent {
 		final Duration wait = sweep.getHoldAfterLoad().compareTo(tableProperties.getTtl().plus(tableProperties.getSafetyMargin())) > 0 ? sweep.getHoldAfterLoad()
 				: tableProperties.getTtl().plus(tableProperties.getSafetyMargin());
 		final LocalDateTime now = DateTimeHelper.getCurrentLocalDateTime();
-		return this.archiveRepository.findAll(table.getId()).stream().filter(archive -> (archive.state() == PartitionArchiveState.VERIFIED)
-				&& (archive.sweptAt() == null) && (archive.holdStart() != null) && archive.holdStart().plus(wait).isBefore(now)).findFirst();
+		return this.archiveRepository.findAll(table.getId()).stream().filter(archive -> archive.state().isSweepable() && (archive.sweptAt() == null)
+				&& (archive.holdStart() != null) && archive.holdStart().plus(wait).isBefore(now)).findFirst();
 	}
 
 	/**
 	 * Sweeps the next chunk of heap blocks of a partition, in heap order, and saves the cursor;
-	 * records the sweep finished when the cursor passes the last block.
+	 * records the sweep finished when the cursor passes the last block. The first chunk re-counts
+	 * the partition against the manifest: a difference means rows the archive does not cover,
+	 * and the partition goes {@code STALE} instead of being swept.
 	 *
 	 * @param  table   Table.
 	 * @param  archive Record.
@@ -519,23 +738,32 @@ public class PartitionTieringServiceComponent {
 			final PartitionArchive archive) {
 		final TableProperties tableProperties = this.properties.of(table);
 		final PartitionArchive current = this.archiveRepository.find(table.getId(), archive.partitionName()).orElseThrow();
-		if (current.state() != PartitionArchiveState.VERIFIED) {
+		if (!current.state().isSweepable()) {
 			throw new IntegrationException(new SimpleMessage("coldTiering.sweep.state.invalid", new Object[] { table.getId(), archive.partitionName() }));
 		}
 		final LocalDateTime now = DateTimeHelper.getCurrentLocalDateTime();
+		Boolean remaining = false;
+		if (current.sweepCursor() == null) {
+			final Long covered = this.partitionHotTierRepository.countInRange(table, current.partitionName(), "", null);
+			if (!covered.equals(current.rowCount())) {
+				this.archiveRepository.markState(table.getId(), current.partitionName(), PartitionArchiveState.STALE, now);
+				PartitionTieringServiceComponent.LOGGER.error("[COLD_TIERING_SWEEP] table={} partition={} holds {} rows against {} archived: not swept, STALE",
+						table.getId(), current.partitionName(), covered, current.rowCount());
+				throw new IntegrationException(new SimpleMessage("coldTiering.sweep.coverage.mismatch", new Object[] { table.getId(), current.partitionName() }));
+			}
+		}
 		final Long blocks = current.sweepBlocks() == null ? this.partitionHotTierRepository.blockCount(current.partitionName()) : current.sweepBlocks();
 		final Long cursor = current.sweepCursor() == null ? 0L : current.sweepCursor();
-		Boolean remaining = cursor < blocks;
-		if (remaining) {
+		if (cursor < blocks) {
 			final Long next = Math.min(blocks, cursor + tableProperties.getPartitionSweep().getChunkSize());
 			final SweepResult result = this.partitionHotTierRepository.sweepChunk(table, current.partitionName(), cursor, next,
-					PartitionTieringServiceComponent.expiredBefore(tableProperties), current.exportedAt());
+					PartitionTieringServiceComponent.expiredBefore(tableProperties), current.exportStartedAt());
 			final Long deleted = (current.sweepDeleted() == null ? 0L : current.sweepDeleted()) + result.deleted();
 			final Long kept = (current.sweepKept() == null ? 0L : current.sweepKept()) + result.kept();
 			remaining = next < blocks;
 			this.archiveRepository.saveSweep(table.getId(), current.partitionName(), blocks, next, deleted, kept, remaining ? null : now, now);
-			PartitionTieringServiceComponent.LOGGER.info("[COLD_TIERING_SWEEP] table={} partition={} blocks={}-{}/{} deleted={} kept={}", table.getId(),
-					current.partitionName(), cursor, next, blocks, result.deleted(), result.kept());
+			PartitionTieringServiceComponent.LOGGER.info("[COLD_TIERING_SWEEP] table={} partition={} blocks={}-{}/{} deleted={} kept={} skipped={}", table.getId(),
+					current.partitionName(), cursor, next, blocks, result.deleted(), result.kept(), result.skipped());
 		}
 		else {
 			this.archiveRepository.saveSweep(table.getId(), current.partitionName(), blocks, cursor, current.sweepDeleted(), current.sweepKept(), now, now);

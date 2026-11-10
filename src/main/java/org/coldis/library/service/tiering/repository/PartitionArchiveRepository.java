@@ -41,7 +41,8 @@ public class PartitionArchiveRepository {
 
 	/** Columns. */
 	private static final String COLUMNS = "table_id, partition_name, range_from, range_to, state, loaded_at, export_started_at, exported_at, verified_at, swept_at,"
-			+ " format_version, shard_count, shards_done, row_count, size_bytes, boundaries, shards, sweep_blocks, sweep_cursor, sweep_deleted, sweep_kept, manifest_key";
+			+ " format_version, shard_count, shards_done, row_count, loaded_rows, size_bytes, generation, boundaries, shards, sweep_blocks, sweep_cursor, sweep_deleted,"
+			+ " sweep_kept, manifest_key";
 
 	/** JDBC. */
 	@Autowired
@@ -142,7 +143,7 @@ public class PartitionArchiveRepository {
 				PartitionArchiveRepository.moment(resultSet, "verified_at"), PartitionArchiveRepository.moment(resultSet, "swept_at"),
 				PartitionArchiveRepository.intValue(resultSet, "format_version"), PartitionArchiveRepository.intValue(resultSet, "shard_count"),
 				PartitionArchiveRepository.intValue(resultSet, "shards_done"), PartitionArchiveRepository.longValue(resultSet, "row_count"),
-				PartitionArchiveRepository.longValue(resultSet, "size_bytes"),
+				PartitionArchiveRepository.longValue(resultSet, "loaded_rows"), PartitionArchiveRepository.longValue(resultSet, "size_bytes"), resultSet.getString("generation"),
 				PartitionArchiveRepository.fromJson(resultSet.getString("boundaries"), new TypeReference<List<String>>() {
 				}), PartitionArchiveRepository.fromJson(resultSet.getString("shards"), new TypeReference<List<ShardSummary>>() {
 				}), PartitionArchiveRepository.longValue(resultSet, "sweep_blocks"), PartitionArchiveRepository.longValue(resultSet, "sweep_cursor"),
@@ -194,15 +195,16 @@ public class PartitionArchiveRepository {
 	}
 
 	/**
-	 * Marks a partition loaded (upsert): a new record, or an existing one back to {@code LOADED}
-	 * with its export fields cleared (a reload is re-exported).
+	 * Marks a partition loaded (upsert): a new record, or an existing one back to {@code LOADED}.
+	 * The previous export's manifest and the sweep progress are kept: the manifest stays readable
+	 * and the sweep marks tell a later export that rows may have left the hot table.
 	 *
 	 * @param tableId   Table id.
 	 * @param partition Partition.
 	 * @param rangeFrom Range lower bound.
 	 * @param rangeTo   Range upper bound.
 	 * @param loadedAt  Moment.
-	 * @param rowCount  Rows, when known.
+	 * @param rowCount  Rows loaded, when known.
 	 */
 	public void markLoaded(
 			final String tableId,
@@ -212,24 +214,25 @@ public class PartitionArchiveRepository {
 			final LocalDateTime loadedAt,
 			final Long rowCount) {
 		this.jdbcTemplate.update("INSERT INTO " + PartitionArchiveRepository.TABLE
-				+ " (table_id, partition_name, range_from, range_to, state, loaded_at, row_count, created_at, updated_at)"
-				+ " VALUES (:table_id, :partition, :range_from, :range_to, 'LOADED', :loaded_at, :row_count, :now, :now)"
-				+ " ON CONFLICT (table_id, partition_name) DO UPDATE SET state = 'LOADED', loaded_at = EXCLUDED.loaded_at, row_count = EXCLUDED.row_count,"
-				+ " exported_at = NULL, verified_at = NULL, swept_at = NULL, sweep_cursor = NULL, sweep_blocks = NULL, updated_at = EXCLUDED.updated_at",
+				+ " (table_id, partition_name, range_from, range_to, state, loaded_at, loaded_rows, created_at, updated_at)"
+				+ " VALUES (:table_id, :partition, :range_from, :range_to, 'LOADED', :loaded_at, :loaded_rows, :now, :now)"
+				+ " ON CONFLICT (table_id, partition_name) DO UPDATE SET state = 'LOADED', loaded_at = EXCLUDED.loaded_at, loaded_rows = EXCLUDED.loaded_rows,"
+				+ " updated_at = EXCLUDED.updated_at",
 				PartitionArchiveRepository.keyOf(tableId, partition).addValue("range_from", rangeFrom).addValue("range_to", rangeTo).addValue("loaded_at", loadedAt)
-						.addValue("row_count", rowCount).addValue("now", loadedAt));
+						.addValue("loaded_rows", rowCount).addValue("now", loadedAt));
 	}
 
 	/**
-	 * Starts an export (upsert to {@code EXPORTING}) with its boundaries.
+	 * Starts an export (upsert to {@code EXPORTING}) under a new generation; the previous
+	 * manifest pointer and the sweep marks are kept.
 	 *
 	 * @param tableId    Table id.
 	 * @param partition  Partition.
 	 * @param rangeFrom  Range lower bound.
 	 * @param rangeTo    Range upper bound.
 	 * @param startedAt  Moment.
+	 * @param generation Generation.
 	 * @param boundaries Shard boundaries.
-	 * @param rowCount   Rows counted by the boundaries pass.
 	 */
 	public void startExport(
 			final String tableId,
@@ -237,16 +240,15 @@ public class PartitionArchiveRepository {
 			final String rangeFrom,
 			final String rangeTo,
 			final LocalDateTime startedAt,
-			final List<String> boundaries,
-			final Long rowCount) {
+			final String generation,
+			final List<String> boundaries) {
 		this.jdbcTemplate.update("INSERT INTO " + PartitionArchiveRepository.TABLE
-				+ " (table_id, partition_name, range_from, range_to, state, export_started_at, shard_count, shards_done, row_count, boundaries, shards, created_at, updated_at)"
-				+ " VALUES (:table_id, :partition, :range_from, :range_to, 'EXPORTING', :started_at, :shard_count, 0, :row_count, CAST(:boundaries AS jsonb), CAST('[]' AS jsonb), :started_at, :started_at)"
-				+ " ON CONFLICT (table_id, partition_name) DO UPDATE SET state = 'EXPORTING', export_started_at = EXCLUDED.export_started_at,"
-				+ " shard_count = EXCLUDED.shard_count, shards_done = 0, row_count = EXCLUDED.row_count, boundaries = EXCLUDED.boundaries, shards = EXCLUDED.shards,"
-				+ " size_bytes = NULL, exported_at = NULL, verified_at = NULL, swept_at = NULL, sweep_cursor = NULL, sweep_blocks = NULL, updated_at = EXCLUDED.updated_at",
+				+ " (table_id, partition_name, range_from, range_to, state, export_started_at, generation, shard_count, shards_done, boundaries, shards, created_at, updated_at)"
+				+ " VALUES (:table_id, :partition, :range_from, :range_to, 'EXPORTING', :started_at, :generation, :shard_count, 0, CAST(:boundaries AS jsonb), CAST('[]' AS jsonb), :started_at, :started_at)"
+				+ " ON CONFLICT (table_id, partition_name) DO UPDATE SET state = 'EXPORTING', export_started_at = EXCLUDED.export_started_at, generation = EXCLUDED.generation,"
+				+ " shard_count = EXCLUDED.shard_count, shards_done = 0, boundaries = EXCLUDED.boundaries, shards = EXCLUDED.shards, updated_at = EXCLUDED.updated_at",
 				PartitionArchiveRepository.keyOf(tableId, partition).addValue("range_from", rangeFrom).addValue("range_to", rangeTo).addValue("started_at", startedAt)
-						.addValue("shard_count", boundaries.size()).addValue("row_count", rowCount).addValue("boundaries", PartitionArchiveRepository.toJson(boundaries)));
+						.addValue("generation", generation).addValue("shard_count", boundaries.size()).addValue("boundaries", PartitionArchiveRepository.toJson(boundaries)));
 	}
 
 	/**
@@ -254,49 +256,56 @@ public class PartitionArchiveRepository {
 	 * null when the record is not exporting or the shard was already recorded.
 	 *
 	 * @param  tableId   Table id.
-	 * @param  partition Partition.
-	 * @param  summary   Shard summary.
+	 * @param  partition  Partition.
+	 * @param  generation Generation.
+	 * @param  summary    Shard summary.
 	 * @param  now       Moment.
 	 * @return           Shards done after this one.
 	 */
 	public Integer completeShard(
 			final String tableId,
 			final String partition,
+			final String generation,
 			final ShardSummary summary,
 			final LocalDateTime now) {
 		return this.jdbcTemplate.query("UPDATE " + PartitionArchiveRepository.TABLE
 				+ " SET shards = shards || CAST(:summary AS jsonb), shards_done = shards_done + 1, updated_at = :now"
-				+ " WHERE table_id = :table_id AND partition_name = :partition AND state = 'EXPORTING'"
+				+ " WHERE table_id = :table_id AND partition_name = :partition AND state = 'EXPORTING' AND generation = :generation"
 				+ " AND NOT EXISTS (SELECT 1 FROM jsonb_array_elements(shards) done WHERE CAST(done ->> 'shard' AS integer) = :shard) RETURNING shards_done",
 				PartitionArchiveRepository.keyOf(tableId, partition).addValue("summary", PartitionArchiveRepository.toJson(List.of(summary))).addValue("shard", summary.shard())
-						.addValue("now", now),
+						.addValue("generation", generation).addValue("now", now),
 				(
 						resultSet,
 						rowNumber) -> resultSet.getInt("shards_done")).stream().findFirst().orElse(null);
 	}
 
 	/**
-	 * Marks the export verified.
+	 * Finishes an export in one update: the final state, the manifest pointer switched to the new
+	 * generation, the totals; a verified export resets the sweep marks (the new generation has
+	 * not been swept).
 	 *
 	 * @param tableId     Table id.
 	 * @param partition   Partition.
-	 * @param manifestKey Manifest key.
+	 * @param state       Final state ({@code VERIFIED} or {@code STALE}).
+	 * @param manifestKey Manifest key of the new generation.
 	 * @param rowCount    Rows.
 	 * @param sizeBytes   Bytes.
 	 * @param now         Moment.
 	 */
-	public void markVerified(
+	public void finishExport(
 			final String tableId,
 			final String partition,
+			final PartitionArchiveState state,
 			final String manifestKey,
 			final Long rowCount,
 			final Long sizeBytes,
 			final LocalDateTime now) {
 		this.jdbcTemplate.update("UPDATE " + PartitionArchiveRepository.TABLE
-				+ " SET state = 'VERIFIED', manifest_key = :manifest_key, row_count = :row_count, size_bytes = :size_bytes, format_version = :format_version,"
-				+ " exported_at = :now, verified_at = :now, updated_at = :now WHERE table_id = :table_id AND partition_name = :partition",
-				PartitionArchiveRepository.keyOf(tableId, partition).addValue("manifest_key", manifestKey).addValue("row_count", rowCount).addValue("size_bytes", sizeBytes)
-						.addValue("format_version", org.coldis.library.service.tiering.model.PartitionManifest.FORMAT_VERSION).addValue("now", now));
+				+ " SET state = :state, manifest_key = :manifest_key, row_count = :row_count, size_bytes = :size_bytes, format_version = :format_version,"
+				+ " exported_at = :now, verified_at = :now, swept_at = NULL, sweep_cursor = NULL, sweep_blocks = NULL, sweep_deleted = NULL, sweep_kept = NULL,"
+				+ " updated_at = :now WHERE table_id = :table_id AND partition_name = :partition",
+				PartitionArchiveRepository.keyOf(tableId, partition).addValue("state", state.name()).addValue("manifest_key", manifestKey).addValue("row_count", rowCount)
+						.addValue("size_bytes", sizeBytes).addValue("format_version", org.coldis.library.service.tiering.model.PartitionManifest.FORMAT_VERSION).addValue("now", now));
 	}
 
 	/**

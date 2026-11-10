@@ -4,10 +4,11 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * Manifest of an exported partition: the shard boundaries (the authority for a key's shard) and
- * the shards' totals. Written last; a partition with no manifest is not archived.
+ * Manifest of one export (generation) of a partition: the shard boundaries (the authority for a
+ * key's shard) and the shards' totals. Written last, under the generation's own keys; the
+ * archive record points at the readable one.
  */
-public record PartitionManifest(Integer formatVersion, String tableId, String partition, String rangeFrom, String rangeTo, List<String> keyColumns,
+public record PartitionManifest(Integer formatVersion, String tableId, String partition, String generation, String rangeFrom, String rangeTo, List<String> keyColumns,
 		Map<String, Object> shardStrategy, List<String> boundaries, List<ShardSummary> shards, Long rows, String exportStartedAt, String exportedAt) {
 
 	/** Current format version. */
