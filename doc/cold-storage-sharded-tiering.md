@@ -167,7 +167,7 @@ Properties, under `org.coldis.library.service.tiering.`:
 | `table.<id>.export.shard-strategy` / `shards` / `shard-digits` | `equi-depth` / `1000` / `3` | Boundaries for new exports; `shards` is the equi-depth target, `shard-digits` the prefix option |
 | `table.<id>.export.block-size` / `page-size` / `key-page-size` / `part-size` | `1MB` (compressed, 256 KB–4 MB) / `2000` rows / `1000000` keys / `16MB` | Block cut when its estimated compressed size reaches the target (the previous block's ratio, 4:1 at first); rows per keyset page of the data pass; keys per page of the boundaries pass; multipart part |
 | `table.<id>.export.verify-sample-every` | `50000` | One row in every N written (the first, the N+1-th, …; `1` samples every row) is read back through the cold path after the shard completes |
-| `table.<id>.partition-sweep.{enabled,cron,chunk-blocks,delay-between-chunks,finish-within}` | `false`, `0 0 22 * * *`, `1024`, `PT1S`, `P3D` | The sweep: heap pages per chunk (1,024 × 8 KB = 8 MB of heap, ~2,700 rows), the pause between chunks (sets the WAL rate), the run's horizon (a month's sweep lasts hours, resumed across runs) |
+| `table.<id>.partition-sweep.{enabled,cron,chunk-size,delay-between-chunks,finish-within}` | `false`, `0 0 22 * * *`, `1024`, `PT1S`, `P3D` | The sweep: heap pages per chunk (1,024 × 8 KB = 8 MB of heap, ~2,700 rows), the pause between chunks (sets the WAL rate), the run's horizon (a month's sweep lasts hours, resumed across runs) |
 | `table.<id>.partition-sweep.hold-after-load` | `P5D` | The month stays fully hot for this long after `loaded_at` (the consumer's signal) or, for a partition exported without a signal (backfill), after `verified_at`; the sweep starts after `max(hold, ttl + safety-margin)` from that moment, so its first pass finds the bulk expired |
 | `table.<id>.prefix` | the global `prefix` | Object key prefix of every object of the table (blocks, indexes, manifests; a row table's objects too), so the full tables live under `boa-vista/full/` while the online ones keep `boa-vista/online/` |
 | `table.<id>.ttl` / `touch-threshold` / `safety-margin` | inherited (`P15D` / `P1D` / `P2D`) | For the full tables the consumer sets `ttl=P5D` (developer range 3–5 days, per table), `safety-margin=P1D`: with the default hold, the sweep of a month starts 6 days after its load |
@@ -486,7 +486,7 @@ are what turns the record `STALE`.
 Volume and pacing (per big month and table): ~240 M rows minus the warm ones (a few thousand to a
 few hundred thousand, by read traffic) ≈ **the whole month**. Heap deletes with TOAST run at
 ~20–50 k rows/s on one connection, so the raw work is 1.5–3.5 h; the WAL is what to pace. With
-`chunk-blocks=1024` (8 MB of heap, ~2,700 rows, ~8–10 MB of WAL with the TOAST pages) and
+`chunk-size=1024` (8 MB of heap, ~2,700 rows, ~8–10 MB of WAL with the TOAST pages) and
 `delay-between-chunks=PT1S`, the sweep writes ~10 MB/s of WAL and finishes a month in ~35–40 h
 across the nightly runs (`finish-within=P3D`); `PT0.5S` halves that at ~20 MB/s. Tune to what the
 replicas and the WAL archive absorb; the Slack message of each run reports blocks, rows deleted,
@@ -654,7 +654,7 @@ replica lag above its usual ceiling during a sweep.
 Library, `src/test/java/org/coldis/library/test/service/tiering/`:
 - `PartitionTieringServiceTest` on `ContainerTestHelper` (Postgres, Redis, Artemis), `storage=folder`,
   `create-schema=true`, crons `-`, `block-size=4KB`, `page-size=50`, `key-page-size=100`,
-  `shards=8`, `verify-sample-every=7`, `chunk-blocks=2`, `ttl=PT1H`. A consumer-side entity
+  `shards=8`, `verify-sample-every=7`, `chunk-size=2`, `ttl=PT1H`. A consumer-side entity
   `TieredMonthlySnapshot` (`@IdClass` owner + `cached_at`, JSONB payload) whose table the test
   creates itself as `PARTITION BY RANGE (cached_at)` with three monthly partitions and a `_plus`
   (Hibernate cannot create a partitioned table: a `@Sql` DDL before the context, PK leading with
@@ -733,7 +733,7 @@ partitioned tables come from Flyway `V1` already (`spring.flyway.enabled=true` i
 - Time-based hold: a month stays fully hot for `hold-after-load` (`P5D`) after the loader's
   signal (after `verified_at` for a backfilled month); no validator release signal.
 - Warm TTL `P5D` on the last-access clock for the full tables (range 3–5 days, per table).
-- Sweep pacing ~10 MB/s of WAL by default (`chunk-blocks=1024`, `PT1S`), property-tunable; the
+- Sweep pacing ~10 MB/s of WAL by default (`chunk-size=1024`, `PT1S`), property-tunable; the
   sweep uses the TID range scan (production Postgres 18.6).
 - Autovacuum only after a sweep; no manual vacuum step.
 - Reprocess: `markStale` on re-import; a reprocess past the TTL is manual (`markStale` first).
@@ -810,6 +810,14 @@ What was built, and where it departs from the plan above:
   timeline merges by the full key; `partitionedEvictionIndexStatements` removed (the consumer's
   Flyway lists the leaf indexes); tests for the two data-loss guards, the schedule decision, the
   delete rule and the column-type rejection.
+- Third review pass (2026-11-10): an upload completed with no part is stored as an empty object
+  (S3 refuses a zero-part multipart completion), so an empty shard yields an index with no block
+  and misses cost no range read; the row strategy refuses first-in-interval and timeline reads
+  (`coldTiering.lookup.unsupported`) instead of answering hot-only; `findFirstCold` is strict
+  against the hot candidate; the registry's validation writes nothing (the record table is
+  created in `register` with `create-schema`); `verifyShard` is public for re-verification;
+  tests cover the rewritten-row sweep guard, the verification failures, the empty shard and the
+  resolved production defaults.
 - Not built (no test exercises it): the registry's `require-leading-index` option named in the
   plan (the check always fails the boot), the QC endpoints (consumer side), Micrometer counters.
 
