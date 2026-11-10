@@ -41,7 +41,7 @@ public class PartitionArchiveRepository {
 
 	/** Columns. */
 	private static final String COLUMNS = "table_id, partition_name, range_from, range_to, state, loaded_at, export_started_at, exported_at, verified_at, swept_at,"
-			+ " format_version, shard_count, shards_done, row_count, loaded_rows, size_bytes, generation, boundaries, shards, sweep_blocks, sweep_cursor, sweep_deleted,"
+			+ " format_version, shard_count, shards_done, row_count, loaded_rows, size_bytes, generation, reexport_confirmed, boundaries, shards, sweep_blocks, sweep_cursor, sweep_deleted,"
 			+ " sweep_kept, manifest_key";
 
 	/** JDBC. */
@@ -143,7 +143,7 @@ public class PartitionArchiveRepository {
 				PartitionArchiveRepository.moment(resultSet, "verified_at"), PartitionArchiveRepository.moment(resultSet, "swept_at"),
 				PartitionArchiveRepository.intValue(resultSet, "format_version"), PartitionArchiveRepository.intValue(resultSet, "shard_count"),
 				PartitionArchiveRepository.intValue(resultSet, "shards_done"), PartitionArchiveRepository.longValue(resultSet, "row_count"),
-				PartitionArchiveRepository.longValue(resultSet, "loaded_rows"), PartitionArchiveRepository.longValue(resultSet, "size_bytes"), resultSet.getString("generation"),
+				PartitionArchiveRepository.longValue(resultSet, "loaded_rows"), PartitionArchiveRepository.longValue(resultSet, "size_bytes"), resultSet.getString("generation"), resultSet.getBoolean("reexport_confirmed"),
 				PartitionArchiveRepository.fromJson(resultSet.getString("boundaries"), new TypeReference<List<String>>() {
 				}), PartitionArchiveRepository.fromJson(resultSet.getString("shards"), new TypeReference<List<ShardSummary>>() {
 				}), PartitionArchiveRepository.longValue(resultSet, "sweep_blocks"), PartitionArchiveRepository.longValue(resultSet, "sweep_cursor"),
@@ -303,9 +303,27 @@ public class PartitionArchiveRepository {
 		this.jdbcTemplate.update("UPDATE " + PartitionArchiveRepository.TABLE
 				+ " SET state = :state, manifest_key = :manifest_key, row_count = :row_count, size_bytes = :size_bytes, format_version = :format_version,"
 				+ " exported_at = :now, verified_at = :now, swept_at = NULL, sweep_cursor = NULL, sweep_blocks = NULL, sweep_deleted = NULL, sweep_kept = NULL,"
+				+ " reexport_confirmed = FALSE,"
 				+ " updated_at = :now WHERE table_id = :table_id AND partition_name = :partition",
 				PartitionArchiveRepository.keyOf(tableId, partition).addValue("state", state.name()).addValue("manifest_key", manifestKey).addValue("row_count", rowCount)
 						.addValue("size_bytes", sizeBytes).addValue("format_version", org.coldis.library.service.tiering.model.PartitionManifest.FORMAT_VERSION).addValue("now", now));
+	}
+
+	/**
+	 * Confirms the re-export of a swept partition (an operator's decision): the next export may
+	 * replace the archive; the record goes back to {@code LOADED}.
+	 *
+	 * @param tableId   Table id.
+	 * @param partition Partition.
+	 * @param now       Moment.
+	 */
+	public void confirmReexport(
+			final String tableId,
+			final String partition,
+			final LocalDateTime now) {
+		this.jdbcTemplate.update("UPDATE " + PartitionArchiveRepository.TABLE
+				+ " SET reexport_confirmed = TRUE, state = 'LOADED', updated_at = :now WHERE table_id = :table_id AND partition_name = :partition",
+				PartitionArchiveRepository.keyOf(tableId, partition).addValue("now", now));
 	}
 
 	/**

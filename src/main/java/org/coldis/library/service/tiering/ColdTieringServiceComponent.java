@@ -197,6 +197,20 @@ public class ColdTieringServiceComponent {
 	}
 
 	/**
+	 * Sort key of a row in a timeline: the last key column's segment, then the whole key's
+	 * segments (newest first when sorted descending).
+	 *
+	 * @param  table Table.
+	 * @param  key   Key.
+	 * @return       Sort key.
+	 */
+	private static String timelineKeyOf(
+			final TieredTable table,
+			final TieredRowKey key) {
+		return ColdTieringServiceComponent.lastSegmentOf(table, key) + "/" + String.join("/", ColumnValues.toSegments(table, table.getColumnTypes(), key.values()));
+	}
+
+	/**
 	 * Validates and formats a key prefix: known columns only, leading and gap-free (the first key
 	 * column present, no column after a missing one).
 	 *
@@ -547,8 +561,9 @@ public class ColdTieringServiceComponent {
 	}
 
 	/**
-	 * Every row of a key prefix on or before a moment, newest first: the hot rows, plus the cold
-	 * rows whose key no hot row holds (hot wins per key), served through the table's rehydration.
+	 * Every row of a key prefix on or before a moment, newest first (by the last key column, then
+	 * the whole key): the hot rows, plus the cold rows whose key no hot row holds (hot wins per
+	 * key), served through the table's rehydration.
 	 *
 	 * @param  <Type>      Entity type.
 	 * @param  entityClass Entity class.
@@ -570,14 +585,14 @@ public class ColdTieringServiceComponent {
 		final Map<String, TieredHit<Type>> hits = new LinkedHashMap<>();
 		for (final Type entity : this.tieredRepository.findAllHot(table, entityClass, keyPrefix, asOf)) {
 			final TieredRowKey key = this.tieredRepository.keyOfEntity(table, entity);
-			hits.put(ColdTieringServiceComponent.lastSegmentOf(table, key), new TieredHit<>(entity, (ColdRow) null));
+			hits.put(ColdTieringServiceComponent.timelineKeyOf(table, key), new TieredHit<>(entity, (ColdRow) null));
 			this.requestTouchIfStale(table, tableProperties, key);
 		}
 		if (ColdTieringServiceComponent.isColdReadable(tableProperties)) {
 			for (final ColdRow row : this.strategyOf(table).findTimelineCold(table, prefix, asOf)) {
-				final String segment = ColdTieringServiceComponent.lastSegmentOf(table, row.key());
-				if (!hits.containsKey(segment)) {
-					hits.put(segment, this.serveCold(table, tableProperties, entityClass, row));
+				final String sortKey = ColdTieringServiceComponent.timelineKeyOf(table, row.key());
+				if (!hits.containsKey(sortKey)) {
+					hits.put(sortKey, this.serveCold(table, tableProperties, entityClass, row));
 				}
 			}
 		}
@@ -614,8 +629,9 @@ public class ColdTieringServiceComponent {
 	}
 
 	/**
-	 * Deletes a row from both tiers (row tiering); a partition-tiered table loses its hot row
-	 * only.
+	 * Deletes a row from both tiers (row tiering). On a partition-tiered table the archive holds
+	 * whole partitions, so a row of an archived partition cannot be deleted
+	 * ({@code coldTiering.delete.archived}); a row of a partition not archived loses its hot row.
 	 *
 	 * @param key Key.
 	 */
@@ -628,6 +644,9 @@ public class ColdTieringServiceComponent {
 		final TieredTable table = this.registry.getTable(key.tableId());
 		if (table.getArchiveUnit() == ArchiveUnit.ROW) {
 			this.tieredRepository.delete(table, key);
+		}
+		else if (this.strategyOf(table).isArchived(table, key)) {
+			throw new IntegrationException(new SimpleMessage("coldTiering.delete.archived", new Object[] { table.getId() }));
 		}
 		else {
 			this.hotTierRepository.delete(table, key);

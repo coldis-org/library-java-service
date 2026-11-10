@@ -238,6 +238,22 @@ public class PartitionTieringServiceComponent implements ColdLookupStrategy {
 	}
 
 	/**
+	 * Confirms the re-export of a swept partition (an operator): the next export replaces the
+	 * archive, orphaning the rows only the previous generation holds.
+	 *
+	 * @param tableId Table id.
+	 * @param moment  A moment inside the partition.
+	 */
+	public void confirmReexport(
+			final String tableId,
+			final LocalDateTime moment) {
+		final PartitionTieredTable table = this.tableOf(tableId);
+		final LeafPartition partition = this.partitionOf(table, moment);
+		this.archiveRepository.confirmReexport(tableId, partition.name(), DateTimeHelper.getCurrentLocalDateTime());
+		PartitionTieringServiceComponent.LOGGER.warn("[COLD_TIERING_EXPORT] table={} partition={} re-export confirmed by an operator", tableId, partition.name());
+	}
+
+	/**
 	 * Archive record of a partition.
 	 *
 	 * @param  tableId   Table id.
@@ -384,6 +400,18 @@ public class PartitionTieringServiceComponent implements ColdLookupStrategy {
 	}
 
 	/**
+	 * @see ColdLookupStrategy#isArchived(TieredTable, TieredRowKey)
+	 */
+	@Override
+	public Boolean isArchived(
+			final TieredTable table,
+			final TieredRowKey key) {
+		final PartitionTieredTable partitioned = this.tableOf(table.getId());
+		final LocalDateTime moment = PartitionTieringServiceComponent.momentOf(partitioned, key);
+		return this.readablePartitions(partitioned).stream().anyMatch(readable -> readable.partition().contains(moment));
+	}
+
+	/**
 	 * @see ColdLookupStrategy#findNewestCold(TieredTable, Map, LocalDateTime, Optional)
 	 */
 	@Override
@@ -508,9 +536,9 @@ public class PartitionTieringServiceComponent implements ColdLookupStrategy {
 	/**
 	 * Starts a partition's export under a new generation: boundaries, record to
 	 * {@code EXPORTING} (the previous manifest stays the readable one), one shard request per
-	 * shard on the export queue. A partition whose sweep started and whose hot rows are fewer
-	 * than its archive is not exported (the archive would be replaced by a partial one): it is
-	 * marked {@code NEEDS_ATTENTION} for an operator.
+	 * shard on the export queue, sent after the commit. A partition whose sweep started is not
+	 * exported (rows only the archive holds would be orphaned by a partial re-export) unless an
+	 * operator confirmed it ({@link #confirmReexport}): it is marked {@code NEEDS_ATTENTION}.
 	 *
 	 * @param  table     Table.
 	 * @param  partition Partition.
@@ -522,14 +550,11 @@ public class PartitionTieringServiceComponent implements ColdLookupStrategy {
 		final LocalDateTime startedAt = DateTimeHelper.getCurrentLocalDateTime();
 		final PartitionArchive archive = this.archiveRepository.find(table.getId(), partition.name()).orElse(null);
 		Integer enqueued = 0;
-		final Long hotRows = (archive != null) && archive.isSweepStarted() && (archive.rowCount() != null)
-				? this.partitionHotTierRepository.countInRange(table, partition.name(), "", null)
-				: null;
-		if ((hotRows != null) && (hotRows < archive.rowCount())) {
+		if ((archive != null) && archive.isSweepStarted() && !archive.reexportConfirmed()) {
 			this.archiveRepository.markState(table.getId(), partition.name(), PartitionArchiveState.NEEDS_ATTENTION, startedAt);
 			PartitionTieringServiceComponent.LOGGER.error(
-					"[COLD_TIERING_EXPORT] table={} partition={} swept before and reloaded with {} hot rows against {} archived: export refused, needs attention",
-					table.getId(), partition.name(), hotRows, archive.rowCount());
+					"[COLD_TIERING_EXPORT] table={} partition={} swept before: a re-export would orphan the rows only the archive holds; refused until confirmReexport, needs attention",
+					table.getId(), partition.name());
 		}
 		else {
 			final List<String> bounds = this.computeBoundaries(table, partition, archive);
@@ -539,7 +564,7 @@ public class PartitionTieringServiceComponent implements ColdLookupStrategy {
 				final ShardExportRequest request = new ShardExportRequest(table.getId(), partition.name(), generation, shard, bounds.get(shard),
 						(shard + 1) < bounds.size() ? bounds.get(shard + 1) : null, startedAt.toString());
 				this.jmsTemplateHelper.send(this.jmsTemplate,
-						new JmsMessage<Serializable>().withDestination(PartitionTieringServiceComponent.EXPORT_QUEUE).withMessage(request).withAfterCommit(false));
+						new JmsMessage<Serializable>().withDestination(PartitionTieringServiceComponent.EXPORT_QUEUE).withMessage(request).withAfterCommit(true));
 			}
 			enqueued = bounds.size();
 			PartitionTieringServiceComponent.LOGGER.info("[COLD_TIERING_EXPORT] table={} partition={} generation={} shards={} enqueued", table.getId(),
@@ -627,6 +652,11 @@ public class PartitionTieringServiceComponent implements ColdLookupStrategy {
 			final PartitionTieredTable table,
 			final ShardExportRequest request,
 			final ShardSummary summary) {
+		final PartitionArchive seen = this.archiveRepository.find(table.getId(), request.partition()).orElse(null);
+		if ((seen == null) || (seen.generation() == null) || (seen.generation().compareTo(request.generation()) < 0)) {
+			// The record has not seen this generation yet (the request overtook its commit): redelivered.
+			throw new IntegrationException(new SimpleMessage("coldTiering.export.generation.unseen", new Object[] { table.getId(), request.partition() }));
+		}
 		final Integer done = this.archiveRepository.completeShard(table.getId(), request.partition(), request.generation(), summary,
 				DateTimeHelper.getCurrentLocalDateTime());
 		final PartitionArchive archive = this.archiveRepository.find(table.getId(), request.partition()).orElseThrow();
@@ -724,34 +754,20 @@ public class PartitionTieringServiceComponent implements ColdLookupStrategy {
 	}
 
 	/**
-	 * Sweeps the next chunk of heap blocks of a partition, in heap order, and saves the cursor;
-	 * records the sweep finished when the cursor passes the last block. The first chunk re-counts
-	 * the partition against the manifest: a difference means rows the archive does not cover,
-	 * and the partition goes {@code STALE} instead of being swept.
+	 * Sweeps the next block range of a partition and saves the cursor.
 	 *
-	 * @param  table   Table.
-	 * @param  archive Record.
-	 * @return         Whether blocks remain.
+	 * @param  table           Table.
+	 * @param  tableProperties Properties.
+	 * @param  current         Record.
+	 * @param  now             Moment.
+	 * @return                 Whether blocks remain.
 	 */
-	public Boolean sweepChunk(
+	private Boolean sweepNextChunk(
 			final PartitionTieredTable table,
-			final PartitionArchive archive) {
-		final TableProperties tableProperties = this.properties.of(table);
-		final PartitionArchive current = this.archiveRepository.find(table.getId(), archive.partitionName()).orElseThrow();
-		if (!current.state().isSweepable()) {
-			throw new IntegrationException(new SimpleMessage("coldTiering.sweep.state.invalid", new Object[] { table.getId(), archive.partitionName() }));
-		}
-		final LocalDateTime now = DateTimeHelper.getCurrentLocalDateTime();
+			final TableProperties tableProperties,
+			final PartitionArchive current,
+			final LocalDateTime now) {
 		Boolean remaining = false;
-		if (current.sweepCursor() == null) {
-			final Long covered = this.partitionHotTierRepository.countInRange(table, current.partitionName(), "", null);
-			if (!covered.equals(current.rowCount())) {
-				this.archiveRepository.markState(table.getId(), current.partitionName(), PartitionArchiveState.STALE, now);
-				PartitionTieringServiceComponent.LOGGER.error("[COLD_TIERING_SWEEP] table={} partition={} holds {} rows against {} archived: not swept, STALE",
-						table.getId(), current.partitionName(), covered, current.rowCount());
-				throw new IntegrationException(new SimpleMessage("coldTiering.sweep.coverage.mismatch", new Object[] { table.getId(), current.partitionName() }));
-			}
-		}
 		final Long blocks = current.sweepBlocks() == null ? this.partitionHotTierRepository.blockCount(current.partitionName()) : current.sweepBlocks();
 		final Long cursor = current.sweepCursor() == null ? 0L : current.sweepCursor();
 		if (cursor < blocks) {
@@ -767,6 +783,38 @@ public class PartitionTieringServiceComponent implements ColdLookupStrategy {
 		}
 		else {
 			this.archiveRepository.saveSweep(table.getId(), current.partitionName(), blocks, cursor, current.sweepDeleted(), current.sweepKept(), now, now);
+		}
+		return remaining;
+	}
+
+	/**
+	 * Sweeps the next chunk of heap blocks of a partition, in heap order, and saves the cursor;
+	 * records the sweep finished when the cursor passes the last block. The first chunk re-counts
+	 * the partition against the manifest: a difference means rows the archive does not cover,
+	 * and the partition goes {@code STALE} (committed, nothing deleted) instead of being swept.
+	 *
+	 * @param  table   Table.
+	 * @param  archive Record.
+	 * @return         Whether blocks remain.
+	 */
+	public Boolean sweepChunk(
+			final PartitionTieredTable table,
+			final PartitionArchive archive) {
+		final TableProperties tableProperties = this.properties.of(table);
+		final PartitionArchive current = this.archiveRepository.find(table.getId(), archive.partitionName()).orElseThrow();
+		if (!current.state().isSweepable()) {
+			throw new IntegrationException(new SimpleMessage("coldTiering.sweep.state.invalid", new Object[] { table.getId(), archive.partitionName() }));
+		}
+		final LocalDateTime now = DateTimeHelper.getCurrentLocalDateTime();
+		Boolean remaining = false;
+		final Long covered = current.sweepCursor() == null ? this.partitionHotTierRepository.countInRange(table, current.partitionName(), "", null) : current.rowCount();
+		if (!covered.equals(current.rowCount())) {
+			this.archiveRepository.markState(table.getId(), current.partitionName(), PartitionArchiveState.STALE, now);
+			PartitionTieringServiceComponent.LOGGER.error("[COLD_TIERING_SWEEP] table={} partition={} holds {} rows against {} archived: not swept, STALE", table.getId(),
+					current.partitionName(), covered, current.rowCount());
+		}
+		else {
+			remaining = this.sweepNextChunk(table, tableProperties, current, now);
 		}
 		return remaining;
 	}

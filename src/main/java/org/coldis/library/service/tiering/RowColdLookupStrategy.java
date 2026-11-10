@@ -95,6 +95,16 @@ public class RowColdLookupStrategy implements ColdLookupStrategy {
 	}
 
 	/**
+	 * @see ColdLookupStrategy#isArchived(TieredTable, TieredRowKey)
+	 */
+	@Override
+	public Boolean isArchived(
+			final TieredTable table,
+			final TieredRowKey key) {
+		return this.tieredRepository.loadCold(table, key).isPresent();
+	}
+
+	/**
 	 * @see ColdLookupStrategy#findTimelineCold(TieredTable, Map, LocalDateTime)
 	 */
 	@Override

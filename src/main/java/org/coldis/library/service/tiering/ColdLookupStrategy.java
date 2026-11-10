@@ -70,6 +70,18 @@ public interface ColdLookupStrategy {
 			Optional<TieredRowKey> hotCandidate);
 
 	/**
+	 * Whether the archive unit holding the key is archived (a partition with a readable
+	 * manifest), even when the key itself has no cold row.
+	 *
+	 * @param  table Table.
+	 * @param  key   Key.
+	 * @return       Archived.
+	 */
+	Boolean isArchived(
+			TieredTable table,
+			TieredRowKey key);
+
+	/**
 	 * Every cold row of a key prefix on or before a moment (the hot rows win per key in the
 	 * component).
 	 *

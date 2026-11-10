@@ -184,8 +184,9 @@ public class TieredTableRegistry implements SmartInitializingSingleton {
 		if (!"r".equals(this.partitionHotTierRepository.partitionStrategy(table.getTableName()).orElse(null))) {
 			throw new IntegrationException(new SimpleMessage("coldTiering.table.partition.strategy.invalid", new Object[] { table.getId(), table.getTableName() }));
 		}
-		if (!ColumnValues.TEMPORAL_TYPES.contains(columnTypes.get(table.getPartitionColumn())) || ColumnValues.TIMESTAMPTZ.equals(columnTypes.get(table.getPartitionColumn()))) {
-			throw new IntegrationException(new SimpleMessage("coldTiering.table.partition.column.invalid", new Object[] { table.getId(), table.getPartitionColumn() }));
+		if (!ColumnValues.TIMESTAMP.equals(columnTypes.get(table.getPartitionColumn()))) {
+			throw new IntegrationException(new SimpleMessage("coldTiering.table.partition.column.type.invalid",
+					new Object[] { table.getId(), table.getPartitionColumn(), columnTypes.get(table.getPartitionColumn()) }));
 		}
 		final List<String> primaryKey = this.partitionHotTierRepository.primaryKeyColumns(table.getTableName());
 		if (primaryKey.isEmpty() || !primaryKey.get(0).equals(table.getShardKeyColumn())) {
@@ -193,6 +194,20 @@ public class TieredTableRegistry implements SmartInitializingSingleton {
 		}
 		if (this.properties.of(table).getBackfill().getEnabled()) {
 			throw new IntegrationException(new SimpleMessage("coldTiering.table.partition.backfill.invalid", new Object[] { table.getId() }));
+		}
+	}
+
+	/**
+	 * Validates a definition against the database without registering it (tooling and tests).
+	 *
+	 * @param table Table.
+	 */
+	public void validate(
+			final TieredTable table) {
+		final Map<String, String> columnTypes = this.hotTierRepository.columnTypes(table.getTableName());
+		TieredTableRegistry.validate(table, columnTypes, this.hotTierRepository.nullableColumns(table.getTableName()), this.properties.of(table).getRehydration());
+		if (table.getArchiveUnit() == ArchiveUnit.PARTITION) {
+			this.validatePartitioned((PartitionTieredTable) table, columnTypes);
 		}
 	}
 

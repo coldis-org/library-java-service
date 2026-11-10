@@ -238,10 +238,15 @@ public class ColdTieringBatchServiceComponent implements SmartInitializingSingle
 	}
 
 	/**
-	 * EXECUTE of the export batch: boundaries pass and shard requests.
+	 * EXECUTE of the export batch: boundaries pass and shard requests, the requests leaving after
+	 * the record's commit.
 	 *
 	 * @param item Item.
 	 */
+	@Transactional(
+			propagation = Propagation.REQUIRED,
+			timeoutString = "${org.coldis.library.service.transaction.long-timeout}"
+	)
 	public void startExport(
 			final ExportItem item) {
 		final PartitionTieredTable table = (PartitionTieredTable) this.registry.getTable(item.tableId());
