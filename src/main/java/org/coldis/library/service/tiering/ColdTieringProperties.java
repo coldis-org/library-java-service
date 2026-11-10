@@ -7,6 +7,7 @@ import java.util.Objects;
 
 import org.coldis.library.service.tiering.model.ColdTieringPropertyNames;
 import org.coldis.library.service.tiering.model.Rehydration;
+import org.coldis.library.service.tiering.model.ShardStrategy;
 import org.coldis.library.service.tiering.model.TieredTable;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.boot.context.properties.ConfigurationProperties;
@@ -172,6 +173,201 @@ public class ColdTieringProperties {
 	}
 
 	/**
+	 * Export batch properties (partition tiering).
+	 */
+	public static class ExportProperties extends BatchProperties {
+
+		/** Quiet period for partitions without a loaded signal. */
+		private Duration quietPeriod;
+
+		/** Partitions never exported (glob on the name). */
+		private String excludePartitions;
+
+		/** Shard strategy. */
+		private ShardStrategy shardStrategy;
+
+		/** Equi-depth target shards. */
+		private Integer shards;
+
+		/** Prefix digits. */
+		private Integer shardDigits;
+
+		/** Block size (compressed, bytes). */
+		private Integer blockSize;
+
+		/** Rows per data page. */
+		private Integer pageSize;
+
+		/** Keys per boundaries page. */
+		private Integer keyPageSize;
+
+		/** Upload part size. */
+		private Integer partSize;
+
+		/** One row in N read back after the shard completes. */
+		private Integer verifySampleEvery;
+
+		public Duration getQuietPeriod() {
+			return this.quietPeriod;
+		}
+
+		public void setQuietPeriod(
+				final Duration quietPeriod) {
+			this.quietPeriod = quietPeriod;
+		}
+
+		public String getExcludePartitions() {
+			return this.excludePartitions;
+		}
+
+		public void setExcludePartitions(
+				final String excludePartitions) {
+			this.excludePartitions = excludePartitions;
+		}
+
+		public ShardStrategy getShardStrategy() {
+			return this.shardStrategy;
+		}
+
+		public void setShardStrategy(
+				final ShardStrategy shardStrategy) {
+			this.shardStrategy = shardStrategy;
+		}
+
+		public Integer getShards() {
+			return this.shards;
+		}
+
+		public void setShards(
+				final Integer shards) {
+			this.shards = shards;
+		}
+
+		public Integer getShardDigits() {
+			return this.shardDigits;
+		}
+
+		public void setShardDigits(
+				final Integer shardDigits) {
+			this.shardDigits = shardDigits;
+		}
+
+		public Integer getBlockSize() {
+			return this.blockSize;
+		}
+
+		public void setBlockSize(
+				final Integer blockSize) {
+			this.blockSize = blockSize;
+		}
+
+		public Integer getPageSize() {
+			return this.pageSize;
+		}
+
+		public void setPageSize(
+				final Integer pageSize) {
+			this.pageSize = pageSize;
+		}
+
+		public Integer getKeyPageSize() {
+			return this.keyPageSize;
+		}
+
+		public void setKeyPageSize(
+				final Integer keyPageSize) {
+			this.keyPageSize = keyPageSize;
+		}
+
+		public Integer getPartSize() {
+			return this.partSize;
+		}
+
+		public void setPartSize(
+				final Integer partSize) {
+			this.partSize = partSize;
+		}
+
+		public Integer getVerifySampleEvery() {
+			return this.verifySampleEvery;
+		}
+
+		public void setVerifySampleEvery(
+				final Integer verifySampleEvery) {
+			this.verifySampleEvery = verifySampleEvery;
+		}
+
+		/**
+		 * Resolves against defaults.
+		 *
+		 * @param  defaults Defaults.
+		 * @return          Resolved.
+		 */
+		public ExportProperties over(
+				final ExportProperties defaults) {
+			final ExportProperties resolved = new ExportProperties();
+			final BatchProperties batch = super.over(defaults);
+			resolved.setEnabled(batch.getEnabled());
+			resolved.setCron(this.getCron() == null ? Objects.requireNonNullElse(defaults.getCron(), "0 15 * * * *") : this.getCron());
+			resolved.setChunkSize(batch.getChunkSize());
+			resolved.setDelayBetweenChunks(batch.getDelayBetweenChunks());
+			resolved.setFinishWithin(this.getFinishWithin() == null ? Objects.requireNonNullElse(defaults.getFinishWithin(), Duration.ofDays(2)) : this.getFinishWithin());
+			resolved.quietPeriod = Objects.requireNonNullElse(this.quietPeriod, Objects.requireNonNullElse(defaults.quietPeriod, Duration.ofDays(2)));
+			resolved.excludePartitions = Objects.requireNonNullElse(this.excludePartitions, Objects.requireNonNullElse(defaults.excludePartitions, "*_legacy"));
+			resolved.shardStrategy = Objects.requireNonNullElse(this.shardStrategy, Objects.requireNonNullElse(defaults.shardStrategy, ShardStrategy.EQUI_DEPTH));
+			resolved.shards = Objects.requireNonNullElse(this.shards, Objects.requireNonNullElse(defaults.shards, 1000));
+			resolved.shardDigits = Objects.requireNonNullElse(this.shardDigits, Objects.requireNonNullElse(defaults.shardDigits, 3));
+			resolved.blockSize = Objects.requireNonNullElse(this.blockSize, Objects.requireNonNullElse(defaults.blockSize, 1024 * 1024));
+			resolved.pageSize = Objects.requireNonNullElse(this.pageSize, Objects.requireNonNullElse(defaults.pageSize, 2000));
+			resolved.keyPageSize = Objects.requireNonNullElse(this.keyPageSize, Objects.requireNonNullElse(defaults.keyPageSize, 1_000_000));
+			resolved.partSize = Objects.requireNonNullElse(this.partSize, Objects.requireNonNullElse(defaults.partSize, 16 * 1024 * 1024));
+			resolved.verifySampleEvery = Objects.requireNonNullElse(this.verifySampleEvery, Objects.requireNonNullElse(defaults.verifySampleEvery, 50_000));
+			return resolved;
+		}
+
+	}
+
+	/**
+	 * Partition sweep properties (partition tiering): {@code chunkSize} is the heap blocks per
+	 * chunk.
+	 */
+	public static class SweepProperties extends BatchProperties {
+
+		/** Hold after load. */
+		private Duration holdAfterLoad;
+
+		public Duration getHoldAfterLoad() {
+			return this.holdAfterLoad;
+		}
+
+		public void setHoldAfterLoad(
+				final Duration holdAfterLoad) {
+			this.holdAfterLoad = holdAfterLoad;
+		}
+
+		/**
+		 * Resolves against defaults.
+		 *
+		 * @param  defaults Defaults.
+		 * @return          Resolved.
+		 */
+		public SweepProperties over(
+				final SweepProperties defaults) {
+			final SweepProperties resolved = new SweepProperties();
+			final BatchProperties batch = super.over(defaults);
+			resolved.setEnabled(batch.getEnabled());
+			resolved.setCron(this.getCron() == null ? Objects.requireNonNullElse(defaults.getCron(), "0 0 22 * * *") : this.getCron());
+			resolved.setChunkSize(this.getChunkSize() == null ? Objects.requireNonNullElse(defaults.getChunkSize(), 1024L) : this.getChunkSize());
+			resolved.setDelayBetweenChunks(
+					this.getDelayBetweenChunks() == null ? Objects.requireNonNullElse(defaults.getDelayBetweenChunks(), Duration.ofSeconds(1)) : this.getDelayBetweenChunks());
+			resolved.setFinishWithin(this.getFinishWithin() == null ? Objects.requireNonNullElse(defaults.getFinishWithin(), Duration.ofDays(3)) : this.getFinishWithin());
+			resolved.holdAfterLoad = Objects.requireNonNullElse(this.holdAfterLoad, Objects.requireNonNullElse(defaults.holdAfterLoad, Duration.ofDays(5)));
+			return resolved;
+		}
+
+	}
+
+	/**
 	 * One table's tunables.
 	 */
 	public static class TableProperties {
@@ -199,6 +395,42 @@ public class ColdTieringProperties {
 
 		/** Backfill batch. */
 		private BatchProperties backfill = new BatchProperties();
+
+		/** Export (partition tiering). */
+		private ExportProperties export = new ExportProperties();
+
+		/** Object key prefix of the table (the global prefix when unset). */
+		private String prefix;
+
+		public String getPrefix() {
+			return this.prefix;
+		}
+
+		public void setPrefix(
+				final String prefix) {
+			this.prefix = prefix;
+		}
+
+		/** Partition sweep (partition tiering). */
+		private SweepProperties partitionSweep = new SweepProperties();
+
+		public ExportProperties getExport() {
+			return this.export;
+		}
+
+		public void setExport(
+				final ExportProperties export) {
+			this.export = export;
+		}
+
+		public SweepProperties getPartitionSweep() {
+			return this.partitionSweep;
+		}
+
+		public void setPartitionSweep(
+				final SweepProperties partitionSweep) {
+			this.partitionSweep = partitionSweep;
+		}
 
 		/**
 		 * Gets the enabled.
@@ -369,6 +601,9 @@ public class ColdTieringProperties {
 			resolved.rehydration = this.rehydration == null ? defaults.rehydration : this.rehydration;
 			resolved.eviction = this.eviction.over(defaults.eviction);
 			resolved.backfill = this.backfill.over(defaults.backfill);
+			resolved.export = this.export.over(defaults.export);
+			resolved.prefix = this.prefix == null ? defaults.prefix : this.prefix;
+			resolved.partitionSweep = this.partitionSweep.over(defaults.partitionSweep);
 			return resolved;
 		}
 
@@ -495,6 +730,9 @@ public class ColdTieringProperties {
 		final TableProperties resolved = this.table.getOrDefault(tieredTable.getId(), new TableProperties()).over(this.defaults);
 		if (resolved.rehydration == null) {
 			resolved.rehydration = tieredTable.getRehydration();
+		}
+		if (resolved.prefix == null) {
+			resolved.prefix = this.prefix;
 		}
 		return resolved;
 	}

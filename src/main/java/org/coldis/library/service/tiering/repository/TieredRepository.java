@@ -145,26 +145,31 @@ public class TieredRepository {
 	public String objectKeyOf(
 			final TieredTable table,
 			final TieredRowKey key) {
-		return this.objectKeyStrategy.keyOf(this.objectPrefix, table, ColumnValues.toSegments(table, table.getColumnTypes(), key.values()),
+		return this.objectKeyStrategy.keyOf(table.objectPrefixOr(this.objectPrefix), table, ColumnValues.toSegments(table, table.getColumnTypes(), key.values()),
 				this.codec.extension());
 	}
 
 	/**
-	 * The hot entity matching column values, newest first by the last key column, on or before a
-	 * bound. Parameters are bound with the Java type the entity maps each column with.
+	 * Hot rows matching the given key column values, bounded on the last key column.
 	 *
 	 * @param  <Type>       Entity type.
 	 * @param  table        Table.
 	 * @param  entityType   Entity type.
-	 * @param  columnValues Key column values to match (column objects), by column.
-	 * @param  upperBound   Upper bound of the last key column (column object), or null.
-	 * @return              The entity, or empty.
+	 * @param  columnValues Key column values (a prefix of the key, or the whole key).
+	 * @param  lowerBound   Exclusive lower bound on the last key column, or null.
+	 * @param  upperBound   Inclusive upper bound on the last key column, or null.
+	 * @param  isAscending    Order on the last key column.
+	 * @param  limit        Maximum rows (null for all).
+	 * @return              Rows.
 	 */
-	private <Type> Optional<Type> findHot(
+	private <Type> List<Type> findHotRange(
 			final TieredTable table,
 			final Class<Type> entityType,
 			final Map<String, Object> columnValues,
-			final Object upperBound) {
+			final Object lowerBound,
+			final Object upperBound,
+			final Boolean isAscending,
+			final Integer limit) {
 		final List<String> keyColumns = table.getKeyColumns();
 		final List<String> keyProperties = table.getKeyProperties();
 		final String lastProperty = keyProperties.get(keyColumns.size() - 1);
@@ -175,21 +180,119 @@ public class TieredRepository {
 						.append(keyProperties.get(position));
 			}
 		}
+		if (lowerBound != null) {
+			jpql.append(" AND entity.").append(lastProperty).append(" > :lowerBound");
+		}
 		if (upperBound != null) {
 			jpql.append(" AND entity.").append(lastProperty).append(" <= :upperBound");
 		}
-		jpql.append(" ORDER BY entity.").append(lastProperty).append(" DESC");
-		final TypedQuery<Type> query = this.entityManager.createQuery(jpql.toString(), entityType).setMaxResults(1);
+		jpql.append(" ORDER BY entity.").append(lastProperty).append(isAscending ? " ASC" : " DESC");
+		final TypedQuery<Type> query = this.entityManager.createQuery(jpql.toString(), entityType);
+		if (limit != null) {
+			query.setMaxResults(limit);
+		}
 		for (int position = 0; position < keyColumns.size(); position++) {
 			if (columnValues.containsKey(keyColumns.get(position))) {
 				query.setParameter(TieredRepository.KEY_PARAMETER_PREFIX + keyProperties.get(position), ColumnValues
 						.toJavaValue(columnValues.get(keyColumns.get(position)), TieredEntityKeys.fieldOf(entityType, keyProperties.get(position)).getType()));
 			}
 		}
+		if (lowerBound != null) {
+			query.setParameter("lowerBound", ColumnValues.toJavaValue(lowerBound, TieredEntityKeys.fieldOf(entityType, lastProperty).getType()));
+		}
 		if (upperBound != null) {
 			query.setParameter("upperBound", ColumnValues.toJavaValue(upperBound, TieredEntityKeys.fieldOf(entityType, lastProperty).getType()));
 		}
-		return query.getResultList().stream().findFirst();
+		return query.getResultList();
+	}
+
+	/**
+	 * Newest hot row matching the values, on or before the bound.
+	 *
+	 * @param  <Type>       Entity type.
+	 * @param  table        Table.
+	 * @param  entityType   Entity type.
+	 * @param  columnValues Key column values.
+	 * @param  upperBound   Inclusive upper bound on the last key column, or null.
+	 * @return              Row.
+	 */
+	private <Type> Optional<Type> findHot(
+			final TieredTable table,
+			final Class<Type> entityType,
+			final Map<String, Object> columnValues,
+			final Object upperBound) {
+		return this.findHotRange(table, entityType, columnValues, null, upperBound, false, 1).stream().findFirst();
+	}
+
+	/**
+	 * Converts a key prefix to column values.
+	 *
+	 * @param  table     Table.
+	 * @param  keyPrefix Key prefix (Java values).
+	 * @return           Column values.
+	 */
+	private static Map<String, Object> columnValuesOf(
+			final TieredTable table,
+			final Map<String, Object> keyPrefix) {
+		final Map<String, String> columnTypes = table.getColumnTypes();
+		final Map<String, Object> columnValues = new LinkedHashMap<>();
+		keyPrefix.forEach((
+				column,
+				value) -> columnValues.put(column, ColumnValues.toColumnValue(columnTypes.get(column), value)));
+		return columnValues;
+	}
+
+	/**
+	 * Converts a moment to the last key column's value.
+	 *
+	 * @param  table  Table.
+	 * @param  moment Moment, or null.
+	 * @return        Column value, or null.
+	 */
+	private static Object lastColumnValueOf(
+			final TieredTable table,
+			final LocalDateTime moment) {
+		final String lastType = table.getColumnTypes().get(table.getLastKeyColumn());
+		return moment == null ? null : ColumnValues.parse(lastType, ColumnValues.ofMoment(lastType, moment));
+	}
+
+	/**
+	 * First hot row of a key prefix with the last key column in {@code (after, upTo]}.
+	 *
+	 * @param  <Type>     Entity type.
+	 * @param  table      Table.
+	 * @param  entityType Entity type.
+	 * @param  keyPrefix  Key prefix.
+	 * @param  after      Exclusive lower bound, or null.
+	 * @param  upTo       Inclusive upper bound, or null.
+	 * @return            Row.
+	 */
+	public <Type> Optional<Type> findFirstHot(
+			final TieredTable table,
+			final Class<Type> entityType,
+			final Map<String, Object> keyPrefix,
+			final LocalDateTime after,
+			final LocalDateTime upTo) {
+		return this.findHotRange(table, entityType, TieredRepository.columnValuesOf(table, keyPrefix), TieredRepository.lastColumnValueOf(table, after),
+				TieredRepository.lastColumnValueOf(table, upTo), true, 1).stream().findFirst();
+	}
+
+	/**
+	 * Every hot row of a key prefix on or before a moment, newest first.
+	 *
+	 * @param  <Type>     Entity type.
+	 * @param  table      Table.
+	 * @param  entityType Entity type.
+	 * @param  keyPrefix  Key prefix.
+	 * @param  asOf       Inclusive upper bound, or null.
+	 * @return            Rows.
+	 */
+	public <Type> List<Type> findAllHot(
+			final TieredTable table,
+			final Class<Type> entityType,
+			final Map<String, Object> keyPrefix,
+			final LocalDateTime asOf) {
+		return this.findHotRange(table, entityType, TieredRepository.columnValuesOf(table, keyPrefix), null, TieredRepository.lastColumnValueOf(table, asOf), false, null);
 	}
 
 	/**
@@ -271,7 +374,7 @@ public class TieredRepository {
 		final String lastType = columnTypes.get(table.getLastKeyColumn());
 		final String ceiling = asOf == null ? null : ColumnValues.toSegment(lastType, ColumnValues.ofMoment(lastType, asOf));
 		String newestSegment = null;
-		for (final String objectKey : this.coldStorageRepository.list(this.objectKeyStrategy.prefixOf(this.objectPrefix, table, segments))) {
+		for (final String objectKey : this.coldStorageRepository.list(this.objectKeyStrategy.prefixOf(table.objectPrefixOr(this.objectPrefix), table, segments))) {
 			final String segment = this.objectKeyStrategy.lastSegmentOf(objectKey, this.codec.extension());
 			if (((ceiling == null) || (segment.compareTo(ceiling) <= 0)) && ((newestSegment == null) || (segment.compareTo(newestSegment) > 0))) {
 				newestSegment = segment;

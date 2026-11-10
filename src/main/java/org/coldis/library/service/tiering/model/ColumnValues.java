@@ -44,6 +44,12 @@ public final class ColumnValues {
 	/** Types a versioned table's last key column may have (an as-of moment converts to them). */
 	public static final Set<String> TEMPORAL_TYPES = Set.of(ColumnValues.TIMESTAMP, ColumnValues.TIMESTAMPTZ, ColumnValues.DATE);
 
+	/** Text types. */
+	public static final Set<String> TEXT_TYPES = Set.of("text", "character varying", "character");
+
+	/** Integer types. */
+	public static final Set<String> INTEGER_TYPES = Set.of("bigint", "integer", "smallint");
+
 	/** Fixed-width timestamp format. */
 	private static final DateTimeFormatter TIMESTAMP_FORMAT = DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ss.SSSSSS");
 
@@ -314,12 +320,25 @@ public final class ColumnValues {
 	}
 
 	/**
-	 * The canonical segments of the leading key columns present in a key (prefix or full key).
+	 * Canonical segment of a row key's last key column (the version/time of a versioned table).
+	 *
+	 * @param  table Table.
+	 * @param  key   Key.
+	 * @return       Segment.
+	 */
+	public static String lastSegmentOf(
+			final TieredTable table,
+			final TieredRowKey key) {
+		return ColumnValues.toSegment(table.getColumnTypes().get(table.getLastKeyColumn()), key.values().get(table.getLastKeyColumn()));
+	}
+
+	/**
+	 * Canonical segments of a table's key values, in key column order.
 	 *
 	 * @param  table       Table.
 	 * @param  columnTypes Column types.
-	 * @param  values      Key values (string form), by column.
-	 * @return             The segments, in key column order, up to the first missing column.
+	 * @param  values      Formatted values by column.
+	 * @return             Segments.
 	 */
 	public static List<String> toSegments(
 			final TieredTable table,

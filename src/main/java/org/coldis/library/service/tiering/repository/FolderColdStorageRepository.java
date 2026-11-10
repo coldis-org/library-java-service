@@ -1,11 +1,13 @@
 package org.coldis.library.service.tiering.repository;
 
 import java.io.IOException;
+import java.io.RandomAccessFile;
 import java.io.UncheckedIOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
+import java.nio.file.StandardOpenOption;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
@@ -17,6 +19,7 @@ import org.coldis.library.exception.IntegrationException;
 import org.coldis.library.service.tiering.model.ColdTieringPropertyNames;
 import org.coldis.library.model.SimpleMessage;
 import org.coldis.library.service.tiering.model.ColdObject;
+import org.coldis.library.service.tiering.model.ColdUpload;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Repository;
@@ -228,6 +231,121 @@ public class FolderColdStorageRepository implements ColdStorageRepository {
 		}
 		keys.sort(Comparator.naturalOrder());
 		return keys;
+	}
+
+
+	/**
+	 * @see ColdStorageRepository#loadRange(String, Long, Integer)
+	 */
+	@Override
+	public Optional<byte[]> loadRange(
+			final String key,
+			final Long offset,
+			final Integer length) {
+		final Path path = this.pathOf(key);
+		Optional<byte[]> content = Optional.empty();
+		if (Files.isRegularFile(path)) {
+			try (RandomAccessFile file = new RandomAccessFile(path.toFile(), "r")) {
+				final byte[] range = new byte[(int) Math.min(length, Math.max(0, file.length() - offset))];
+				file.seek(offset);
+				file.readFully(range);
+				content = Optional.of(range);
+			}
+			catch (final IOException exception) {
+				throw new IntegrationException(new SimpleMessage("coldTiering.folder.read.error"), exception);
+			}
+		}
+		return content;
+	}
+
+	/**
+	 * @see ColdStorageRepository#head(String)
+	 */
+	@Override
+	public Optional<ColdObject> head(
+			final String key) {
+		final Path path = this.pathOf(key);
+		Optional<ColdObject> object = Optional.empty();
+		if (Files.isRegularFile(path)) {
+			try {
+				object = Optional.of(new ColdObject(key, Files.size(path)));
+			}
+			catch (final IOException exception) {
+				throw new IntegrationException(new SimpleMessage("coldTiering.folder.read.error"), exception);
+			}
+		}
+		return object;
+	}
+
+	/**
+	 * @see ColdStorageRepository#minimumPartSize()
+	 */
+	@Override
+	public Integer minimumPartSize() {
+		return 1;
+	}
+
+	/**
+	 * @see ColdStorageRepository#beginUpload(String, Map)
+	 */
+	@Override
+	public ColdUpload beginUpload(
+			final String key,
+			final Map<String, String> metadata) {
+		final Path path = this.pathOf(key);
+		final Path temporary = path.resolveSibling(path.getFileName() + FolderColdStorageRepository.TEMPORARY_SUFFIX);
+		try {
+			Files.createDirectories(path.getParent());
+			Files.deleteIfExists(temporary);
+			Files.createFile(temporary);
+		}
+		catch (final IOException exception) {
+			throw new IntegrationException(new SimpleMessage("coldTiering.folder.write.error"), exception);
+		}
+		return new ColdUpload() {
+
+			/** Bytes. */
+			private Long size = 0L;
+
+			@Override
+			public void part(
+					final byte[] content) {
+				try {
+					Files.write(temporary, content, StandardOpenOption.APPEND);
+					this.size += content.length;
+				}
+				catch (final IOException exception) {
+					throw new IntegrationException(new SimpleMessage("coldTiering.folder.write.error"), exception);
+				}
+			}
+
+			@Override
+			public ColdObject complete() {
+				try {
+					final StringBuilder sidecar = new StringBuilder();
+					metadata.forEach((
+							name,
+							value) -> sidecar.append(name).append('=').append(value).append('\n'));
+					FolderColdStorageRepository.writeAtomically(FolderColdStorageRepository.this.pathOf(key + FolderColdStorageRepository.METADATA_SUFFIX),
+							sidecar.toString().getBytes(StandardCharsets.UTF_8));
+					Files.move(temporary, path, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);
+				}
+				catch (final IOException exception) {
+					throw new IntegrationException(new SimpleMessage("coldTiering.folder.write.error"), exception);
+				}
+				return new ColdObject(key, this.size);
+			}
+
+			@Override
+			public void abort() {
+				try {
+					Files.deleteIfExists(temporary);
+				}
+				catch (final IOException exception) {
+					throw new IntegrationException(new SimpleMessage("coldTiering.folder.delete.error"), exception);
+				}
+			}
+		};
 	}
 
 }

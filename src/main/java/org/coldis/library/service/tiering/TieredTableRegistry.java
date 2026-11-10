@@ -15,6 +15,9 @@ import org.coldis.library.service.tiering.model.ColumnValues;
 import org.coldis.library.service.tiering.model.TieredEntityKeys;
 import org.coldis.library.model.SimpleMessage;
 import org.coldis.library.service.tiering.repository.HotTierRepository;
+import org.coldis.library.service.tiering.repository.PartitionHotTierRepository;
+import org.coldis.library.service.tiering.model.ArchiveUnit;
+import org.coldis.library.service.tiering.model.PartitionTieredTable;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.SmartInitializingSingleton;
@@ -53,6 +56,15 @@ public class TieredTableRegistry implements SmartInitializingSingleton {
 	/** Hot tier repository. */
 	@Autowired
 	private HotTierRepository hotTierRepository;
+
+	/**
+	 * Partition hot tier repository.
+	 */
+	@Autowired
+	private PartitionHotTierRepository partitionHotTierRepository;
+
+	/** Whether the partition archive schema was created. */
+	private Boolean isPartitionSchemaCreated = false;
 
 	/** Tables by id. */
 	private final Map<String, TieredTable> tablesById = new HashMap<>();
@@ -154,6 +166,51 @@ public class TieredTableRegistry implements SmartInitializingSingleton {
 	}
 
 	/**
+	 * Validates a partition-tiered table: range-partitioned on the partition column, the shard key
+	 * leading the primary key with a digit-only text or integer type, the partition column the
+	 * last key column. Reads only; the DDL belongs to {@code register}.
+	 *
+	 * @param table       Table.
+	 * @param columnTypes Column types.
+	 */
+	private void validatePartitioned(
+			final PartitionTieredTable table,
+			final Map<String, String> columnTypes) {
+		if (!"r".equals(this.partitionHotTierRepository.partitionStrategy(table.getTableName()).orElse(null))) {
+			throw new IntegrationException(new SimpleMessage("coldTiering.table.partition.strategy.invalid", new Object[] { table.getId(), table.getTableName() }));
+		}
+		if (!ColumnValues.TIMESTAMP.equals(columnTypes.get(table.getPartitionColumn()))) {
+			throw new IntegrationException(new SimpleMessage("coldTiering.table.partition.column.type.invalid",
+					new Object[] { table.getId(), table.getPartitionColumn(), columnTypes.get(table.getPartitionColumn()) }));
+		}
+		final List<String> primaryKey = this.partitionHotTierRepository.primaryKeyColumns(table.getTableName());
+		if (primaryKey.isEmpty() || !primaryKey.get(0).equals(table.getShardKeyColumn())) {
+			throw new IntegrationException(new SimpleMessage("coldTiering.table.shard.index.invalid", new Object[] { table.getId(), table.getShardKeyColumn() }));
+		}
+		if (!table.getPartitionColumn().equals(table.getLastKeyColumn())) {
+			throw new IntegrationException(new SimpleMessage("coldTiering.table.partition.column.last.invalid", new Object[] { table.getId(), table.getPartitionColumn() }));
+		}
+		final String shardKeyType = columnTypes.get(table.getShardKeyColumn());
+		if (!ColumnValues.TEXT_TYPES.contains(shardKeyType) && !ColumnValues.INTEGER_TYPES.contains(shardKeyType)) {
+			throw new IntegrationException(new SimpleMessage("coldTiering.table.shard.type.invalid", new Object[] { table.getId(), table.getShardKeyColumn(), shardKeyType }));
+		}
+	}
+
+	/**
+	 * Validates a definition against the database without registering it (tooling and tests).
+	 *
+	 * @param table Table.
+	 */
+	public void validate(
+			final TieredTable table) {
+		final Map<String, String> columnTypes = this.hotTierRepository.columnTypes(table.getTableName());
+		TieredTableRegistry.validate(table, columnTypes, this.hotTierRepository.nullableColumns(table.getTableName()), this.properties.of(table).getRehydration());
+		if (table.getArchiveUnit() == ArchiveUnit.PARTITION) {
+			this.validatePartitioned((PartitionTieredTable) table, columnTypes);
+		}
+	}
+
+	/**
 	 * Registers a definition.
 	 *
 	 * @param table Table.
@@ -168,11 +225,21 @@ public class TieredTableRegistry implements SmartInitializingSingleton {
 			for (final String statement : ColdTieringSchema.statements(table, columnTypes.get(table.getWatermarkColumn()), false)) {
 				this.hotTierRepository.executeDdl(statement);
 			}
+			if ((table.getArchiveUnit() == ArchiveUnit.PARTITION) && !this.isPartitionSchemaCreated) {
+				for (final String statement : ColdTieringSchema.partitionArchiveStatements()) {
+					this.hotTierRepository.executeDdl(statement);
+				}
+				this.isPartitionSchemaCreated = true;
+			}
 			columnTypes = this.hotTierRepository.columnTypes(table.getTableName());
 		}
 		final Rehydration rehydration = this.properties.of(table).getRehydration();
 		TieredTableRegistry.validate(table, columnTypes, this.hotTierRepository.nullableColumns(table.getTableName()), rehydration);
+		if (table.getArchiveUnit() == ArchiveUnit.PARTITION) {
+			this.validatePartitioned((PartitionTieredTable) table, columnTypes);
+		}
 		table.bindColumnTypes(columnTypes);
+		table.bindObjectPrefix(this.properties.of(table).getPrefix());
 		this.tablesById.put(table.getId(), table);
 		if (table.getEntityClass() != null) {
 			if (this.tablesByEntity.containsKey(table.getEntityClass())) {
@@ -180,8 +247,8 @@ public class TieredTableRegistry implements SmartInitializingSingleton {
 			}
 			this.tablesByEntity.put(table.getEntityClass(), table);
 		}
-		TieredTableRegistry.LOGGER.info("[COLD_TIERING] table={} registered: hot={} clock={} versioned={} rehydration={}", table.getId(), table.getTableName(),
-				table.clockExpression(), table.isVersioned(), rehydration);
+		TieredTableRegistry.LOGGER.info("[COLD_TIERING] table={} registered: hot={} clock={} versioned={} rehydration={} prefix={}", table.getId(),
+				table.getTableName(), table.clockExpression(), table.isVersioned(), rehydration, table.getObjectPrefix());
 	}
 
 	/**

@@ -5,7 +5,11 @@ import java.nio.file.Files;
 import java.util.List;
 
 import org.coldis.library.service.tiering.model.Rehydration;
+import org.coldis.library.service.tiering.model.PartitionTieredTable;
 import org.coldis.library.service.tiering.model.TieredTable;
+import org.springframework.context.annotation.DependsOn;
+import org.springframework.jdbc.core.JdbcTemplate;
+import javax.sql.DataSource;
 import org.coldis.library.service.tiering.model.TtlClock;
 import org.coldis.library.service.tiering.repository.FolderColdStorageRepository;
 import org.springframework.beans.factory.DisposableBean;
@@ -32,6 +36,15 @@ public class ColdTieringTestConfiguration {
 
 	/** Event table id. */
 	public static final String EVENT_TABLE = "tiered-event";
+
+	/** Partition-tiered table id. */
+	public static final String MONTHLY_TABLE = "tiered-monthly-snapshot";
+
+	/** Partition-tiered table name. */
+	public static final String MONTHLY_TABLE_NAME = "tiered_monthly_snapshot";
+
+	/** A disabled partition-tiered definition of the same table. */
+	public static final String MONTHLY_DISABLED_TABLE = "tiered-monthly-snapshot-disabled";
 
 	/**
 	 * Snapshots: composite key with a time version, JSONB payload, sliding TTL, rehydration.
@@ -109,6 +122,54 @@ public class ColdTieringTestConfiguration {
 				throw new IllegalStateException(exception);
 			}
 		};
+	}
+
+
+	/**
+	 * Partition-tiered definition.
+	 *
+	 * @return Definition.
+	 */
+	@Bean
+	public PartitionTieredTable tieredMonthlySnapshotTable() {
+		return new PartitionTieredTable(ColdTieringTestConfiguration.MONTHLY_TABLE, ColdTieringTestConfiguration.MONTHLY_TABLE_NAME, List.of("owner_id", "cached_at"))
+				.withShardKeyColumn("owner_id").withPartitionColumn("cached_at").withEntity(TieredMonthlySnapshot.class, null);
+	}
+
+	/**
+	 * Partition-tiered definition disabled by property (no entity binding: one per entity).
+	 *
+	 * @return Definition.
+	 */
+	@Bean
+	public PartitionTieredTable tieredMonthlySnapshotDisabledTable() {
+		return new PartitionTieredTable(ColdTieringTestConfiguration.MONTHLY_DISABLED_TABLE, ColdTieringTestConfiguration.MONTHLY_TABLE_NAME,
+				List.of("owner_id", "cached_at"));
+	}
+
+	/**
+	 * Recreates the monthly snapshot table as a range-partitioned table (Hibernate's create-drop
+	 * made a plain one): a legacy partition, three months, an open-ended one.
+	 *
+	 * @param  dataSource Data source.
+	 * @return            Marker.
+	 */
+	@Bean
+	@DependsOn("entityManagerFactory")
+	public String tieredMonthlySnapshotSchema(
+			final DataSource dataSource) {
+		final JdbcTemplate jdbcTemplate = new JdbcTemplate(dataSource);
+		final String table = ColdTieringTestConfiguration.MONTHLY_TABLE_NAME;
+		jdbcTemplate.execute("DROP TABLE IF EXISTS " + table + " CASCADE");
+		jdbcTemplate.execute("CREATE TABLE " + table + " (owner_id varchar(255) NOT NULL, cached_at timestamp(6) NOT NULL, data jsonb, created_at timestamptz NOT NULL,"
+				+ " updated_at timestamp(6) NOT NULL, last_accessed_at timestamp(6), archived_at timestamp(6), PRIMARY KEY (owner_id, cached_at))"
+				+ " PARTITION BY RANGE (cached_at)");
+		jdbcTemplate.execute("CREATE TABLE " + table + "_legacy PARTITION OF " + table + " FOR VALUES FROM (MINVALUE) TO ('2026-01-01 00:00:00')");
+		jdbcTemplate.execute("CREATE TABLE " + table + "_2026_01 PARTITION OF " + table + " FOR VALUES FROM ('2026-01-01 00:00:00') TO ('2026-02-01 00:00:00')");
+		jdbcTemplate.execute("CREATE TABLE " + table + "_2026_02 PARTITION OF " + table + " FOR VALUES FROM ('2026-02-01 00:00:00') TO ('2026-03-01 00:00:00')");
+		jdbcTemplate.execute("CREATE TABLE " + table + "_2026_03 PARTITION OF " + table + " FOR VALUES FROM ('2026-03-01 00:00:00') TO ('2026-04-01 00:00:00')");
+		jdbcTemplate.execute("CREATE TABLE " + table + "_plus PARTITION OF " + table + " FOR VALUES FROM ('2026-04-01 00:00:00') TO (MAXVALUE)");
+		return table;
 	}
 
 }
