@@ -399,6 +399,18 @@ public class ColdTieringProperties {
 		/** Export (partition tiering). */
 		private ExportProperties export = new ExportProperties();
 
+		/** Object key prefix of the table (the global prefix when unset). */
+		private String prefix;
+
+		public String getPrefix() {
+			return this.prefix;
+		}
+
+		public void setPrefix(
+				final String prefix) {
+			this.prefix = prefix;
+		}
+
 		/** Partition sweep (partition tiering). */
 		private SweepProperties partitionSweep = new SweepProperties();
 
@@ -590,6 +602,7 @@ public class ColdTieringProperties {
 			resolved.eviction = this.eviction.over(defaults.eviction);
 			resolved.backfill = this.backfill.over(defaults.backfill);
 			resolved.export = this.export.over(defaults.export);
+			resolved.prefix = this.prefix == null ? defaults.prefix : this.prefix;
 			resolved.partitionSweep = this.partitionSweep.over(defaults.partitionSweep);
 			return resolved;
 		}
@@ -717,6 +730,9 @@ public class ColdTieringProperties {
 		final TableProperties resolved = this.table.getOrDefault(tieredTable.getId(), new TableProperties()).over(this.defaults);
 		if (resolved.rehydration == null) {
 			resolved.rehydration = tieredTable.getRehydration();
+		}
+		if (resolved.prefix == null) {
+			resolved.prefix = this.prefix;
 		}
 		return resolved;
 	}

@@ -7,6 +7,7 @@ import java.util.Map;
 import java.util.Optional;
 
 import org.coldis.library.exception.IntegrationException;
+import org.coldis.library.service.tiering.model.ColdTable;
 import org.coldis.library.service.tiering.model.ColdTieringPropertyNames;
 import org.coldis.library.model.SimpleMessage;
 import org.coldis.library.serialization.ObjectMapperHelper;
@@ -52,6 +53,18 @@ public class TieredRepository {
 	/** Object key prefix. */
 	@Value(ColdTieringPropertyNames.OBJECT_PREFIX_PLACEHOLDER)
 	private String objectPrefix;
+
+	/**
+	 * Object key prefix of a table: the one bound at registration, else the global one.
+	 *
+	 * @param  table Table.
+	 * @return       Prefix.
+	 */
+	private String prefixOf(
+			final ColdTable table) {
+		final String bound = table instanceof final TieredTable tiered ? tiered.getObjectPrefix() : null;
+		return bound == null ? this.objectPrefix : bound;
+	}
 
 	/** Hot tier. */
 	@Autowired
@@ -145,7 +158,7 @@ public class TieredRepository {
 	public String objectKeyOf(
 			final TieredTable table,
 			final TieredRowKey key) {
-		return this.objectKeyStrategy.keyOf(this.objectPrefix, table, ColumnValues.toSegments(table, table.getColumnTypes(), key.values()),
+		return this.objectKeyStrategy.keyOf(this.prefixOf(table), table, ColumnValues.toSegments(table, table.getColumnTypes(), key.values()),
 				this.codec.extension());
 	}
 
@@ -374,7 +387,7 @@ public class TieredRepository {
 		final String lastType = columnTypes.get(table.getLastKeyColumn());
 		final String ceiling = asOf == null ? null : ColumnValues.toSegment(lastType, ColumnValues.ofMoment(lastType, asOf));
 		String newestSegment = null;
-		for (final String objectKey : this.coldStorageRepository.list(this.objectKeyStrategy.prefixOf(this.objectPrefix, table, segments))) {
+		for (final String objectKey : this.coldStorageRepository.list(this.objectKeyStrategy.prefixOf(this.prefixOf(table), table, segments))) {
 			final String segment = this.objectKeyStrategy.lastSegmentOf(objectKey, this.codec.extension());
 			if (((ceiling == null) || (segment.compareTo(ceiling) <= 0)) && ((newestSegment == null) || (segment.compareTo(newestSegment) > 0))) {
 				newestSegment = segment;

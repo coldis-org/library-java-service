@@ -361,7 +361,7 @@ Global, `org.coldis.library.service.tiering.`:
 | `payload-codec` / `object-key-strategy` | `gzip-json` / `path` | Which codec and layout bean is active; another value with a consumer bean plugs a custom one |
 | `folder.root` | `${java.io.tmpdir}/cold-tiering` | Root directory of the folder storage |
 | `s3.bucket` | — | The bucket; the client is the consumer's `S3Client` bean named `coldTieringS3Client` when present, else its unique (or `@Primary`) one |
-| `prefix` | `cold-tiering/` | Key prefix |
+| `prefix` | `cold-tiering/` | Key prefix of every object; `table.<tableId>.prefix` overrides it for one table (its rows, or its shards, indexes and manifests), bound at registration |
 | `create-schema` | `false` | Run the DDL at startup (tests) |
 | `upload.concurrency` / `backfill.concurrency` / `touch.concurrency` | `1` / `1` / `1-2` | JMS listeners per instance: write-through uploads (`cold-tiering/upload`), backfill archives (`cold-tiering/backfill`, they set the backfill's throughput), touches |
 | `defaults.*` | below | Values every table inherits |

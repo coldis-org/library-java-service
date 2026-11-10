@@ -219,6 +219,7 @@ public class TieredTableRegistry implements SmartInitializingSingleton {
 			this.validatePartitioned((PartitionTieredTable) table, columnTypes);
 		}
 		table.bindColumnTypes(columnTypes);
+		table.bindObjectPrefix(this.properties.of(table).getPrefix());
 		this.tablesById.put(table.getId(), table);
 		if (table.getEntityClass() != null) {
 			if (this.tablesByEntity.containsKey(table.getEntityClass())) {
@@ -226,8 +227,8 @@ public class TieredTableRegistry implements SmartInitializingSingleton {
 			}
 			this.tablesByEntity.put(table.getEntityClass(), table);
 		}
-		TieredTableRegistry.LOGGER.info("[COLD_TIERING] table={} registered: hot={} clock={} versioned={} rehydration={}", table.getId(), table.getTableName(),
-				table.clockExpression(), table.isVersioned(), rehydration);
+		TieredTableRegistry.LOGGER.info("[COLD_TIERING] table={} registered: hot={} clock={} versioned={} rehydration={} prefix={}", table.getId(),
+				table.getTableName(), table.clockExpression(), table.isVersioned(), rehydration, table.getObjectPrefix());
 	}
 
 	/**

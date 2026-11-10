@@ -187,7 +187,11 @@ public class PartitionTieringServiceTest extends ContainerTestHelper {
 			Assertions.assertTrue(Files.isRegularFile(this.pathOf(this.partitionTieredRepository.blocksKey(this.table, PartitionTieringServiceTest.JANUARY, shard.shard()))));
 			Assertions.assertTrue(Files.isRegularFile(this.pathOf(this.partitionTieredRepository.indexKey(this.table, PartitionTieringServiceTest.JANUARY, shard.shard()))));
 		}
-		Assertions.assertEquals("cold-tiering/tiered-monthly-snapshot/" + PartitionTieringServiceTest.JANUARY + "/manifest.json.gz", archive.manifestKey());
+		// The table's own prefix applies to the manifest, the indexes and the blocks.
+		Assertions.assertEquals("cold-tiering-full/tiered-monthly-snapshot/" + PartitionTieringServiceTest.JANUARY + "/manifest.json.gz", archive.manifestKey());
+		Assertions.assertTrue(Files.isRegularFile(this.pathOf(archive.manifestKey())));
+		Assertions.assertTrue(this.partitionTieredRepository.blocksKey(this.table, PartitionTieringServiceTest.JANUARY, 0).startsWith("cold-tiering-full/tiered-monthly-snapshot/"));
+		Assertions.assertFalse(Files.isDirectory(this.coldStorage.getRoot().resolve("cold-tiering/tiered-monthly-snapshot")));
 		// The verification sampled rows back through range reads; hot reads cost none.
 		final Long rangeReads = this.partitionTieredRepository.getRangeReads();
 		Assertions.assertTrue(rangeReads > 0);

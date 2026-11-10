@@ -571,7 +571,7 @@ public class ColdTieringServiceTest extends ContainerTestHelper {
 					archivedAt -> archivedAt != null, TestHelper.REGULAR_WAIT * 4, TestHelper.SHORT_WAIT));
 		}
 		final String objectKey = this.tieringServiceComponent.objectKeyOf(this.tieringServiceComponent.keyOf(TieredEvent.class, recentKey));
-		Assertions.assertTrue(objectKey.startsWith("cold-tiering/tiered-event/web/") && objectKey.endsWith("Z.json.gz"), objectKey);
+		Assertions.assertTrue(objectKey.startsWith("cold-tiering-events/tiered-event/web/") && objectKey.endsWith("Z.json.gz"), objectKey);
 
 		// The TTL (15 days) counts from the column: the old event goes, the recent one stays.
 		Assertions.assertTrue(this.batchServiceComponent.run(ColdTieringTestConfiguration.EVENT_TABLE, TieringBatch.EVICTION));
