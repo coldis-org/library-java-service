@@ -12,8 +12,12 @@ import java.util.Optional;
 
 import org.coldis.library.exception.IntegrationException;
 import org.coldis.library.persistence.keyvalue.KeyValueServiceComponent;
+import org.coldis.library.persistence.keyvalue.KeyValue;
+import org.coldis.library.service.batch.BatchExecutor;
 import org.coldis.library.service.batch.BatchService;
 import org.coldis.library.service.tiering.ColdTieringBatchServiceComponent;
+import org.coldis.library.service.tiering.ColdTieringProperties;
+import org.coldis.library.service.tiering.ColdTieringProperties.ExportProperties;
 import org.coldis.library.service.tiering.ColdTieringServiceComponent;
 import org.coldis.library.service.tiering.PartitionTieringServiceComponent;
 import org.coldis.library.service.tiering.TieredHit;
@@ -47,6 +51,8 @@ import org.springframework.beans.factory.annotation.Qualifier;
 import org.coldis.library.service.tiering.model.TieredTable;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.context.SpringBootTest.WebEnvironment;
+import org.springframework.jms.config.JmsListenerEndpointRegistry;
+import org.springframework.jms.listener.AbstractMessageListenerContainer;
 import org.springframework.transaction.annotation.Transactional;
 
 /**
@@ -118,6 +124,15 @@ public class PartitionTieringServiceTest extends ContainerTestHelper {
 
 	@Autowired
 	private DataSource dataSource;
+
+	@Autowired
+	private ColdTieringProperties properties;
+
+	@Autowired
+	private BatchService batchService;
+
+	@Autowired
+	private JmsListenerEndpointRegistry listenerRegistry;
 
 	@BeforeEach
 	public void beforeEach() {
@@ -485,6 +500,54 @@ public class PartitionTieringServiceTest extends ContainerTestHelper {
 		Assertions.assertEquals(ColdTieringTestConfiguration.MONTHLY_TABLE_NAME + "_2026_02", february.name());
 		Assertions.assertThrows(IntegrationException.class, () -> this.partitionTieringServiceComponent.startExport(this.table, february));
 		Assertions.assertTrue(this.archiveRepository.find(ColdTieringTestConfiguration.MONTHLY_TABLE, february.name()).orElseThrow().manifestKey() == null);
+	}
+
+	private BatchExecutor<?> exportRecord() {
+		return (BatchExecutor<?>) this.keyValueService.getRepository()
+				.findById(BatchService.BATCH_KEY_PREFIX + TieringBatch.EXPORT.keySuffix(ColdTieringTestConfiguration.MONTHLY_TABLE)).map(KeyValue::getValue).orElse(null);
+	}
+
+	private Optional<PartitionArchiveState> stateOf(
+			final String partition) {
+		return this.archiveRepository.find(ColdTieringTestConfiguration.MONTHLY_TABLE, partition).map(PartitionArchive::state);
+	}
+
+	@Test
+	@DisplayName("Export: no partition export starts while the export queue is above max-pending")
+	public void testExportBacklogGuard() throws Exception {
+		final String february = ColdTieringTestConfiguration.MONTHLY_TABLE_NAME + "_2026_02";
+		final List<AbstractMessageListenerContainer> listeners = ColdTieringTestConfiguration.listenerContainersOf(this.listenerRegistry,
+				"cold-tiering/export");
+		Assertions.assertFalse(listeners.isEmpty());
+		final ExportProperties export = this.properties.getTable().get(ColdTieringTestConfiguration.MONTHLY_TABLE).getExport();
+		// Below one partition's shards: January's shards fill the queue past it.
+		export.setMaxPending(2L);
+		try {
+			this.seedMonths();
+			listeners.forEach(AbstractMessageListenerContainer::stop);
+			this.partitionTieringServiceComponent.partitionLoaded(ColdTieringTestConfiguration.MONTHLY_TABLE, PartitionTieringServiceTest.JANUARY_MOMENT, null);
+			this.partitionTieringServiceComponent.partitionLoaded(ColdTieringTestConfiguration.MONTHLY_TABLE, PartitionTieringServiceTest.FEBRUARY_MOMENT, null);
+			Assertions.assertTrue(this.batchServiceComponent.run(ColdTieringTestConfiguration.MONTHLY_TABLE, TieringBatch.EXPORT));
+			Assertions.assertTrue(TestHelper.waitUntilValid(() -> this.archive().map(PartitionArchive::state).orElse(null), state -> state == PartitionArchiveState.EXPORTING,
+					TestHelper.REGULAR_WAIT * 4, TestHelper.SHORT_WAIT));
+			Assertions.assertTrue(TestHelper.waitUntilValid(this::exportRecord,
+					batchRecord -> (batchRecord != null) && batchRecord.getLastBatchPostponed() && (batchRecord.getPostponedCount() >= 2), TestHelper.REGULAR_WAIT * 4,
+					TestHelper.SHORT_WAIT));
+			// February waits, still loaded; the run waits too.
+			Assertions.assertEquals(Optional.of(PartitionArchiveState.LOADED), this.stateOf(february));
+			Assertions.assertFalse(this.exportRecord().isFinished());
+
+			// The listeners drain January's shards: February's export starts and both verify.
+			listeners.forEach(AbstractMessageListenerContainer::start);
+			Assertions.assertTrue(TestHelper.waitUntilValid(() -> this.stateOf(february).orElse(null), state -> state == PartitionArchiveState.VERIFIED,
+					TestHelper.REGULAR_WAIT * 8, TestHelper.SHORT_WAIT));
+			Assertions.assertEquals(PartitionArchiveState.VERIFIED, this.archive().orElseThrow().state());
+		}
+		finally {
+			listeners.stream().filter(container -> !container.isRunning()).forEach(AbstractMessageListenerContainer::start);
+			export.setMaxPending(null);
+			this.batchService.cancel(TieringBatch.EXPORT.keySuffix(ColdTieringTestConfiguration.MONTHLY_TABLE));
+		}
 	}
 
 	@Test

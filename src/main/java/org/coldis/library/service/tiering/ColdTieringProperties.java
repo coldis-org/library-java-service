@@ -42,6 +42,9 @@ public class ColdTieringProperties {
 	 */
 	public static class BatchProperties {
 
+		/** Default most messages a batch's queue may hold for a step to enqueue more. */
+		public static final Long DEFAULT_MAX_PENDING = 10_000L;
+
 		/** Whether the batch runs. */
 		private Boolean enabled;
 
@@ -56,6 +59,13 @@ public class ColdTieringProperties {
 
 		/** Longest run. */
 		private Duration finishWithin;
+
+		/**
+		 * Most messages the batch's queue may hold for a step to enqueue more (backfill:
+		 * {@code cold-tiering/backfill}; export: {@code cold-tiering/export}): above it the step
+		 * enqueues nothing and the run waits for its next step.
+		 */
+		private Long maxPending;
 
 		/**
 		 * Gets the enabled.
@@ -153,6 +163,25 @@ public class ColdTieringProperties {
 		}
 
 		/**
+		 * Gets the most messages the batch's queue may hold for a step to enqueue more.
+		 *
+		 * @return The max pending.
+		 */
+		public Long getMaxPending() {
+			return this.maxPending;
+		}
+
+		/**
+		 * Sets the most messages the batch's queue may hold for a step to enqueue more.
+		 *
+		 * @param maxPending New max pending.
+		 */
+		public void setMaxPending(
+				final Long maxPending) {
+			this.maxPending = maxPending;
+		}
+
+		/**
 		 * This batch's values over the defaults.
 		 *
 		 * @param  defaults Defaults.
@@ -167,6 +196,7 @@ public class ColdTieringProperties {
 			resolved.delayBetweenChunks = Objects.requireNonNullElse(this.delayBetweenChunks,
 					Objects.requireNonNullElse(defaults.delayBetweenChunks, Duration.ofSeconds(1)));
 			resolved.finishWithin = Objects.requireNonNullElse(this.finishWithin, Objects.requireNonNullElse(defaults.finishWithin, Duration.ofDays(1)));
+			resolved.maxPending = Objects.requireNonNullElse(this.maxPending, Objects.requireNonNullElse(defaults.maxPending, BatchProperties.DEFAULT_MAX_PENDING));
 			return resolved;
 		}
 
@@ -312,6 +342,7 @@ public class ColdTieringProperties {
 			resolved.setChunkSize(batch.getChunkSize());
 			resolved.setDelayBetweenChunks(batch.getDelayBetweenChunks());
 			resolved.setFinishWithin(this.getFinishWithin() == null ? Objects.requireNonNullElse(defaults.getFinishWithin(), Duration.ofDays(2)) : this.getFinishWithin());
+			resolved.setMaxPending(batch.getMaxPending());
 			resolved.quietPeriod = Objects.requireNonNullElse(this.quietPeriod, Objects.requireNonNullElse(defaults.quietPeriod, Duration.ofDays(2)));
 			resolved.excludePartitions = Objects.requireNonNullElse(this.excludePartitions, Objects.requireNonNullElse(defaults.excludePartitions, "*_legacy"));
 			resolved.shardStrategy = Objects.requireNonNullElse(this.shardStrategy, Objects.requireNonNullElse(defaults.shardStrategy, ShardStrategy.EQUI_DEPTH));
@@ -361,6 +392,7 @@ public class ColdTieringProperties {
 			resolved.setDelayBetweenChunks(
 					this.getDelayBetweenChunks() == null ? Objects.requireNonNullElse(defaults.getDelayBetweenChunks(), Duration.ofSeconds(1)) : this.getDelayBetweenChunks());
 			resolved.setFinishWithin(this.getFinishWithin() == null ? Objects.requireNonNullElse(defaults.getFinishWithin(), Duration.ofDays(3)) : this.getFinishWithin());
+			resolved.setMaxPending(batch.getMaxPending());
 			resolved.holdAfterLoad = Objects.requireNonNullElse(this.holdAfterLoad, Objects.requireNonNullElse(defaults.holdAfterLoad, Duration.ofDays(5)));
 			return resolved;
 		}

@@ -193,8 +193,13 @@ the depth-proportional window to drain faster.
   `getCreditPacketsScaled()` / `getCreditPacketsDecayed()` — counters (used by
   tests and available for metrics). `Scaled` counts inflations, `Decayed` counts
   window shrink grants.
-- DEBUG `DynamicCredit — depth query queue='…' exists=… messageCount=…` — every
-  real depth read.
+- DEBUG `Queue depth — queue='…' exists=… messageCount=…` — every real depth read.
+  The depth query lives in `ArtemisQueueDepthReader` (shared with the cold tiering's
+  backpressure), so its lines — this one and the WARNs `Queue depth — could not
+  create query session` / `could not query depth for queue '…'` — come from the
+  `org.coldis.library.service.jms.ArtemisQueueDepthReader` logger. Before that
+  extraction they read `DynamicCredit — …` on `DynamicCreditClientInterceptor`'s
+  logger: update log filters and alerts that matched the old text or logger.
 - DEBUG `DynamicCredit — queue=… requested=… granted=… outstanding=…` — every
   inflated packet; `DynamicCredit — decay queue=…` — every decayed packet.
 - INFO `DynamicCredit — queue=… depth=… requested=… granted=… totalOutstanding=…`

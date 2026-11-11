@@ -7,6 +7,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.LinkedHashMap;
 import java.util.Map;
+import java.util.Optional;
 import java.util.concurrent.ScheduledFuture;
 
 import org.coldis.library.exception.BusinessException;
@@ -15,6 +16,7 @@ import org.coldis.library.service.tiering.model.TieredTable;
 import org.coldis.library.helper.DateTimeHelper;
 import org.coldis.library.service.batch.BatchAction;
 import org.coldis.library.service.batch.BatchExecutor;
+import org.coldis.library.service.batch.BatchPostponedException;
 import org.coldis.library.service.batch.BatchService;
 import org.coldis.library.service.tiering.ColdTieringProperties.BatchProperties;
 import org.coldis.library.service.tiering.ColdTieringProperties.TableProperties;
@@ -136,6 +138,48 @@ public class ColdTieringBatchServiceComponent implements SmartInitializingSingle
 	}
 
 	/**
+	 * Whether a batch's backlog (requests pending on its queue) is above its max pending, so the
+	 * step must enqueue nothing. Fails safe: a backlog that cannot be read counts as full.
+	 *
+	 * @param  backlog    Requests pending, empty when unreadable.
+	 * @param  maxPending Max pending.
+	 * @return            Whether the backlog is full.
+	 */
+	private static Boolean isBacklogFull(
+			final Optional<Long> backlog,
+			final Long maxPending) {
+		return backlog.map(pending -> pending > maxPending).orElse(true);
+	}
+
+	/**
+	 * Logs a step's backlog decision with the depth, never a key.
+	 *
+	 * @param table      Table.
+	 * @param batch      Batch.
+	 * @param backlog    Requests pending, empty when unreadable.
+	 * @param maxPending Max pending.
+	 * @param isFull     Whether the backlog is full (the step is skipped).
+	 */
+	private static void logBacklog(
+			final TieredTable table,
+			final TieringBatch batch,
+			final Optional<Long> backlog,
+			final Long maxPending,
+			final Boolean isFull) {
+		if (backlog.isEmpty()) {
+			ColdTieringBatchServiceComponent.LOGGER.warn("[COLD_TIERING_{}] table={} depth unreadable: skipped (fail safe), the run waits for its next step", batch,
+					table.getId());
+		}
+		else if (isFull) {
+			ColdTieringBatchServiceComponent.LOGGER.info("[COLD_TIERING_{}] table={} depth={} maxPending={} skipped (backlog full)", batch, table.getId(), backlog.get(),
+					maxPending);
+		}
+		else {
+			ColdTieringBatchServiceComponent.LOGGER.info("[COLD_TIERING_{}] table={} depth={} maxPending={}", batch, table.getId(), backlog.get(), maxPending);
+		}
+	}
+
+	/**
 	 * Eviction GET: the next chunk while evictable rows remain; empty ends the run.
 	 *
 	 * @param  lastChunk Last chunk, null on the first call.
@@ -177,22 +221,34 @@ public class ColdTieringBatchServiceComponent implements SmartInitializingSingle
 
 	/**
 	 * Backfill GET: the next unarchived keys after the cursor, in key order; empty ends the run.
+	 * While the backfill queue holds more than the table's {@code backfill.max-pending} (or its
+	 * depth cannot be read) nothing is selected and the run waits for its next step with its
+	 * cursor in place.
 	 *
 	 * @param  lastKey   Last key enqueued (cursor: a key enqueued in this run is never selected
 	 *                       again), null on the first call.
 	 * @param  size      Keys per call.
 	 * @param  arguments Batch arguments (table).
 	 * @return           The next keys.
+	 * @throws BatchPostponedException While the backlog is full (the run waits).
 	 */
 	@Transactional(
 			propagation = Propagation.REQUIRED,
-			readOnly = true
+			readOnly = true,
+			noRollbackFor = BatchPostponedException.class
 	)
 	public List<TieredRowKey> findNextKeysToArchive(
 			final TieredRowKey lastKey,
 			final Long size,
 			final Map<String, String> arguments) {
 		final TieredTable table = this.registry.getTable(arguments.get(ColdTieringBatchServiceComponent.TABLE_ARGUMENT));
+		final Optional<Long> backlog = this.tieringServiceComponent.findBackfillBacklog();
+		final Long maxPending = this.properties.of(table).getBackfill().getMaxPending();
+		final Boolean isFull = ColdTieringBatchServiceComponent.isBacklogFull(backlog, maxPending);
+		ColdTieringBatchServiceComponent.logBacklog(table, TieringBatch.BACKFILL, backlog, maxPending, isFull);
+		if (isFull) {
+			throw new BatchPostponedException("backfill backlog full or unreadable");
+		}
 		return this.hotTierRepository.findNextUnarchivedKeys(table, lastKey, size);
 	}
 
@@ -221,20 +277,34 @@ public class ColdTieringBatchServiceComponent implements SmartInitializingSingle
 	}
 
 	/**
-	 * GET of the export batch: the next partition to export, one per step.
+	 * GET of the export batch: the next partition to export, one per step. While the export queue
+	 * holds more than the table's {@code export.max-pending} shard requests (or its depth cannot be
+	 * read) no export starts and the run waits for its next step.
 	 *
 	 * @param  lastItem  Last item.
 	 * @param  size      Ignored.
 	 * @param  arguments Arguments.
-	 * @return           Item.
+	 * @return           Item; empty when no partition is due.
+	 * @throws BatchPostponedException While a partition is due and the backlog is full (the run
+	 *                                     waits).
 	 */
 	public List<ExportItem> findNextExport(
 			final ExportItem lastItem,
 			final Long size,
 			final Map<String, String> arguments) {
 		final PartitionTieredTable table = (PartitionTieredTable) this.registry.getTable(arguments.get(ColdTieringBatchServiceComponent.TABLE_ARGUMENT));
-		return this.partitionTieringServiceComponent.findExportCandidate(table).map(partition -> List.of(new ExportItem(table.getId(), partition.name())))
-				.orElse(List.of());
+		final List<ExportItem> items = this.partitionTieringServiceComponent.findExportCandidate(table)
+				.map(partition -> List.of(new ExportItem(table.getId(), partition.name()))).orElse(List.of());
+		if (!items.isEmpty()) {
+			final Optional<Long> backlog = this.partitionTieringServiceComponent.findExportBacklog();
+			final Long maxPending = this.properties.of(table).getExport().getMaxPending();
+			final Boolean isFull = ColdTieringBatchServiceComponent.isBacklogFull(backlog, maxPending);
+			ColdTieringBatchServiceComponent.logBacklog(table, TieringBatch.EXPORT, backlog, maxPending, isFull);
+			if (isFull) {
+				throw new BatchPostponedException("export backlog full or unreadable");
+			}
+		}
+		return items;
 	}
 
 	/**

@@ -285,7 +285,10 @@ entity and its `@IdClass`) and fails the boot otherwise.
   `UPDATE hot SET archived_at = NULL[, last_accessed_at = now] WHERE key`, and the key posted to
   `cold-tiering/upload` after the commit.
 - **Archive** (`archive(key)`, the upload listener for write-through requests and the backfill
-  listener for backfill requests, one message per row, each in its own `REQUIRED` transaction): `SELECT updated_at,
+  listener for backfill requests, one message per row, each in its own `REQUIRED` transaction):
+  first a plain, lock-free `SELECT archived_at >= updated_at … WHERE key`: a row no longer hot
+  (evicted, deleted) or already archived at its current watermark (a duplicate request) is dropped
+  there, without a lock, an upload or a write. Only a row that still needs an upload goes on to `SELECT updated_at,
   row_to_json(hot), archived_at >= updated_at … FOR UPDATE` (missing, or its current content
   already archived → nothing to do); encode; `PUT` to the derived key; `UPDATE hot SET archived_at = :watermark WHERE key AND updated_at = :watermark`,
   the watermark being the value read and uploaded, not the wall clock (0 rows → the rewrite's own
@@ -309,6 +312,21 @@ entity and its `@IdClass`) and fails the boot otherwise.
   template still releases it at its transaction's commit). The backfill listener archives it, one
   row per transaction, so a row's lock covers only its own upload and the batch chunk holds no row
   lock.
+  **Backpressure**: before selecting a chunk, the GET asks `ColdTieringServiceComponent.findBackfillBacklog()`
+  for the depth of `cold-tiering/backfill` (Artemis core `queueQuery` message count, cached 100 ms,
+  through `org.coldis.library.service.jms.QueueDepthComponent`, a generic component any batch can use
+  for its own queue). Above the table's `backfill.max-pending` (default `10000`) the
+  step selects and enqueues nothing: the GET throws `BatchPostponedException`, the batch service's
+  explicit *postponed* signal (caught by the engine; GET delegates that never throw it are
+  unchanged, an empty list still finishes, a null result or a missing GET delegate is an error) (the run keeps its cursor and count, does not finish, and the next
+  step comes after the usual delay; the record shows `lastBatchPostponed` and `postponedCount`, each
+  postponement is logged at INFO with the batch key, and a WARN every
+  `org.coldis.configuration.service.batch-postponed-warn-steps` consecutive steps, default `60`; a
+  transactional GET declares `noRollbackFor = BatchPostponedException.class`). A depth that cannot be read (no Artemis connection factory,
+  broker unreachable) counts as full, with a `WARN`: the backfill fails safe, never enqueueing
+  blind. The queue is shared by every table, so each table's `max-pending` is compared with the
+  whole queue's depth. While a run waits, it stays active, so the hourly crons join it instead of
+  restarting the cursor and re-enqueueing the keys still waiting in the queue.
   The keyset cursor never selects again a key enqueued earlier in the run, archived yet or not.
   Resumes from the batch record after a restart; a run restarted from scratch (expired, or the
   record cleaned) re-enqueues the keys not archived yet, which is harmless: a duplicate request
@@ -332,7 +350,7 @@ entity and its `@IdClass`) and fails the boot otherwise.
 | Concurrent archives of one key never write older content over newer | Keys are deterministic, so every archive of a row writes the same object; `archive` reads the row `FOR UPDATE` and uploads while holding the lock, so archives of one key run one at a time and each uploads the content current at its turn. A writer rewriting the row waits for the upload in flight, then its own message uploads the new content. **Trade-off**: holding the row lock across the S3 `PUT` is what rules out an older-over-newer overwrite without a version in the key; its cost is that writers to that row wait on S3 latency (plus the row's own upload after theirs). Mitigation: the consumer's `S3Client` call and attempt timeouts well below `long-timeout`; the lock covers one row, so unrelated writers never wait. Revisit with S3 conditional writes (`If-Match` / `If-None-Match` on the object's ETag, the uploaded watermark in the metadata) if row-level write contention shows up; then the PUT could leave the lock |
 | A rewrite during an upload is never marked archived | `archived_at` set to the uploaded watermark, only `WHERE updated_at = :watermark`; a concurrent rewrite with an earlier timestamp, or clock skew between instances, cannot satisfy `archived_at >= updated_at` with a mark that is not its own watermark |
 | A row is never evicted before S3 holds its current content | `archived_at >= updated_at` in the eviction predicate, repeated on the delete itself. It covers every write that bumps the watermark, `afterWrite` or not; a write that leaves the watermark unchanged is outside the contract (the watermark is "bumped by every write" by definition) |
-| Duplicate upload or touch messages (a backfill run re-enqueueing keys, a key written while the backfill enqueues it) | the archive, under the row lock, skips a row whose current content is already archived (`archived_at >= updated_at`): nothing uploaded, the mark unchanged; a request for content not yet archived uploads it once, the next one finds it archived; `GREATEST` makes the touch a no-op |
+| Duplicate upload or touch messages (a backfill run re-enqueueing keys, a key written while the backfill enqueues it) | a lock-free read first drops a request whose row is gone (evicted) or already archived, so duplicates cost one indexed read and no lock; then the archive, under the row lock, skips a row whose current content is already archived (`archived_at >= updated_at`): nothing uploaded, the mark unchanged; a request for content not yet archived uploads it once, the next one finds it archived; `GREATEST` makes the touch a no-op |
 | Crash between PUT and mark | redelivery repeats the PUT (idempotent) |
 | Integrity in transit | the SDK's transfer checksums on PUT and GET; no digest in the database |
 | Two instances rehydrate the same key | `INSERT … ON CONFLICT DO NOTHING` |
@@ -377,40 +395,57 @@ tunables):
 | `rehydration` | the definition's | `INSERT` or `NONE` |
 | `eviction.{enabled,cron,chunk-size,delay-between-chunks,finish-within}` | `false`, `0 0 * * * *`, `2000`, `PT2S`, `P1D` | `-` disables the cron; the cron (re)starts a run only when none is active |
 | `backfill.{enabled,cron,chunk-size,delay-between-chunks,finish-within}` | `false`, `0 30 * * * *`, `1000`, `PT30S`, `P1D` | keys enqueued per chunk and the pause between chunks (*Sizing the backfill*); the cron (re)starts a run only when none is active |
+| `backfill.max-pending` | `10000` | most messages `cold-tiering/backfill` may hold for a step to enqueue a chunk; above it (or when the depth cannot be read) the step is skipped and the run waits for its next step with its cursor in place (*Sizing the backfill*) |
 
 #### Sizing the backfill
 
-The backfill only enqueues; the backfill listeners archive. Match the enqueue rate to what the
-consumers drain:
+The backfill only enqueues; the backfill listeners archive. `backfill.max-pending` is what bounds
+the backlog: a step enqueues a chunk only while `cold-tiering/backfill` holds at most
+`max-pending` messages, so the queue never exceeds about `max-pending + chunk-size` whatever the
+enqueue rate, and a run that outpaces its consumers simply waits. `chunk-size` and
+`delay-between-chunks` only smooth the enqueue rate; they no longer have to match the consumers to
+keep the queue bounded. Still, a rate near what the consumers drain avoids long waits:
 
 `chunk-size / delay-between-chunks ≈ consumers × 1 / per-row latency`
 
 with consumers = `backfill.concurrency` × instances and the per-row latency that of one archive
-(lock, `row_to_json`, gzip, `PUT`, mark: ~30 ms in production). Enqueueing faster only grows the
-queue, which is bounded by what the broker holds (a backlog of 1 M small messages is fine), not by
-the database: no row is locked while its key waits. The defaults suit one consumer: `1000` keys
-every `PT30S` ≈ 33 keys/s ≈ one consumer at ~30 ms per row, ~2.9 M rows a day, inside the `P1D`
-`finish-within` (a longer backfill resumes in the next run). A high-volume consumer raises both,
-per table, e.g.:
+(lock, `row_to_json`, gzip, `PUT`, mark: ~30 ms in production). Keep `max-pending` at a few
+minutes of drain (the default `10000` is ~10 s at 1,000 rows/s, ~5 min for one consumer): a
+deeper backlog buys nothing, and every key in it is one a restarted run may enqueue again. The
+defaults suit one consumer: `1000` keys every `PT30S` ≈ 33 keys/s ≈ one consumer at ~30 ms per
+row, ~2.9 M rows a day, inside the `P1D` `finish-within` (a longer backfill resumes in the next
+run). A high-volume consumer raises the consumers and the rate, per table, e.g.:
 
 ```properties
 org.coldis.library.service.tiering.backfill.concurrency=8-16
 org.coldis.library.service.tiering.table.<tableId>.backfill.chunk-size=5000
 org.coldis.library.service.tiering.table.<tableId>.backfill.delay-between-chunks=PT5S
+org.coldis.library.service.tiering.table.<tableId>.backfill.max-pending=20000
 ```
 
-≈ 1,000 keys/s enqueued, drained by 16 listeners per instance across a few instances at ~30 ms
-per row. Raise `backfill.concurrency` together with the backfill rate: a rate above what the
-consumers drain only grows the backlog. Write-through uploads have their own queue and consumers,
-so a backfill backlog never delays them. Alert on the depth and the oldest message's age of
-`cold-tiering/backfill` and `cold-tiering/upload` (a growing backfill queue means the rate
-outpaces the consumers; a growing upload queue means write-through lags, and eviction waits for
-it).
+Why the bound matters: without it, a backfill enqueueing ~2,000 keys/s against ~1,000/s consumed,
+restarted hourly from the beginning of the table (re-enqueueing every key not yet archived,
+including keys already waiting), once queued ~260 M messages for ~165 M rows; 48 consumers locking
+mostly evicted or archived keys loaded the database until an unrelated batch timed out. The
+backlog guard stops the growth, the postponed run keeps the hourly crons from restarting it, and
+the lock-free read drops the duplicates without a lock.
+
+Write-through uploads have their own queue and consumers, so a backfill backlog never delays
+them. **Alert** on `artemis_message_count{queue="cold-tiering/backfill"}` above the largest
+`backfill.max-pending` (plus one chunk) for more than a few minutes: the guard should keep it
+below, so a breach means the guard is off (an older library version) or something other than the
+backfill fills the queue. Also alert on the oldest message's age of `cold-tiering/backfill` and on
+the depth of `cold-tiering/upload` (write-through lagging; eviction waits for it), and on repeated
+`depth unreadable` warnings (the backfill is stalled, failing safe). The depth query's own
+warnings (`Queue depth — could not query depth …`) come from the `ArtemisQueueDepthReader`
+logger; they were `DynamicCredit — …` on `DynamicCreditClientInterceptor` before it was extracted.
 
 ### Observability
 
 `[COLD_TIERING]` (registration, scheduling), `[COLD_TIERING_UPLOAD]`, `[COLD_TIERING_COLD_READ]`,
-`[COLD_TIERING_EVICT] table chunk deleted` (info), the rest at debug; the batch service's own
+`[COLD_TIERING_EVICT] table chunk deleted` (info), `[COLD_TIERING_BACKFILL] table depth
+maxPending` per step (info), with `skipped (backlog full)` when the step is skipped, or `depth
+unreadable: skipped (fail safe)` (warn), the rest at debug; the batch service's own
 messages per batch key name the table and the counts only. No key value reaches a log:
 `TieredRowKey.toString()` shows the table and the number of columns, the batch message templates
 carry no `${lastProcessed}`. Micrometer counters are not built yet (open question).
@@ -432,7 +467,14 @@ the threshold touches → object removed → empty; a rewrite after the archive 
 eviction, and `delete` clears both tiers; the backfill enqueues seeded rows in chunks, each key
 once, and the backfill listener archives them all, as it does a key enqueued through the
 deprecated `archiveKey` delegate (runs persisted before the upgrade); a duplicate archive request of an archived row
-uploads nothing (a sentinel object stays in place, the mark is unchanged); a backfill start while a
+uploads nothing (a sentinel object stays in place, the mark is unchanged); an archive request for
+an evicted key or an archived one is dropped by the lock-free read while another transaction holds
+the row's lock (no wait, no object, no write), and one for a row needing an upload still archives;
+with the queue depth unreadable (a reader with no connection factory swapped in
+through a package-private seam, `QueueDepthComponentTestSeam` in the test sources), then with the backfill listener stopped and its queue above
+a runtime `max-pending` (set and reset on the table's configured entry), the backfill steps enqueue
+nothing and keep the cursor (count 0, not finished, postponed), then resume and archive every row
+once the listener drains the queue; a backfill start while a
 run is active (slowed by a runtime table override) keeps its start, cursor and count;
 `findNewestTiered` over hot and cold snapshots (newest, as-of, before the first, unknown owner);
 the `NONE` table: archived, evicted, `findByIdTiered` empty, `findColdRow` holds the row, hot

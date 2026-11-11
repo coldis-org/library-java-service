@@ -43,6 +43,7 @@ import org.coldis.library.service.tiering.repository.PartitionHotTierRepository;
 import org.coldis.library.service.tiering.repository.PartitionHotTierRepository.ExportRow;
 import org.coldis.library.service.tiering.repository.PartitionHotTierRepository.SweepResult;
 import org.coldis.library.service.tiering.repository.PartitionTieredRepository;
+import org.coldis.library.service.jms.QueueDepthComponent;
 import org.coldis.library.service.tiering.repository.ShardedBlockReader;
 import org.coldis.library.service.tiering.repository.ShardedBlockWriter;
 import org.slf4j.Logger;
@@ -101,6 +102,10 @@ public class PartitionTieringServiceComponent implements ColdLookupStrategy {
 	/** Archive records. */
 	@Autowired
 	private PartitionArchiveRepository archiveRepository;
+
+	/** Queue depths. */
+	@Autowired
+	private QueueDepthComponent queueDepthComponent;
 
 	/** Cold objects. */
 	@Autowired
@@ -466,6 +471,16 @@ public class PartitionTieringServiceComponent implements ColdLookupStrategy {
 		final PartitionTieredTable partitioned = this.tableOf(table.getId());
 		return this.coldRows(partitioned, this.partitionsBetween(partitioned, null, asOf), prefix, null, PartitionTieringServiceComponent.segmentOfMoment(table, asOf),
 				false);
+	}
+
+	/**
+	 * Shard export requests pending: the depth of the export queue, shared by every
+	 * partition-tiered table.
+	 *
+	 * @return The pending requests, or empty when the depth cannot be read.
+	 */
+	public Optional<Long> findExportBacklog() {
+		return this.queueDepthComponent.findDepth(PartitionTieringServiceComponent.EXPORT_QUEUE);
 	}
 
 	/**

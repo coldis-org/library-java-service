@@ -16,6 +16,8 @@ import org.coldis.library.helper.DateTimeHelper;
 import org.coldis.library.persistence.LockBehavior;
 import org.coldis.library.persistence.keyvalue.KeyValueServiceComponent;
 import org.coldis.library.service.batch.BatchExecutor;
+import org.coldis.library.service.batch.BatchPostponedException;
+import org.coldis.library.service.batch.BatchAction;
 import org.coldis.library.service.batch.BatchService;
 import org.coldis.library.service.batch.BatchServiceComponent;
 import org.coldis.library.test.StartTestWithContainerExtension;
@@ -28,10 +30,16 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.context.SpringBootTest.WebEnvironment;
 import org.springframework.test.annotation.DirtiesContext;
+
+import ch.qos.logback.classic.Level;
+import ch.qos.logback.classic.Logger;
+import ch.qos.logback.classic.spi.ILoggingEvent;
+import ch.qos.logback.core.read.ListAppender;
 
 /**
  * Batch record test.
@@ -430,6 +438,96 @@ public class BatchServiceTest extends ContainerTestHelper {
 		finally {
 			BatchTestService.executingSignal = null;
 			BatchTestService.holdLatch = null;
+		}
+	}
+
+	/**
+	 * The batch record of a key suffix.
+	 *
+	 * @param  keySuffix Key suffix.
+	 * @return           The record, or null.
+	 */
+	@SuppressWarnings("unchecked")
+	private BatchExecutor<BatchObject> batchRecord(
+			final String keySuffix) {
+		BatchExecutor<BatchObject> batchRecord = null;
+		try {
+			batchRecord = (BatchExecutor<BatchObject>) this.keyValueService.findById(this.batchServiceComponent.getKey(keySuffix), LockBehavior.NO_LOCK, false).getValue();
+		}
+		catch (final Exception exception) {
+			batchRecord = null;
+		}
+		return batchRecord;
+	}
+
+	/**
+	 * A GET throwing {@link BatchPostponedException} postpones the run: not finished, the record says
+	 * postponed, START logged once; then items come and the run finishes normally.
+	 *
+	 * @throws Exception If the test fails.
+	 */
+	@Test
+	@DisplayName("A GET throwing BatchPostponedException postpones the run (not finished, START once), which then finishes normally")
+	public void testPostponedBatch() throws Exception {
+		BatchTestService.postponeSteps = 10;
+		final BatchExecutor<BatchObject> executor = BatchExecutor.withFixedRate(BatchObject.class, "testPostponedBatch", 10L, Duration.ofMillis(200),
+				Duration.ofMinutes(5), "batchTestService",
+				Map.of(BatchAction.START, "start", BatchAction.RESUME, "resume", BatchAction.GET, "getAfterPostponing", BatchAction.EXECUTE, "execute"), null);
+		this.batchService.start(executor, false, false);
+		Assertions.assertTrue(TestHelper.waitUntilValid(() -> this.batchRecord("testPostponedBatch"),
+				batchRecord -> (batchRecord != null) && batchRecord.getLastBatchPostponed() && (batchRecord.getPostponedCount() >= 2), TestHelper.REGULAR_WAIT * 2,
+				TestHelper.VERY_SHORT_WAIT));
+		final BatchExecutor<BatchObject> postponedRecord = this.batchRecord("testPostponedBatch");
+		Assertions.assertFalse(postponedRecord.isFinished());
+		Assertions.assertEquals(0L, postponedRecord.getLastProcessedCount());
+		Assertions.assertNull(postponedRecord.getLastProcessed());
+		Assertions.assertTrue(TestHelper.waitUntilValid(() -> this.batchRecord("testPostponedBatch"), batchRecord -> (batchRecord != null) && batchRecord.isFinished(),
+				TestHelper.LONG_WAIT, TestHelper.SHORT_WAIT));
+		final BatchExecutor<BatchObject> finishedRecord = this.batchRecord("testPostponedBatch");
+		Assertions.assertFalse(finishedRecord.getLastBatchPostponed());
+		Assertions.assertEquals(0L, finishedRecord.getPostponedCount());
+		Assertions.assertEquals(100L, finishedRecord.getLastProcessedCount());
+		Assertions.assertEquals(10, BatchTestService.postponedSteps);
+		Assertions.assertEquals(1, BatchTestService.startCount);
+		Assertions.assertNull(finishedRecord.getLastBatchError());
+	}
+
+	/**
+	 * A GET returning null, or a batch with no GET delegate, fails loudly: an ERROR names the batch
+	 * and the run neither finishes, advances nor is postponed. (Like every batch error, it is not
+	 * persisted on the record: the resume listener's transaction rolls back and the broker retries.)
+	 *
+	 * @throws Exception If the test fails.
+	 */
+	@Test
+	@DisplayName("A null GET result or a missing GET delegate fails loudly: neither finished, advanced nor postponed")
+	public void testNullOrMissingGetFails() throws Exception {
+		final Logger batchLogger = (Logger) LoggerFactory.getLogger(BatchServiceComponent.class);
+		final ListAppender<ILoggingEvent> appender = new ListAppender<>();
+		appender.start();
+		batchLogger.addAppender(appender);
+		final Map<String, Map<BatchAction, String>> delegatesByBatch = Map.of("testNullGet", Map.of(BatchAction.GET, "getNull", BatchAction.EXECUTE, "execute"),
+				"testMissingGet", Map.of(BatchAction.EXECUTE, "execute"));
+		try {
+			for (final Map.Entry<String, Map<BatchAction, String>> delegates : delegatesByBatch.entrySet()) {
+				this.batchService.start(BatchExecutor.withFixedRate(BatchObject.class, delegates.getKey(), 10L, Duration.ofMinutes(1), Duration.ofMinutes(5),
+						"batchTestService", delegates.getValue(), null), false, false);
+			}
+			for (final String keySuffix : delegatesByBatch.keySet()) {
+				final String expectedError = "Error processing batch '" + this.batchServiceComponent.getKey(keySuffix) + "': Batch '"
+						+ this.batchServiceComponent.getKey(keySuffix) + "' GET returned null";
+				Assertions.assertTrue(TestHelper.waitUntilValid(() -> List.copyOf(appender.list),
+						events -> events.stream().anyMatch(event -> (event.getLevel() == Level.ERROR) && event.getFormattedMessage().startsWith(expectedError)),
+						TestHelper.REGULAR_WAIT * 2, TestHelper.SHORT_WAIT));
+				final BatchExecutor<BatchObject> failedRecord = this.batchRecord(keySuffix);
+				Assertions.assertFalse(failedRecord.isFinished());
+				Assertions.assertEquals(0L, failedRecord.getLastProcessedCount());
+				Assertions.assertFalse(failedRecord.getLastBatchPostponed());
+				this.batchService.cancel(keySuffix);
+			}
+		}
+		finally {
+			batchLogger.detachAppender(appender);
 		}
 	}
 

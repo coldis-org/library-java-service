@@ -182,6 +182,12 @@ public class BatchExecutor<Type> implements Typable {
 	/** Last batch error. */
 	private String lastBatchError;
 
+	/** Whether the last batch was postponed (its GET threw {@link BatchPostponedException}). */
+	private Boolean lastBatchPostponed;
+
+	/** Consecutive batches postponed up to the last one. */
+	private Long postponedCount;
+
 	/**
 	 * No arguments constructor.
 	 */
@@ -500,6 +506,50 @@ public class BatchExecutor<Type> implements Typable {
 					.setScale(0, RoundingMode.HALF_UP).longValueExact());
 		}
 		return targetFinishWithin;
+	}
+
+	/**
+	 * Whether the last batch was postponed: its GET threw {@link BatchPostponedException} (nothing to do
+	 * yet), so the run kept its cursor and waits for its next step instead of finishing.
+	 *
+	 * @return Whether the last batch was postponed (false when never set, as in records of earlier
+	 *         versions).
+	 */
+	@JsonView({ ModelView.Persistent.class, ModelView.Public.class })
+	public Boolean getLastBatchPostponed() {
+		this.lastBatchPostponed = (this.lastBatchPostponed == null ? false : this.lastBatchPostponed);
+		return this.lastBatchPostponed;
+	}
+
+	/**
+	 * Sets whether the last batch was postponed.
+	 *
+	 * @param lastBatchPostponed Whether the last batch was postponed.
+	 */
+	public void setLastBatchPostponed(
+			final Boolean lastBatchPostponed) {
+		this.lastBatchPostponed = lastBatchPostponed;
+	}
+
+	/**
+	 * Gets the consecutive batches postponed up to the last one.
+	 *
+	 * @return The count (0 when never set, as in records of earlier versions).
+	 */
+	@JsonView({ ModelView.Persistent.class, ModelView.Public.class })
+	public Long getPostponedCount() {
+		this.postponedCount = Objects.requireNonNullElse(this.postponedCount, 0L);
+		return this.postponedCount;
+	}
+
+	/**
+	 * Sets the consecutive batches postponed up to the last one.
+	 *
+	 * @param postponedCount The count.
+	 */
+	public void setPostponedCount(
+			final Long postponedCount) {
+		this.postponedCount = postponedCount;
 	}
 
 	/**
@@ -1038,8 +1088,24 @@ public class BatchExecutor<Type> implements Typable {
 		this.setLastCancelledAt(null);
 		this.setLastProcessed(null);
 		this.setLastProcessedCount(null);
+		this.setLastBatchPostponed(false);
+		this.setPostponedCount(0L);
 		this.getLastStartedAt();
 		this.getLastProcessedCount();
+	}
+
+	/**
+	 * Records whether the last batch was postponed: counts consecutive postponements, and resets the
+	 * count when a batch is not postponed.
+	 *
+	 * @param  isPostponed Whether the last batch was postponed.
+	 * @return             The consecutive postponements up to the last batch.
+	 */
+	public Long markPostponed(
+			final Boolean isPostponed) {
+		this.setLastBatchPostponed(isPostponed);
+		this.setPostponedCount(isPostponed ? this.getPostponedCount() + 1 : 0L);
+		return this.getPostponedCount();
 	}
 
 	/**
@@ -1110,7 +1176,10 @@ public class BatchExecutor<Type> implements Typable {
 	/**
 	 * Gets the next batch to be processed.
 	 *
-	 * @return                   The next batch to be processed.
+	 * @return                   The next batch to be processed: empty finishes the run;
+	 *                           a {@link BatchPostponedException} from the GET postpones it (nothing to do yet: the
+	 *                           cursor stays and the run waits for its next step); null (also
+	 *                           what a missing GET delegate gives) is an error.
 	 * @throws BusinessException If the next to process cannot be retrieved.
 	 */
 	@SuppressWarnings("unchecked")
