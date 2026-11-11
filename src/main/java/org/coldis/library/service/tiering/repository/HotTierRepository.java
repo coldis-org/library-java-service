@@ -117,6 +117,17 @@ public class HotTierRepository {
 	}
 
 	/**
+	 * Whether a hot row's current content is archived: archive mark at or after the watermark.
+	 *
+	 * @param  table Table (aliased {@code hot}).
+	 * @return       The boolean SQL expression.
+	 */
+	private static String archivedExpression(
+			final TieredTable table) {
+		return "(hot." + table.getArchivedAtColumn() + " IS NOT NULL AND hot." + table.getArchivedAtColumn() + " >= hot." + table.getWatermarkColumn() + ")";
+	}
+
+	/**
 	 * A timestamp column as a local date time.
 	 *
 	 * @param  resultSet Result set.
@@ -187,8 +198,8 @@ public class HotTierRepository {
 	public Optional<Boolean> findArchived(
 			final TieredTable table,
 			final TieredRowKey key) {
-		final String sql = "SELECT (hot." + table.getArchivedAtColumn() + " IS NOT NULL AND hot." + table.getArchivedAtColumn() + " >= hot." + table.getWatermarkColumn()
-				+ ") AS archived_ FROM " + table.getTableName() + " hot WHERE " + HotTierRepository.keyPredicate(table);
+		final String sql = "SELECT " + HotTierRepository.archivedExpression(table) + " AS archived_ FROM " + table.getTableName() + " hot WHERE "
+				+ HotTierRepository.keyPredicate(table);
 		final List<Boolean> rows = this.jdbcTemplate.query(sql, HotTierRepository.keyParameters(ColumnValues.parseKey(table, table.getColumnTypes(), key)), (
 				resultSet,
 				rowNumber) -> resultSet.getBoolean("archived_"));
@@ -206,9 +217,9 @@ public class HotTierRepository {
 	public Optional<HotRow> lockForArchive(
 			final TieredTable table,
 			final TieredRowKey key) {
-		final String sql = "SELECT hot." + table.getWatermarkColumn() + " AS watermark_, CAST(row_to_json(hot) AS text) AS row_, (hot." + table.getArchivedAtColumn()
-				+ " IS NOT NULL AND hot." + table.getArchivedAtColumn() + " >= hot." + table.getWatermarkColumn() + ") AS archived_ FROM " + table.getTableName()
-				+ " hot WHERE " + HotTierRepository.keyPredicate(table) + " FOR UPDATE";
+		final String sql = "SELECT hot." + table.getWatermarkColumn() + " AS watermark_, CAST(row_to_json(hot) AS text) AS row_, "
+				+ HotTierRepository.archivedExpression(table) + " AS archived_ FROM " + table.getTableName() + " hot WHERE " + HotTierRepository.keyPredicate(table)
+				+ " FOR UPDATE";
 		final List<HotRow> rows = this.jdbcTemplate.query(sql, HotTierRepository.keyParameters(ColumnValues.parseKey(table, table.getColumnTypes(), key)), (
 				resultSet,
 				rowNumber) -> new HotRow(ColumnValues.format(ColumnValues.read(resultSet, "watermark_", table.getColumnTypes().get(table.getWatermarkColumn()))),

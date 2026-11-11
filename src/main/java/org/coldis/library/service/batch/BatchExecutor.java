@@ -182,7 +182,7 @@ public class BatchExecutor<Type> implements Typable {
 	/** Last batch error. */
 	private String lastBatchError;
 
-	/** Whether the last batch was postponed (its GET returned {@link BatchPostponed}). */
+	/** Whether the last batch was postponed (its GET threw {@link BatchPostponedException}). */
 	private Boolean lastBatchPostponed;
 
 	/** Consecutive batches postponed up to the last one. */
@@ -509,7 +509,7 @@ public class BatchExecutor<Type> implements Typable {
 	}
 
 	/**
-	 * Whether the last batch was postponed: its GET returned {@link BatchPostponed} (nothing to do
+	 * Whether the last batch was postponed: its GET threw {@link BatchPostponedException} (nothing to do
 	 * yet), so the run kept its cursor and waits for its next step instead of finishing.
 	 *
 	 * @return Whether the last batch was postponed (false when never set, as in records of earlier
@@ -1163,7 +1163,7 @@ public class BatchExecutor<Type> implements Typable {
 	 * Gets the next batch to be processed.
 	 *
 	 * @return                   The next batch to be processed: empty finishes the run;
-	 *                           {@link BatchPostponed#of()} postpones it (nothing to do yet: the
+	 *                           a {@link BatchPostponedException} from the GET postpones it (nothing to do yet: the
 	 *                           cursor stays and the run waits for its next step); null (also
 	 *                           what a missing GET delegate gives) is an error.
 	 * @throws BusinessException If the next to process cannot be retrieved.

@@ -34,8 +34,8 @@ import org.coldis.library.service.tiering.model.TieredRowKey;
 import org.coldis.library.service.tiering.model.TieredTable;
 import org.coldis.library.service.tiering.TieringBatch;
 import org.coldis.library.service.tiering.repository.FolderColdStorageRepository;
-import org.coldis.library.service.jms.ArtemisQueueDepthReader;
 import org.coldis.library.service.tiering.repository.QueueDepthRepository;
+import org.coldis.library.service.tiering.repository.QueueDepthRepositoryTestSeam;
 import org.coldis.library.test.StartTestWithContainerExtension;
 import org.coldis.library.test.TestHelper;
 import org.coldis.library.test.TestWithContainer;
@@ -539,12 +539,11 @@ public class ColdTieringServiceTest extends ContainerTestHelper {
 		Assertions.assertFalse(listeners.isEmpty());
 		final TableProperties snapshotTable = this.properties.getTable().get(ColdTieringTestConfiguration.SNAPSHOT_TABLE);
 		snapshotTable.getBackfill().setMaxPending(2L);
-		ArtemisQueueDepthReader brokerReader = null;
 		Boolean isReaderReplaced = false;
-		try (ArtemisQueueDepthReader unreadableReader = new ArtemisQueueDepthReader(null, 0L)) {
+		try {
 			// Depth unreadable (no broker behind the reader): fail safe, nothing enqueued.
 			final List<TieredSnapshotKey> keys = this.seedUnarchived();
-			brokerReader = this.queueDepthRepository.replaceReader(unreadableReader);
+			QueueDepthRepositoryTestSeam.makeUnreadable(this.queueDepthRepository);
 			isReaderReplaced = true;
 			Assertions.assertTrue(this.tieringServiceComponent.findBackfillBacklog().isEmpty());
 			Assertions.assertTrue(this.batchServiceComponent.run(ColdTieringTestConfiguration.SNAPSHOT_TABLE, TieringBatch.BACKFILL));
@@ -552,7 +551,7 @@ public class ColdTieringServiceTest extends ContainerTestHelper {
 
 			// A backlog of three requests for rows no longer hot (dropped once drained).
 			listeners.forEach(AbstractMessageListenerContainer::stop);
-			this.queueDepthRepository.replaceReader(brokerReader);
+			QueueDepthRepositoryTestSeam.restore(this.queueDepthRepository);
 			isReaderReplaced = false;
 			for (int request = 1; request <= 3; request++) {
 				this.tieringServiceComponent.requestArchive(this.rowKey(new TieredSnapshotKey("owner-gone", LocalDateTime.of(2026, 5, request, 0, 0))));
@@ -577,7 +576,7 @@ public class ColdTieringServiceTest extends ContainerTestHelper {
 		}
 		finally {
 			if (isReaderReplaced) {
-				this.queueDepthRepository.replaceReader(brokerReader);
+				QueueDepthRepositoryTestSeam.restore(this.queueDepthRepository);
 			}
 			listeners.stream().filter(container -> !container.isRunning()).forEach(AbstractMessageListenerContainer::start);
 			snapshotTable.getBackfill().setMaxPending(null);

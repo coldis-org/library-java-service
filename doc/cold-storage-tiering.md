@@ -315,12 +315,13 @@ entity and its `@IdClass`) and fails the boot otherwise.
   **Backpressure**: before selecting a chunk, the GET asks `ColdTieringServiceComponent.findBackfillBacklog()`
   for the depth of `cold-tiering/backfill` (Artemis core `queueQuery` message count, cached 100 ms,
   through `QueueDepthRepository`). Above the table's `backfill.max-pending` (default `10000`) the
-  step selects and enqueues nothing: the GET returns `BatchPostponed.of()`, the batch service's
-  explicit *postponed* result (the run keeps its cursor and count, does not finish, and the next
+  step selects and enqueues nothing: the GET throws `BatchPostponedException`, the batch service's
+  explicit *postponed* signal (caught by the engine; GET delegates that never throw it are
+  unchanged, an empty list still finishes, a null result or a missing GET delegate is an error) (the run keeps its cursor and count, does not finish, and the next
   step comes after the usual delay; the record shows `lastBatchPostponed` and `postponedCount`, each
   postponement is logged at INFO with the batch key, and a WARN every
-  `org.coldis.configuration.service.batch-postponed-warn-steps` consecutive steps, default `60`). A
-  null GET result, or a batch with no GET delegate, stays an error (recorded on the batch). A depth that cannot be read (no Artemis connection factory,
+  `org.coldis.configuration.service.batch-postponed-warn-steps` consecutive steps, default `60`; a
+  transactional GET declares `noRollbackFor = BatchPostponedException.class`). A depth that cannot be read (no Artemis connection factory,
   broker unreachable) counts as full, with a `WARN`: the backfill fails safe, never enqueueing
   blind. The queue is shared by every table, so each table's `max-pending` is compared with the
   whole queue's depth. While a run waits, it stays active, so the hourly crons join it instead of
@@ -434,7 +435,9 @@ them. **Alert** on `artemis_message_count{queue="cold-tiering/backfill"}` above 
 below, so a breach means the guard is off (an older library version) or something other than the
 backfill fills the queue. Also alert on the oldest message's age of `cold-tiering/backfill` and on
 the depth of `cold-tiering/upload` (write-through lagging; eviction waits for it), and on repeated
-`depth unreadable` warnings (the backfill is stalled, failing safe).
+`depth unreadable` warnings (the backfill is stalled, failing safe). The depth query's own
+warnings (`Queue depth — could not query depth …`) come from the `ArtemisQueueDepthReader`
+logger; they were `DynamicCredit — …` on `DynamicCreditClientInterceptor` before it was extracted.
 
 ### Observability
 
@@ -466,8 +469,8 @@ deprecated `archiveKey` delegate (runs persisted before the upgrade); a duplicat
 uploads nothing (a sentinel object stays in place, the mark is unchanged); an archive request for
 an evicted key or an archived one is dropped by the lock-free read while another transaction holds
 the row's lock (no wait, no object, no write), and one for a row needing an upload still archives;
-with the queue depth unreadable (a reader with no broker swapped in through
-`QueueDepthRepository.replaceReader`), then with the backfill listener stopped and its queue above
+with the queue depth unreadable (a reader with no connection factory swapped in
+through a package-private seam, `QueueDepthRepositoryTestSeam` in the test sources), then with the backfill listener stopped and its queue above
 a runtime `max-pending` (set and reset on the table's configured entry), the backfill steps enqueue
 nothing and keep the cursor (count 0, not finished, postponed), then resume and archive every row
 once the listener drains the queue; a backfill start while a

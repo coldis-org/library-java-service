@@ -16,7 +16,7 @@ import org.coldis.library.helper.DateTimeHelper;
 import org.coldis.library.persistence.LockBehavior;
 import org.coldis.library.persistence.keyvalue.KeyValueServiceComponent;
 import org.coldis.library.service.batch.BatchExecutor;
-import org.coldis.library.service.batch.BatchPostponed;
+import org.coldis.library.service.batch.BatchPostponedException;
 import org.coldis.library.service.batch.BatchAction;
 import org.coldis.library.service.batch.BatchService;
 import org.coldis.library.service.batch.BatchServiceComponent;
@@ -461,12 +461,13 @@ public class BatchServiceTest extends ContainerTestHelper {
 	}
 
 	/**
-	 * A GET returning {@link BatchPostponed} postpones the run: not finished, the record says
+	 * A GET throwing {@link BatchPostponedException} postpones the run: not finished, the record says
 	 * postponed, START logged once; then items come and the run finishes normally.
 	 *
 	 * @throws Exception If the test fails.
 	 */
 	@Test
+	@DisplayName("A GET throwing BatchPostponedException postpones the run (not finished, START once), which then finishes normally")
 	public void testPostponedBatch() throws Exception {
 		BatchTestService.postponeSteps = 10;
 		final BatchExecutor<BatchObject> executor = BatchExecutor.withFixedRate(BatchObject.class, "testPostponedBatch", 10L, Duration.ofMillis(200),
@@ -499,6 +500,7 @@ public class BatchServiceTest extends ContainerTestHelper {
 	 * @throws Exception If the test fails.
 	 */
 	@Test
+	@DisplayName("A null GET result or a missing GET delegate fails loudly: neither finished, advanced nor postponed")
 	public void testNullOrMissingGetFails() throws Exception {
 		final Logger batchLogger = (Logger) LoggerFactory.getLogger(BatchServiceComponent.class);
 		final ListAppender<ILoggingEvent> appender = new ListAppender<>();

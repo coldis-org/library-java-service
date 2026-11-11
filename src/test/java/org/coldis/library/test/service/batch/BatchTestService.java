@@ -9,7 +9,7 @@ import java.util.concurrent.CountDownLatch;
 
 import org.coldis.library.exception.IntegrationException;
 import org.coldis.library.helper.DateTimeHelper;
-import org.coldis.library.service.batch.BatchPostponed;
+import org.coldis.library.service.batch.BatchPostponedException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
@@ -99,21 +99,18 @@ public class BatchTestService {
 	 * @param  object    Last processed.
 	 * @param  size      Size.
 	 * @param  arguments Arguments.
-	 * @return           The postponed marker, then the items.
+	 * @return           The items, once no longer postponing.
+	 * @throws BatchPostponedException While postponing.
 	 */
 	public synchronized List<BatchObject> getAfterPostponing(
 			final BatchObject object,
 			final Long size,
 			final Map<String, String> arguments) {
-		List<BatchObject> batch;
 		if (BatchTestService.postponedSteps < BatchTestService.postponeSteps) {
 			BatchTestService.postponedSteps++;
-			batch = BatchPostponed.of();
+			throw new BatchPostponedException("test postponement");
 		}
-		else {
-			batch = this.get(object, size, arguments);
-		}
-		return batch;
+		return this.get(object, size, arguments);
 	}
 
 	/**

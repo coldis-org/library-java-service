@@ -14,9 +14,11 @@ import org.slf4j.LoggerFactory;
 /**
  * Reads an Artemis queue's depth (its message count, delivering and scheduled messages included)
  * with a core {@code queueQuery} on a dedicated client session, cached per queue for a short time
- * to bound broker round-trips. Never throws: a depth that cannot be read is empty (logged at
- * {@code WARN}) and the broken session is closed, to be recreated on the next read. A queue the
- * broker does not know has depth {@code 0}.
+ * to bound broker round-trips. Never throws: a depth that cannot be read is empty (a broker
+ * failure is logged at {@code WARN} and the broken session is closed, to be recreated on the next
+ * read; with no connection factory every read is empty, silently). A queue the broker does not
+ * know has depth {@code 0}. Its warnings, {@code Queue depth — …} on this class's logger, were
+ * {@code DynamicCredit — …} on {@code DynamicCreditClientInterceptor}'s before the extraction.
  */
 public class ArtemisQueueDepthReader implements AutoCloseable {
 
@@ -120,7 +122,10 @@ public class ArtemisQueueDepthReader implements AutoCloseable {
 		final long[] cachedDepth = this.depthCache.get(queueName);
 		final long currentTimeMillis = System.currentTimeMillis();
 		Optional<Long> depth = Optional.empty();
-		if ((cachedDepth != null) && ((currentTimeMillis - cachedDepth[1]) < this.cacheTtlMillis)) {
+		if (this.connectionFactory == null) {
+			ArtemisQueueDepthReader.LOGGER.debug("Queue depth — no connection factory: depth of '{}' not read", queueName);
+		}
+		else if ((cachedDepth != null) && ((currentTimeMillis - cachedDepth[1]) < this.cacheTtlMillis)) {
 			depth = Optional.of(cachedDepth[0]);
 		}
 		else {

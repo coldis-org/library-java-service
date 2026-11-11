@@ -530,9 +530,9 @@ public class PartitionTieringServiceTest extends ContainerTestHelper {
 			Assertions.assertTrue(this.batchServiceComponent.run(ColdTieringTestConfiguration.MONTHLY_TABLE, TieringBatch.EXPORT));
 			Assertions.assertTrue(TestHelper.waitUntilValid(() -> this.archive().map(PartitionArchive::state).orElse(null), state -> state == PartitionArchiveState.EXPORTING,
 					TestHelper.REGULAR_WAIT * 4, TestHelper.SHORT_WAIT));
-			Assertions.assertTrue(TestHelper.waitUntilValid(this::exportRecord, batchRecord -> (batchRecord != null) && batchRecord.getLastBatchPostponed(),
-					TestHelper.REGULAR_WAIT * 4, TestHelper.SHORT_WAIT));
-			Thread.sleep(TestHelper.SHORT_WAIT * 2);
+			Assertions.assertTrue(TestHelper.waitUntilValid(this::exportRecord,
+					batchRecord -> (batchRecord != null) && batchRecord.getLastBatchPostponed() && (batchRecord.getPostponedCount() >= 2), TestHelper.REGULAR_WAIT * 4,
+					TestHelper.SHORT_WAIT));
 			// February waits, still loaded; the run waits too.
 			Assertions.assertEquals(Optional.of(PartitionArchiveState.LOADED), this.stateOf(february));
 			Assertions.assertFalse(this.exportRecord().isFinished());

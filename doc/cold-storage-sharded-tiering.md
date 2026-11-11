@@ -310,7 +310,7 @@ instances`, independent of the batch.
 **Backpressure** (as the row backfill's): when the GET finds a partition to export, it first asks
 `PartitionTieringServiceComponent.findExportBacklog()` for the depth of `cold-tiering/export`
 (Artemis core `queueQuery` message count, cached 100 ms). Above the table's `export.max-pending`
-(default `10000`) no export starts: the GET returns `BatchPostponed.of()`, and the batch service
+(default `10000`) no export starts: the GET throws `BatchPostponedException`, and the batch service
 postpones the run (it does not finish; the next step comes after `delay-between-chunks`),
 and the partition stays a candidate. A depth that cannot be read counts as full (`WARN`, fail
 safe). The queue is shared by every partition-tiered table. One step still enqueues a whole

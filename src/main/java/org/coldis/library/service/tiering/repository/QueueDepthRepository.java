@@ -71,18 +71,19 @@ public class QueueDepthRepository {
 	}
 
 	/**
-	 * Replaces the reader (an operator or a test pointing the depths at another broker, or at none
-	 * to exercise the unreadable path), closing nothing.
+	 * Test seam (package-private, used only by tests in this package): replaces the reader, closing
+	 * the previous one; null goes back to the lazily created one on the application's connection
+	 * factory.
 	 *
-	 * @param  newReader The reader to use from now on.
-	 * @return           The reader used until now (null when none was created yet).
+	 * @param newReader The reader to use from now on, or null.
 	 */
-	public ArtemisQueueDepthReader replaceReader(
+	void replaceReader(
 			final ArtemisQueueDepthReader newReader) {
 		synchronized (this) {
-			final ArtemisQueueDepthReader previousReader = this.reader;
+			if (this.reader != null) {
+				this.reader.close();
+			}
 			this.reader = newReader;
-			return previousReader;
 		}
 	}
 
