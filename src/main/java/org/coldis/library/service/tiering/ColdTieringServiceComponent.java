@@ -27,7 +27,7 @@ import org.coldis.library.service.tiering.model.TieredTable;
 import org.coldis.library.service.tiering.repository.ColdStorageRepository;
 import org.coldis.library.service.tiering.repository.HotTierRepository;
 import org.coldis.library.service.tiering.repository.HotTierRepository.HotRow;
-import org.coldis.library.service.tiering.repository.QueueDepthRepository;
+import org.coldis.library.service.jms.QueueDepthComponent;
 import org.coldis.library.service.tiering.repository.TieredRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -93,7 +93,7 @@ public class ColdTieringServiceComponent {
 
 	/** Queue depths. */
 	@Autowired
-	private QueueDepthRepository queueDepthRepository;
+	private QueueDepthComponent queueDepthComponent;
 
 	/** Row payload codec. */
 	@Autowired
@@ -332,7 +332,7 @@ public class ColdTieringServiceComponent {
 	 * @return The pending requests, or empty when the depth cannot be read.
 	 */
 	public Optional<Long> findBackfillBacklog() {
-		return this.queueDepthRepository.findDepth(ColdTieringServiceComponent.BACKFILL_QUEUE);
+		return this.queueDepthComponent.findDepth(ColdTieringServiceComponent.BACKFILL_QUEUE);
 	}
 
 	/**

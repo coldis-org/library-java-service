@@ -1,39 +1,33 @@
-package org.coldis.library.service.tiering.repository;
+package org.coldis.library.service.jms;
 
 import java.util.Optional;
 
 import org.apache.activemq.artemis.jms.client.ActiveMQConnectionFactory;
-import org.coldis.library.service.jms.ArtemisQueueDepthReader;
-import org.coldis.library.service.tiering.model.ColdTieringPropertyNames;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.boot.jms.ConnectionFactoryUnwrapper;
-import org.springframework.stereotype.Repository;
+import org.springframework.stereotype.Component;
 
 import jakarta.annotation.PreDestroy;
 import jakarta.jms.ConnectionFactory;
 
 /**
- * Depth of the tiering queues on the Artemis broker (the batches' backpressure signal), through an
- * {@link ArtemisQueueDepthReader} on the application's connection factory: cached for
+ * Depth of any queue on the Artemis broker (a backpressure signal for batches that feed a queue),
+ * through an {@link ArtemisQueueDepthReader} on the application's connection factory: cached for
  * {@link #CACHE_TTL_MILLIS}, never throws, empty when the depth cannot be read (no Artemis
- * connection factory, no session, or a failed query).
+ * connection factory, no session, or a failed query). Always registered: with no Artemis
+ * connection factory every read is empty (one WARN on the first read).
  */
-@Repository
-@ConditionalOnProperty(
-		name = ColdTieringPropertyNames.ENABLED,
-		matchIfMissing = false
-)
-public class QueueDepthRepository {
+@Component
+public class QueueDepthComponent {
 
 	/** How long a depth is reused: shorter than any sensible step delay, so each step reads the broker. */
 	public static final long CACHE_TTL_MILLIS = 100L;
 
 	/** Logger. */
-	private static final Logger LOGGER = LoggerFactory.getLogger(QueueDepthRepository.class);
+	private static final Logger LOGGER = LoggerFactory.getLogger(QueueDepthComponent.class);
 
 	/** Connection factory. */
 	@Autowired
@@ -60,10 +54,10 @@ public class QueueDepthRepository {
 						artemisFactory = activeMqFactory;
 					}
 					else {
-						QueueDepthRepository.LOGGER.warn("[COLD_TIERING] no Artemis connection factory ({}): queue depths cannot be read",
+						QueueDepthComponent.LOGGER.warn("Queue depth — no Artemis connection factory ({}): queue depths cannot be read",
 								nativeFactory == null ? null : nativeFactory.getClass().getName());
 					}
-					this.reader = new ArtemisQueueDepthReader(artemisFactory, QueueDepthRepository.CACHE_TTL_MILLIS);
+					this.reader = new ArtemisQueueDepthReader(artemisFactory, QueueDepthComponent.CACHE_TTL_MILLIS);
 				}
 			}
 		}

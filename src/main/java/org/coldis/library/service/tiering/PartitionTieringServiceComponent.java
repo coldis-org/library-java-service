@@ -43,7 +43,7 @@ import org.coldis.library.service.tiering.repository.PartitionHotTierRepository;
 import org.coldis.library.service.tiering.repository.PartitionHotTierRepository.ExportRow;
 import org.coldis.library.service.tiering.repository.PartitionHotTierRepository.SweepResult;
 import org.coldis.library.service.tiering.repository.PartitionTieredRepository;
-import org.coldis.library.service.tiering.repository.QueueDepthRepository;
+import org.coldis.library.service.jms.QueueDepthComponent;
 import org.coldis.library.service.tiering.repository.ShardedBlockReader;
 import org.coldis.library.service.tiering.repository.ShardedBlockWriter;
 import org.slf4j.Logger;
@@ -105,7 +105,7 @@ public class PartitionTieringServiceComponent implements ColdLookupStrategy {
 
 	/** Queue depths. */
 	@Autowired
-	private QueueDepthRepository queueDepthRepository;
+	private QueueDepthComponent queueDepthComponent;
 
 	/** Cold objects. */
 	@Autowired
@@ -480,7 +480,7 @@ public class PartitionTieringServiceComponent implements ColdLookupStrategy {
 	 * @return The pending requests, or empty when the depth cannot be read.
 	 */
 	public Optional<Long> findExportBacklog() {
-		return this.queueDepthRepository.findDepth(PartitionTieringServiceComponent.EXPORT_QUEUE);
+		return this.queueDepthComponent.findDepth(PartitionTieringServiceComponent.EXPORT_QUEUE);
 	}
 
 	/**

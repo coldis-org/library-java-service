@@ -314,7 +314,8 @@ entity and its `@IdClass`) and fails the boot otherwise.
   lock.
   **Backpressure**: before selecting a chunk, the GET asks `ColdTieringServiceComponent.findBackfillBacklog()`
   for the depth of `cold-tiering/backfill` (Artemis core `queueQuery` message count, cached 100 ms,
-  through `QueueDepthRepository`). Above the table's `backfill.max-pending` (default `10000`) the
+  through `org.coldis.library.service.jms.QueueDepthComponent`, a generic component any batch can use
+  for its own queue). Above the table's `backfill.max-pending` (default `10000`) the
   step selects and enqueues nothing: the GET throws `BatchPostponedException`, the batch service's
   explicit *postponed* signal (caught by the engine; GET delegates that never throw it are
   unchanged, an empty list still finishes, a null result or a missing GET delegate is an error) (the run keeps its cursor and count, does not finish, and the next
@@ -470,7 +471,7 @@ uploads nothing (a sentinel object stays in place, the mark is unchanged); an ar
 an evicted key or an archived one is dropped by the lock-free read while another transaction holds
 the row's lock (no wait, no object, no write), and one for a row needing an upload still archives;
 with the queue depth unreadable (a reader with no connection factory swapped in
-through a package-private seam, `QueueDepthRepositoryTestSeam` in the test sources), then with the backfill listener stopped and its queue above
+through a package-private seam, `QueueDepthComponentTestSeam` in the test sources), then with the backfill listener stopped and its queue above
 a runtime `max-pending` (set and reset on the table's configured entry), the backfill steps enqueue
 nothing and keep the cursor (count 0, not finished, postponed), then resume and archive every row
 once the listener drains the queue; a backfill start while a
