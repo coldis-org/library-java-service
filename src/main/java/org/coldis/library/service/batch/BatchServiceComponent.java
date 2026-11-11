@@ -422,7 +422,7 @@ public class BatchServiceComponent {
 			}
 			// Updates fields.
 			BeanUtils.copyProperties(executor, batchExecutor.getValue(), "lastStartedAt", "lastFinishedAt", "lastTotalProcessingTime",
-					"lastCancelledAt", "lastProcessed", "lastBatchStartedAt", "lastBatchFinishedAt", "lastProcessedCount");
+					"lastCancelledAt", "lastProcessed", "lastBatchStartedAt", "lastBatchFinishedAt", "lastProcessedCount", "lastBatchPostponed", "postponedCount");
 			BatchServiceComponent.LOGGER.debug("Starting batch for: " + ObjectMapperHelper.serialize(this.objectMapper, batchExecutor, null, false));
 
 			// If the executor should be restarted, resets it.
