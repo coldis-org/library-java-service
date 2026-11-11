@@ -18,7 +18,7 @@ import org.slf4j.LoggerFactory;
  * {@code WARN}) and the broken session is closed, to be recreated on the next read. A queue the
  * broker does not know has depth {@code 0}.
  */
-public class ArtemisQueueDepthReader {
+public class ArtemisQueueDepthReader implements AutoCloseable {
 
 	/** Logger. */
 	private static final Logger LOGGER = LoggerFactory.getLogger(ArtemisQueueDepthReader.class);
@@ -146,6 +146,18 @@ public class ArtemisQueueDepthReader {
 			}
 		}
 		return depth;
+	}
+
+	/**
+	 * Releases the query session and its session factory (a later read opens new ones) and
+	 * forgets the cached depths.
+	 */
+	@Override
+	public void close() {
+		synchronized (this.querySessionLock) {
+			this.closeQuerySession(this.querySession);
+		}
+		this.depthCache.clear();
 	}
 
 	/**

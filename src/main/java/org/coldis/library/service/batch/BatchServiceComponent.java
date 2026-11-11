@@ -24,6 +24,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.BeanUtils;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.jms.annotation.JmsListener;
 import org.springframework.jms.core.JmsTemplate;
@@ -94,6 +95,13 @@ public class BatchServiceComponent {
 	 */
 	@Autowired(required = false)
 	private KeyValueServiceComponent keyValueService;
+
+	/**
+	 * Consecutive postponed steps after which (and every multiple of which) a run's postponement
+	 * is logged at WARN.
+	 */
+	@Value("${org.coldis.configuration.service.batch-postponed-warn-steps:60}")
+	private Long postponedWarnSteps;
 
 	/**
 	 * Slack integration.
@@ -181,11 +189,22 @@ public class BatchServiceComponent {
 			throw new BatchExpiredException();
 		}
 
-		// For each item in the next batch (a null batch postpones the run: nothing to do yet).
+		// For each item in the next batch (the postponed marker: nothing to do yet; null, or no GET
+		// delegate: an error).
 		this.log(batchExecutorValue, BatchAction.GET);
-		final List<Type> nextBatchToProcess = batchExecutorValue.get();
-		batchExecutorValue.setLastBatchPostponed(nextBatchToProcess == null);
-		for (final Type next : Objects.requireNonNullElse(nextBatchToProcess, List.<Type>of())) {
+		final String key = this.getKey(batchExecutorValue.getKeySuffix());
+		final List<Type> nextBatchToProcess = Objects.requireNonNull(batchExecutorValue.get(),
+				"Batch '" + key + "' GET returned null (or has no GET delegate): return an empty list to finish, BatchPostponed.of() to wait.");
+		final Boolean isPostponed = BatchPostponed.isPostponed(nextBatchToProcess);
+		batchExecutorValue.setLastBatchPostponed(isPostponed);
+		batchExecutorValue.setPostponedCount(isPostponed ? batchExecutorValue.getPostponedCount() + 1 : 0L);
+		if (isPostponed) {
+			BatchServiceComponent.LOGGER.info("Batch '{}' postponed: nothing to do yet ({} consecutive steps).", key, batchExecutorValue.getPostponedCount());
+			if ((batchExecutorValue.getPostponedCount() % Math.max(1L, this.postponedWarnSteps)) == 0) {
+				BatchServiceComponent.LOGGER.warn("Batch '{}' has been postponed for {} consecutive steps.", key, batchExecutorValue.getPostponedCount());
+			}
+		}
+		for (final Type next : nextBatchToProcess) {
 			batchExecutorValue.execute(next);
 			this.log(batchExecutorValue, BatchAction.EXECUTE);
 			actualLastProcessed = next;

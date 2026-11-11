@@ -16,12 +16,12 @@ import org.coldis.library.service.tiering.model.TieredTable;
 import org.coldis.library.helper.DateTimeHelper;
 import org.coldis.library.service.batch.BatchAction;
 import org.coldis.library.service.batch.BatchExecutor;
+import org.coldis.library.service.batch.BatchPostponed;
 import org.coldis.library.service.batch.BatchService;
 import org.coldis.library.service.tiering.ColdTieringProperties.BatchProperties;
 import org.coldis.library.service.tiering.ColdTieringProperties.TableProperties;
 import org.coldis.library.service.tiering.repository.HotTierRepository;
 import org.coldis.library.service.tiering.repository.PartitionHotTierRepository;
-import org.coldis.library.service.tiering.repository.QueueDepthRepository;
 import org.coldis.library.service.tiering.model.ArchiveUnit;
 import org.coldis.library.service.tiering.model.LeafPartition;
 import org.coldis.library.service.tiering.model.PartitionTieredTable;
@@ -116,10 +116,6 @@ public class ColdTieringBatchServiceComponent implements SmartInitializingSingle
 	@Autowired
 	private ColdTieringServiceComponent tieringServiceComponent;
 
-	/** Queue depths (backpressure). */
-	@Autowired
-	private QueueDepthRepository queueDepthRepository;
-
 	/** Task scheduler (present when scheduling is enabled). */
 	@Autowired
 	private ObjectProvider<TaskScheduler> taskScheduler;
@@ -142,33 +138,32 @@ public class ColdTieringBatchServiceComponent implements SmartInitializingSingle
 	}
 
 	/**
-	 * Whether a batch's queue holds more than its max pending, so the step must enqueue nothing
-	 * (the run waits for its next step). Fails safe: a depth that cannot be read counts as full.
-	 * Logs the decision with the depth, never a key.
+	 * Whether a batch's backlog (requests pending on its queue) is above its max pending, so the
+	 * step must enqueue nothing (the run waits for its next step). Fails safe: a backlog that
+	 * cannot be read counts as full. Logs the decision with the depth, never a key.
 	 *
 	 * @param  table      Table.
 	 * @param  batch      Batch.
-	 * @param  queue      Queue the batch enqueues to.
+	 * @param  backlog    Requests pending, empty when unreadable.
 	 * @param  maxPending Max pending.
 	 * @return            Whether the backlog is full.
 	 */
-	private Boolean isBacklogFull(
+	private static Boolean isBacklogFull(
 			final TieredTable table,
 			final TieringBatch batch,
-			final String queue,
+			final Optional<Long> backlog,
 			final Long maxPending) {
-		final Optional<Long> depth = this.queueDepthRepository.findDepth(queue);
-		final Boolean isFull = depth.map(pending -> pending > maxPending).orElse(true);
-		if (depth.isEmpty()) {
-			ColdTieringBatchServiceComponent.LOGGER.warn("[COLD_TIERING_{}] table={} queue={} depth unreadable: skipped (fail safe), the run waits for its next step",
-					batch, table.getId(), queue);
+		final Boolean isFull = backlog.map(pending -> pending > maxPending).orElse(true);
+		if (backlog.isEmpty()) {
+			ColdTieringBatchServiceComponent.LOGGER.warn("[COLD_TIERING_{}] table={} depth unreadable: skipped (fail safe), the run waits for its next step", batch,
+					table.getId());
 		}
 		else if (isFull) {
-			ColdTieringBatchServiceComponent.LOGGER.info("[COLD_TIERING_{}] table={} queue={} depth={} maxPending={} skipped (backlog full)", batch, table.getId(), queue,
-					depth.get(), maxPending);
+			ColdTieringBatchServiceComponent.LOGGER.info("[COLD_TIERING_{}] table={} depth={} maxPending={} skipped (backlog full)", batch, table.getId(), backlog.get(),
+					maxPending);
 		}
 		else {
-			ColdTieringBatchServiceComponent.LOGGER.info("[COLD_TIERING_{}] table={} queue={} depth={} maxPending={}", batch, table.getId(), queue, depth.get(), maxPending);
+			ColdTieringBatchServiceComponent.LOGGER.info("[COLD_TIERING_{}] table={} depth={} maxPending={}", batch, table.getId(), backlog.get(), maxPending);
 		}
 		return isFull;
 	}
@@ -223,7 +218,7 @@ public class ColdTieringBatchServiceComponent implements SmartInitializingSingle
 	 *                       again), null on the first call.
 	 * @param  size      Keys per call.
 	 * @param  arguments Batch arguments (table).
-	 * @return           The next keys; null (postponed) while the backlog is full.
+	 * @return           The next keys; {@link BatchPostponed} while the backlog is full.
 	 */
 	@Transactional(
 			propagation = Propagation.REQUIRED,
@@ -234,8 +229,9 @@ public class ColdTieringBatchServiceComponent implements SmartInitializingSingle
 			final Long size,
 			final Map<String, String> arguments) {
 		final TieredTable table = this.registry.getTable(arguments.get(ColdTieringBatchServiceComponent.TABLE_ARGUMENT));
-		List<TieredRowKey> keys = null;
-		if (!this.isBacklogFull(table, TieringBatch.BACKFILL, ColdTieringServiceComponent.BACKFILL_QUEUE, this.properties.of(table).getBackfill().getMaxPending())) {
+		List<TieredRowKey> keys = BatchPostponed.of();
+		if (!ColdTieringBatchServiceComponent.isBacklogFull(table, TieringBatch.BACKFILL, this.tieringServiceComponent.findBackfillBacklog(),
+				this.properties.of(table).getBackfill().getMaxPending())) {
 			keys = this.hotTierRepository.findNextUnarchivedKeys(table, lastKey, size);
 		}
 		return keys;
@@ -273,8 +269,8 @@ public class ColdTieringBatchServiceComponent implements SmartInitializingSingle
 	 * @param  lastItem  Last item.
 	 * @param  size      Ignored.
 	 * @param  arguments Arguments.
-	 * @return           Item; empty when no partition is due, null (postponed) while the backlog
-	 *                   is full.
+	 * @return           Item; empty when no partition is due, {@link BatchPostponed} while the
+	 *                   backlog is full.
 	 */
 	public List<ExportItem> findNextExport(
 			final ExportItem lastItem,
@@ -283,9 +279,9 @@ public class ColdTieringBatchServiceComponent implements SmartInitializingSingle
 		final PartitionTieredTable table = (PartitionTieredTable) this.registry.getTable(arguments.get(ColdTieringBatchServiceComponent.TABLE_ARGUMENT));
 		List<ExportItem> items = this.partitionTieringServiceComponent.findExportCandidate(table)
 				.map(partition -> List.of(new ExportItem(table.getId(), partition.name()))).orElse(List.of());
-		if (!items.isEmpty()
-				&& this.isBacklogFull(table, TieringBatch.EXPORT, PartitionTieringServiceComponent.EXPORT_QUEUE, this.properties.of(table).getExport().getMaxPending())) {
-			items = null;
+		if (!items.isEmpty() && ColdTieringBatchServiceComponent.isBacklogFull(table, TieringBatch.EXPORT, this.partitionTieringServiceComponent.findExportBacklog(),
+				this.properties.of(table).getExport().getMaxPending())) {
+			items = BatchPostponed.of();
 		}
 		return items;
 	}
@@ -393,18 +389,9 @@ public class ColdTieringBatchServiceComponent implements SmartInitializingSingle
 					batchProperties.getDelayBetweenChunks(), batchProperties.getFinishWithin(), ColdTieringBatchServiceComponent.BEAN_NAME, new HashMap<>(delegates),
 					new HashMap<>(Map.of(ColdTieringBatchServiceComponent.TABLE_ARGUMENT, table.getId())));
 			executor.setCleansWithin(ColdTieringBatchServiceComponent.CLEANS_WITHIN);
-			// Messages name the table and the counts only: never a key (business ids). The start
-			// names the depth of the queue a backfill or an export enqueues to (read now).
-			final String queue = switch (batch) {
-				case BACKFILL -> ColdTieringServiceComponent.BACKFILL_QUEUE;
-				case EXPORT -> PartitionTieringServiceComponent.EXPORT_QUEUE;
-				case EVICTION, PARTITION_SWEEP -> null;
-			};
-			final String depth = queue == null ? ""
-					: " (" + queue + " depth " + this.queueDepthRepository.findDepth(queue).map(String::valueOf).orElse("unreadable") + ", max pending "
-							+ batchProperties.getMaxPending() + ")";
-			executor.setMessagesTemplates(new HashMap<>(Map.of(BatchAction.START, "Cold tiering " + batch + " of " + table.getId() + " started" + depth + ".",
-					BatchAction.FINISH, "Cold tiering " + batch + " of " + table.getId() + " finished in ${duration} minutes.")));
+			// Messages name the table and the counts only: never a key (business ids).
+			executor.setMessagesTemplates(new HashMap<>(Map.of(BatchAction.START, "Cold tiering " + batch + " of " + table.getId() + " started.", BatchAction.FINISH,
+					"Cold tiering " + batch + " of " + table.getId() + " finished in ${duration} minutes.")));
 			this.batchService.start(executor, false, false);
 		}
 		return isStarted;

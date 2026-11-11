@@ -312,11 +312,15 @@ entity and its `@IdClass`) and fails the boot otherwise.
   template still releases it at its transaction's commit). The backfill listener archives it, one
   row per transaction, so a row's lock covers only its own upload and the batch chunk holds no row
   lock.
-  **Backpressure**: before selecting a chunk, the GET reads the depth of `cold-tiering/backfill`
-  (Artemis core `queueQuery` message count, cached 100 ms). Above the table's `backfill.max-pending`
-  (default `10000`) the step selects and enqueues nothing: the GET returns null, which the batch
-  service treats as *postponed* (the run keeps its cursor and count, does not finish, and the next
-  step comes after the usual delay). A depth that cannot be read (no Artemis connection factory,
+  **Backpressure**: before selecting a chunk, the GET asks `ColdTieringServiceComponent.findBackfillBacklog()`
+  for the depth of `cold-tiering/backfill` (Artemis core `queueQuery` message count, cached 100 ms,
+  through `QueueDepthRepository`). Above the table's `backfill.max-pending` (default `10000`) the
+  step selects and enqueues nothing: the GET returns `BatchPostponed.of()`, the batch service's
+  explicit *postponed* result (the run keeps its cursor and count, does not finish, and the next
+  step comes after the usual delay; the record shows `lastBatchPostponed` and `postponedCount`, each
+  postponement is logged at INFO with the batch key, and a WARN every
+  `org.coldis.configuration.service.batch-postponed-warn-steps` consecutive steps, default `60`). A
+  null GET result, or a batch with no GET delegate, stays an error (recorded on the batch). A depth that cannot be read (no Artemis connection factory,
   broker unreachable) counts as full, with a `WARN`: the backfill fails safe, never enqueueing
   blind. The queue is shared by every table, so each table's `max-pending` is compared with the
   whole queue's depth. While a run waits, it stays active, so the hourly crons join it instead of
@@ -435,10 +439,9 @@ the depth of `cold-tiering/upload` (write-through lagging; eviction waits for it
 ### Observability
 
 `[COLD_TIERING]` (registration, scheduling), `[COLD_TIERING_UPLOAD]`, `[COLD_TIERING_COLD_READ]`,
-`[COLD_TIERING_EVICT] table chunk deleted` (info), `[COLD_TIERING_BACKFILL] table queue depth
+`[COLD_TIERING_EVICT] table chunk deleted` (info), `[COLD_TIERING_BACKFILL] table depth
 maxPending` per step (info), with `skipped (backlog full)` when the step is skipped, or `depth
-unreadable: skipped (fail safe)` (warn), the rest at debug; the backfill START message names the
-queue depth when the run started (FINISH has no depth: its template is fixed at the start); the batch service's own
+unreadable: skipped (fail safe)` (warn), the rest at debug; the batch service's own
 messages per batch key name the table and the counts only. No key value reaches a log:
 `TieredRowKey.toString()` shows the table and the number of columns, the batch message templates
 carry no `${lastProcessed}`. Micrometer counters are not built yet (open question).
@@ -463,9 +466,11 @@ deprecated `archiveKey` delegate (runs persisted before the upgrade); a duplicat
 uploads nothing (a sentinel object stays in place, the mark is unchanged); an archive request for
 an evicted key or an archived one is dropped by the lock-free read while another transaction holds
 the row's lock (no wait, no object, no write), and one for a row needing an upload still archives;
-with the backfill listener stopped and its queue above a runtime `max-pending`, the backfill steps
-enqueue nothing and keep the cursor (count 0, not finished), then resume and archive every row once
-the listener drains the queue; a backfill start while a
+with the queue depth unreadable (a reader with no broker swapped in through
+`QueueDepthRepository.replaceReader`), then with the backfill listener stopped and its queue above
+a runtime `max-pending` (set and reset on the table's configured entry), the backfill steps enqueue
+nothing and keep the cursor (count 0, not finished, postponed), then resume and archive every row
+once the listener drains the queue; a backfill start while a
 run is active (slowed by a runtime table override) keeps its start, cursor and count;
 `findNewestTiered` over hot and cold snapshots (newest, as-of, before the first, unknown owner);
 the `NONE` table: archived, evicted, `findByIdTiered` empty, `findColdRow` holds the row, hot

@@ -517,7 +517,7 @@ public class PartitionTieringServiceTest extends ContainerTestHelper {
 	public void testExportBacklogGuard() throws Exception {
 		final String february = ColdTieringTestConfiguration.MONTHLY_TABLE_NAME + "_2026_02";
 		final List<AbstractMessageListenerContainer> listeners = ColdTieringTestConfiguration.listenerContainersOf(this.listenerRegistry,
-				PartitionTieringServiceComponent.EXPORT_QUEUE);
+				"cold-tiering/export");
 		Assertions.assertFalse(listeners.isEmpty());
 		final ExportProperties export = this.properties.getTable().get(ColdTieringTestConfiguration.MONTHLY_TABLE).getExport();
 		// Below one partition's shards: January's shards fill the queue past it.

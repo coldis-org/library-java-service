@@ -61,30 +61,38 @@ class ArtemisQueueDepthReaderTest extends ContainerTestHelper {
 	@DisplayName("depth is the queue's message count; an unknown queue has depth 0")
 	void testDepth() throws Exception {
 		final String queueName = "queue-depth/test-" + System.nanoTime();
-		final ArtemisQueueDepthReader reader = this.reader(0L);
-		for (int message = 0; message < ArtemisQueueDepthReaderTest.MESSAGES; message++) {
-			this.jmsTemplate.convertAndSend(queueName, "message-" + message);
+		try (ArtemisQueueDepthReader reader = this.reader(0L)) {
+			for (int message = 0; message < ArtemisQueueDepthReaderTest.MESSAGES; message++) {
+				this.jmsTemplate.convertAndSend(queueName, "message-" + message);
+			}
+			Assertions.assertTrue(TestHelper.waitUntilValid(() -> reader.findDepth(queueName),
+					depth -> Optional.of((long) ArtemisQueueDepthReaderTest.MESSAGES).equals(depth), TestHelper.REGULAR_WAIT, TestHelper.SHORT_WAIT));
+			Assertions.assertEquals(Optional.of(0L), reader.findDepth("queue-depth/unknown-" + System.nanoTime()));
 		}
-		Assertions.assertTrue(TestHelper.waitUntilValid(() -> reader.findDepth(queueName), depth -> Optional.of((long) ArtemisQueueDepthReaderTest.MESSAGES).equals(depth),
-				TestHelper.REGULAR_WAIT, TestHelper.SHORT_WAIT));
-		Assertions.assertEquals(Optional.of(0L), reader.findDepth("queue-depth/unknown-" + System.nanoTime()));
 	}
 
 	/**
-	 * A depth read within the TTL is reused: messages sent after it are not seen until it expires.
+	 * A depth read within the TTL is reused: a message sent after it is not seen until the cache
+	 * is dropped (close), while an uncached reader sees it.
 	 *
 	 * @throws Exception If the test fails.
 	 */
 	@Test
-	@DisplayName("a depth is cached for the TTL")
+	@DisplayName("a depth is cached for the TTL; close releases the session and the cache")
 	void testCache() throws Exception {
 		final String queueName = "queue-depth/cache-" + System.nanoTime();
-		final ArtemisQueueDepthReader reader = this.reader(60_000L);
-		Assertions.assertEquals(Optional.of(0L), reader.findDepth(queueName));
-		this.jmsTemplate.convertAndSend(queueName, "message");
-		Assertions.assertEquals(Optional.of(0L), reader.findDepth(queueName));
-		Assertions.assertEquals(0L, reader.getLastDepth(queueName));
-		Assertions.assertEquals(Optional.of(1L), this.reader(0L).findDepth(queueName));
+		try (ArtemisQueueDepthReader cachedReader = this.reader(60_000L); ArtemisQueueDepthReader uncachedReader = this.reader(0L)) {
+			Assertions.assertTrue(TestHelper.waitUntilValid(() -> cachedReader.findDepth(queueName), depth -> Optional.of(0L).equals(depth), TestHelper.REGULAR_WAIT,
+					TestHelper.SHORT_WAIT));
+			this.jmsTemplate.convertAndSend(queueName, "message");
+			Assertions.assertTrue(TestHelper.waitUntilValid(() -> uncachedReader.findDepth(queueName), depth -> Optional.of(1L).equals(depth), TestHelper.REGULAR_WAIT,
+					TestHelper.SHORT_WAIT));
+			Assertions.assertEquals(Optional.of(0L), cachedReader.findDepth(queueName));
+			Assertions.assertEquals(0L, cachedReader.getLastDepth(queueName));
+			// Closed: session and cache released; the next read opens a new session.
+			cachedReader.close();
+			Assertions.assertEquals(Optional.of(1L), cachedReader.findDepth(queueName));
+		}
 	}
 
 	/**
@@ -93,7 +101,9 @@ class ArtemisQueueDepthReaderTest extends ContainerTestHelper {
 	@Test
 	@DisplayName("an unreadable depth is empty, not an exception")
 	void testUnreadable() {
-		Assertions.assertEquals(Optional.empty(), new ArtemisQueueDepthReader(null, 0L).findDepth("queue-depth/any"));
+		try (ArtemisQueueDepthReader reader = new ArtemisQueueDepthReader(null, 0L)) {
+			Assertions.assertEquals(Optional.empty(), reader.findDepth("queue-depth/any"));
+		}
 	}
 
 }

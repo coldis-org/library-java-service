@@ -27,6 +27,7 @@ import org.coldis.library.service.tiering.model.TieredTable;
 import org.coldis.library.service.tiering.repository.ColdStorageRepository;
 import org.coldis.library.service.tiering.repository.HotTierRepository;
 import org.coldis.library.service.tiering.repository.HotTierRepository.HotRow;
+import org.coldis.library.service.tiering.repository.QueueDepthRepository;
 import org.coldis.library.service.tiering.repository.TieredRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -56,7 +57,7 @@ public class ColdTieringServiceComponent {
 	private static final String UPLOAD_QUEUE = "cold-tiering/upload";
 
 	/** Backfill queue. */
-	public static final String BACKFILL_QUEUE = "cold-tiering/backfill";
+	private static final String BACKFILL_QUEUE = "cold-tiering/backfill";
 
 	/** Touch queue. */
 	private static final String TOUCH_QUEUE = "cold-tiering/touch";
@@ -89,6 +90,10 @@ public class ColdTieringServiceComponent {
 	/** Cold storage. */
 	@Autowired
 	private ColdStorageRepository coldStorageRepository;
+
+	/** Queue depths. */
+	@Autowired
+	private QueueDepthRepository queueDepthRepository;
 
 	/** Row payload codec. */
 	@Autowired
@@ -319,6 +324,15 @@ public class ColdTieringServiceComponent {
 	public void requestArchive(
 			final TieredRowKey key) {
 		this.sendNow(ColdTieringServiceComponent.BACKFILL_QUEUE, key);
+	}
+
+	/**
+	 * Backfill requests pending: the depth of the backfill queue, shared by every table.
+	 *
+	 * @return The pending requests, or empty when the depth cannot be read.
+	 */
+	public Optional<Long> findBackfillBacklog() {
+		return this.queueDepthRepository.findDepth(ColdTieringServiceComponent.BACKFILL_QUEUE);
 	}
 
 	/**

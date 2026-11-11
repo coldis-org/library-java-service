@@ -13,6 +13,7 @@ import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.boot.jms.ConnectionFactoryUnwrapper;
 import org.springframework.stereotype.Repository;
 
+import jakarta.annotation.PreDestroy;
 import jakarta.jms.ConnectionFactory;
 
 /**
@@ -67,6 +68,34 @@ public class QueueDepthRepository {
 			}
 		}
 		return this.reader;
+	}
+
+	/**
+	 * Replaces the reader (an operator or a test pointing the depths at another broker, or at none
+	 * to exercise the unreadable path), closing nothing.
+	 *
+	 * @param  newReader The reader to use from now on.
+	 * @return           The reader used until now (null when none was created yet).
+	 */
+	public ArtemisQueueDepthReader replaceReader(
+			final ArtemisQueueDepthReader newReader) {
+		synchronized (this) {
+			final ArtemisQueueDepthReader previousReader = this.reader;
+			this.reader = newReader;
+			return previousReader;
+		}
+	}
+
+	/**
+	 * Releases the reader's broker session on shutdown.
+	 */
+	@PreDestroy
+	public void close() {
+		synchronized (this) {
+			if (this.reader != null) {
+				this.reader.close();
+			}
+		}
 	}
 
 	/**

@@ -34,6 +34,7 @@ import org.coldis.library.service.tiering.model.TieredRowKey;
 import org.coldis.library.service.tiering.model.TieredTable;
 import org.coldis.library.service.tiering.TieringBatch;
 import org.coldis.library.service.tiering.repository.FolderColdStorageRepository;
+import org.coldis.library.service.jms.ArtemisQueueDepthReader;
 import org.coldis.library.service.tiering.repository.QueueDepthRepository;
 import org.coldis.library.test.StartTestWithContainerExtension;
 import org.coldis.library.test.TestHelper;
@@ -417,9 +418,8 @@ public class ColdTieringServiceTest extends ContainerTestHelper {
 	public void testBackfillNoParallelRun() throws Exception {
 		final List<TieredSnapshotKey> keys = this.seedUnarchived();
 		// A long pause between chunks keeps the run active after its first chunk.
-		final TableProperties slowTable = new TableProperties();
-		slowTable.getBackfill().setDelayBetweenChunks(Duration.ofMinutes(10));
-		this.properties.getTable().put(ColdTieringTestConfiguration.SNAPSHOT_TABLE, slowTable);
+		final TableProperties snapshotTable = this.properties.getTable().get(ColdTieringTestConfiguration.SNAPSHOT_TABLE);
+		snapshotTable.getBackfill().setDelayBetweenChunks(Duration.ofMinutes(10));
 		try {
 			Assertions.assertTrue(this.batchServiceComponent.run(ColdTieringTestConfiguration.SNAPSHOT_TABLE, TieringBatch.BACKFILL));
 			Assertions.assertTrue(TestHelper.waitUntilValid(this::snapshotBackfillRecord,
@@ -439,7 +439,7 @@ public class ColdTieringServiceTest extends ContainerTestHelper {
 			Assertions.assertEquals(2, this.coldStorage.list("cold-tiering/tiered-snapshot/").size());
 		}
 		finally {
-			this.properties.getTable().remove(ColdTieringTestConfiguration.SNAPSHOT_TABLE);
+			snapshotTable.getBackfill().setDelayBetweenChunks(null);
 			this.batchService.cancel(TieringBatch.BACKFILL.keySuffix(ColdTieringTestConfiguration.SNAPSHOT_TABLE));
 		}
 	}
@@ -508,42 +508,61 @@ public class ColdTieringServiceTest extends ContainerTestHelper {
 	}
 
 	/**
-	 * Backpressure: with the backfill listener stopped and its queue above the table's
-	 * {@code max-pending}, the backfill steps enqueue nothing and keep the cursor (the run waits,
-	 * not finished); once the listener drains the queue the run resumes and archives every row.
+	 * The backfill run of the snapshot table waits (postponed) with nothing enqueued.
+	 *
+	 * @param  postponedCountAbove Postponed steps the record must have passed.
+	 * @throws Exception           If the wait fails.
+	 */
+	private void assertBackfillWaiting(
+			final Long postponedCountAbove) throws Exception {
+		Assertions.assertTrue(TestHelper.waitUntilValid(this::snapshotBackfillRecord,
+				batchRecord -> (batchRecord != null) && batchRecord.getLastBatchPostponed() && (batchRecord.getPostponedCount() > postponedCountAbove),
+				TestHelper.REGULAR_WAIT * 4, TestHelper.SHORT_WAIT));
+		final BatchExecutor<?> waitingRecord = this.snapshotBackfillRecord();
+		Assertions.assertEquals(Long.valueOf(0), waitingRecord.getLastProcessedCount());
+		Assertions.assertNull(waitingRecord.getLastProcessed());
+		Assertions.assertFalse(waitingRecord.isFinished());
+	}
+
+	/**
+	 * Backpressure: while the backfill queue's depth cannot be read, and then while the queue (its
+	 * listener stopped) is above the table's {@code max-pending}, the backfill steps enqueue
+	 * nothing and keep the cursor (the run waits, not finished); once the listener drains the
+	 * queue the run resumes and archives every row.
 	 *
 	 * @throws Exception If the test fails.
 	 */
 	@Test
-	@DisplayName("Snapshot: the backfill enqueues nothing while its queue is above max-pending, then resumes")
+	@DisplayName("Snapshot: the backfill enqueues nothing while its queue depth is unreadable or above max-pending, then resumes")
 	public void testBackfillBacklogGuard() throws Exception {
-		final List<AbstractMessageListenerContainer> listeners = ColdTieringTestConfiguration.listenerContainersOf(this.listenerRegistry,
-				ColdTieringServiceComponent.BACKFILL_QUEUE);
+		final List<AbstractMessageListenerContainer> listeners = ColdTieringTestConfiguration.listenerContainersOf(this.listenerRegistry, "cold-tiering/backfill");
 		Assertions.assertFalse(listeners.isEmpty());
-		final TableProperties guardedTable = new TableProperties();
-		guardedTable.getBackfill().setMaxPending(2L);
-		this.properties.getTable().put(ColdTieringTestConfiguration.SNAPSHOT_TABLE, guardedTable);
-		try {
+		final TableProperties snapshotTable = this.properties.getTable().get(ColdTieringTestConfiguration.SNAPSHOT_TABLE);
+		snapshotTable.getBackfill().setMaxPending(2L);
+		ArtemisQueueDepthReader brokerReader = null;
+		Boolean isReaderReplaced = false;
+		try (ArtemisQueueDepthReader unreadableReader = new ArtemisQueueDepthReader(null, 0L)) {
+			// Depth unreadable (no broker behind the reader): fail safe, nothing enqueued.
+			final List<TieredSnapshotKey> keys = this.seedUnarchived();
+			brokerReader = this.queueDepthRepository.replaceReader(unreadableReader);
+			isReaderReplaced = true;
+			Assertions.assertTrue(this.tieringServiceComponent.findBackfillBacklog().isEmpty());
+			Assertions.assertTrue(this.batchServiceComponent.run(ColdTieringTestConfiguration.SNAPSHOT_TABLE, TieringBatch.BACKFILL));
+			this.assertBackfillWaiting(1L);
+
 			// A backlog of three requests for rows no longer hot (dropped once drained).
 			listeners.forEach(AbstractMessageListenerContainer::stop);
+			this.queueDepthRepository.replaceReader(brokerReader);
+			isReaderReplaced = false;
 			for (int request = 1; request <= 3; request++) {
 				this.tieringServiceComponent.requestArchive(this.rowKey(new TieredSnapshotKey("owner-gone", LocalDateTime.of(2026, 5, request, 0, 0))));
 			}
-			Assertions.assertTrue(TestHelper.waitUntilValid(() -> this.queueDepthRepository.findDepth(ColdTieringServiceComponent.BACKFILL_QUEUE),
-					depth -> depth.orElse(0L) >= 3L, TestHelper.REGULAR_WAIT, TestHelper.VERY_SHORT_WAIT));
+			Assertions.assertTrue(TestHelper.waitUntilValid(() -> this.tieringServiceComponent.findBackfillBacklog(), depth -> depth.orElse(0L) >= 3L,
+					TestHelper.REGULAR_WAIT, TestHelper.VERY_SHORT_WAIT));
 
-			// Several steps (PT0.2S apart) pass: nothing enqueued, the cursor in place, the run waiting.
-			final List<TieredSnapshotKey> keys = this.seedUnarchived();
-			Assertions.assertTrue(this.batchServiceComponent.run(ColdTieringTestConfiguration.SNAPSHOT_TABLE, TieringBatch.BACKFILL));
-			Assertions.assertTrue(TestHelper.waitUntilValid(this::snapshotBackfillRecord,
-					batchRecord -> (batchRecord != null) && batchRecord.getLastBatchPostponed(), TestHelper.REGULAR_WAIT * 4, TestHelper.SHORT_WAIT));
-			Thread.sleep(TestHelper.SHORT_WAIT * 2);
-			final BatchExecutor<?> waitingRecord = this.snapshotBackfillRecord();
-			Assertions.assertEquals(Long.valueOf(0), waitingRecord.getLastProcessedCount());
-			Assertions.assertNull(waitingRecord.getLastProcessed());
-			Assertions.assertFalse(waitingRecord.isFinished());
-			Assertions.assertTrue(waitingRecord.getLastBatchPostponed());
-			Assertions.assertEquals(Optional.of(3L), this.queueDepthRepository.findDepth(ColdTieringServiceComponent.BACKFILL_QUEUE));
+			// Readable now, but above max-pending: more steps (PT0.2S apart) still enqueue nothing.
+			this.assertBackfillWaiting(this.snapshotBackfillRecord().getPostponedCount() + 2);
+			Assertions.assertEquals(Optional.of(3L), this.tieringServiceComponent.findBackfillBacklog());
 
 			// The listener drains the backlog: the run resumes and archives every row once.
 			listeners.forEach(AbstractMessageListenerContainer::start);
@@ -553,11 +572,15 @@ public class ColdTieringServiceTest extends ContainerTestHelper {
 			Assertions.assertTrue(TestHelper.waitUntilValid(this::snapshotBackfillRecord, batchRecord -> (batchRecord != null) && batchRecord.isFinished(),
 					TestHelper.REGULAR_WAIT * 4, TestHelper.SHORT_WAIT));
 			Assertions.assertEquals(Long.valueOf(keys.size()), this.snapshotBackfillRecord().getLastProcessedCount());
+			Assertions.assertFalse(this.snapshotBackfillRecord().getLastBatchPostponed());
 			Assertions.assertEquals(keys.size(), this.coldStorage.list("cold-tiering/tiered-snapshot/").size());
 		}
 		finally {
+			if (isReaderReplaced) {
+				this.queueDepthRepository.replaceReader(brokerReader);
+			}
 			listeners.stream().filter(container -> !container.isRunning()).forEach(AbstractMessageListenerContainer::start);
-			this.properties.getTable().remove(ColdTieringTestConfiguration.SNAPSHOT_TABLE);
+			snapshotTable.getBackfill().setMaxPending(null);
 			this.batchService.cancel(TieringBatch.BACKFILL.keySuffix(ColdTieringTestConfiguration.SNAPSHOT_TABLE));
 		}
 	}
