@@ -4,6 +4,7 @@ import java.util.Optional;
 
 import org.apache.activemq.artemis.jms.client.ActiveMQConnectionFactory;
 import org.coldis.library.service.jms.ArtemisQueueDepthReader;
+import org.coldis.library.service.jms.QueueDepthComponent;
 import org.coldis.library.test.StartTestWithContainerExtension;
 import org.coldis.library.test.TestHelper;
 import org.coldis.library.test.TestWithContainer;
@@ -13,6 +14,7 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.support.DefaultListableBeanFactory;
 import org.springframework.boot.jms.ConnectionFactoryUnwrapper;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.context.SpringBootTest.WebEnvironment;
@@ -103,6 +105,34 @@ class ArtemisQueueDepthReaderTest extends ContainerTestHelper {
 	void testUnreadable() {
 		try (ArtemisQueueDepthReader reader = new ArtemisQueueDepthReader(null, 0L)) {
 			Assertions.assertEquals(Optional.empty(), reader.findDepth("queue-depth/any"));
+		}
+	}
+
+	/**
+	 * Several connection factories with none primary (one per service client, as in services):
+	 * the depth on no given factory is empty, never an exception, and the depth on the factory
+	 * that sends to the queue is its message count.
+	 *
+	 * @throws Exception If the test fails.
+	 */
+	@Test
+	@DisplayName("with several connection factories and none primary, the depth is read on the given one")
+	void testSeveralConnectionFactories() throws Exception {
+		final String queueName = "queue-depth/test-" + System.nanoTime();
+		final DefaultListableBeanFactory beanFactory = new DefaultListableBeanFactory();
+		beanFactory.registerSingleton("firstServiceJmsConnectionFactory", this.connectionFactory);
+		beanFactory.registerSingleton("secondServiceJmsConnectionFactory", this.connectionFactory);
+		final QueueDepthComponent component = new QueueDepthComponent(beanFactory.getBeanProvider(ConnectionFactory.class));
+		try {
+			for (int message = 0; message < ArtemisQueueDepthReaderTest.MESSAGES; message++) {
+				this.jmsTemplate.convertAndSend(queueName, "message-" + message);
+			}
+			Assertions.assertEquals(Optional.empty(), component.findDepth(queueName));
+			Assertions.assertTrue(TestHelper.waitUntilValid(() -> component.findDepth(this.jmsTemplate.getConnectionFactory(), queueName),
+					depth -> Optional.of((long) ArtemisQueueDepthReaderTest.MESSAGES).equals(depth), TestHelper.REGULAR_WAIT, TestHelper.SHORT_WAIT));
+		}
+		finally {
+			component.close();
 		}
 	}
 
