@@ -315,7 +315,8 @@ entity and its `@IdClass`) and fails the boot otherwise.
   **Backpressure**: before selecting a chunk, the GET asks `ColdTieringServiceComponent.findBackfillBacklog()`
   for the depth of `cold-tiering/backfill` (Artemis core `queueQuery` message count, cached 100 ms,
   through `org.coldis.library.service.jms.QueueDepthComponent`, a generic component any batch can use
-  for its own queue). Above the table's `backfill.max-pending` (default `10000`) the
+  for its own queue; the depth is read on the connection factory of the JMS template that sends the
+  requests, since services hold one connection factory per service client with none primary). Above the table's `backfill.max-pending` (default `10000`) the
   step selects and enqueues nothing: the GET throws `BatchPostponedException`, the batch service's
   explicit *postponed* signal (caught by the engine; GET delegates that never throw it are
   unchanged, an empty list still finishes, a null result or a missing GET delegate is an error) (the run keeps its cursor and count, does not finish, and the next

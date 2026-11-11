@@ -327,12 +327,13 @@ public class ColdTieringServiceComponent {
 	}
 
 	/**
-	 * Backfill requests pending: the depth of the backfill queue, shared by every table.
+	 * Backfill requests pending: the depth of the backfill queue, shared by every table, read on the
+	 * broker the requests are sent to (this component's JMS template's connection factory).
 	 *
 	 * @return The pending requests, or empty when the depth cannot be read.
 	 */
 	public Optional<Long> findBackfillBacklog() {
-		return this.queueDepthComponent.findDepth(ColdTieringServiceComponent.BACKFILL_QUEUE);
+		return this.queueDepthComponent.findDepth(this.jmsTemplate.getConnectionFactory(), ColdTieringServiceComponent.BACKFILL_QUEUE);
 	}
 
 	/**

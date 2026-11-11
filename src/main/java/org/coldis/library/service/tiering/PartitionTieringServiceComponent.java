@@ -475,12 +475,13 @@ public class PartitionTieringServiceComponent implements ColdLookupStrategy {
 
 	/**
 	 * Shard export requests pending: the depth of the export queue, shared by every
-	 * partition-tiered table.
+	 * partition-tiered table, read on the broker the requests are sent to (this component's JMS
+	 * template's connection factory).
 	 *
 	 * @return The pending requests, or empty when the depth cannot be read.
 	 */
 	public Optional<Long> findExportBacklog() {
-		return this.queueDepthComponent.findDepth(PartitionTieringServiceComponent.EXPORT_QUEUE);
+		return this.queueDepthComponent.findDepth(this.jmsTemplate.getConnectionFactory(), PartitionTieringServiceComponent.EXPORT_QUEUE);
 	}
 
 	/**
