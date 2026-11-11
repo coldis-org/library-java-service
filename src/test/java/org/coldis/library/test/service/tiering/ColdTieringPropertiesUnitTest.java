@@ -43,6 +43,8 @@ public class ColdTieringPropertiesUnitTest {
 		Assertions.assertFalse(resolved.getExport().getEnabled());
 		Assertions.assertEquals("cold-tiering/", resolved.getPrefix());
 		Assertions.assertEquals(Duration.ofDays(15), resolved.getTtl());
+		Assertions.assertEquals(10_000L, resolved.getBackfill().getMaxPending());
+		Assertions.assertEquals(10_000L, resolved.getExport().getMaxPending());
 	}
 
 	/**
@@ -78,6 +80,8 @@ public class ColdTieringPropertiesUnitTest {
 		Assertions.assertEquals(2000L, shipped.getEviction().getChunkSize());
 		Assertions.assertEquals("0 30 * * * *", shipped.getBackfill().getCron());
 		Assertions.assertEquals(fallback.getBackfill().getChunkSize(), shipped.getBackfill().getChunkSize());
+		Assertions.assertEquals(fallback.getBackfill().getMaxPending(), shipped.getBackfill().getMaxPending());
+		Assertions.assertEquals(fallback.getExport().getMaxPending(), shipped.getExport().getMaxPending());
 		Assertions.assertEquals("0 15 * * * *", shipped.getExport().getCron());
 		Assertions.assertEquals(fallback.getExport().getCron(), shipped.getExport().getCron());
 		Assertions.assertEquals(fallback.getExport().getFinishWithin(), shipped.getExport().getFinishWithin());

@@ -181,10 +181,11 @@ public class BatchServiceComponent {
 			throw new BatchExpiredException();
 		}
 
-		// For each item in the next batch.
+		// For each item in the next batch (a null batch postpones the run: nothing to do yet).
 		this.log(batchExecutorValue, BatchAction.GET);
 		final List<Type> nextBatchToProcess = batchExecutorValue.get();
-		for (final Type next : nextBatchToProcess) {
+		batchExecutorValue.setLastBatchPostponed(nextBatchToProcess == null);
+		for (final Type next : Objects.requireNonNullElse(nextBatchToProcess, List.<Type>of())) {
 			batchExecutorValue.execute(next);
 			this.log(batchExecutorValue, BatchAction.EXECUTE);
 			actualLastProcessed = next;
@@ -277,8 +278,8 @@ public class BatchServiceComponent {
 					Type previousLastProcessed = null;
 					Type currentLastProcessed = batchExecutorValue.getLastProcessed();
 
-					// Starts or resumes the batch.
-					if (currentLastProcessed == null) {
+					// Starts or resumes the batch (a run whose first batch was postponed has started).
+					if ((currentLastProcessed == null) && !batchExecutorValue.getLastBatchPostponed()) {
 						batchExecutorValue.start();
 						this.log(batchExecutorValue, BatchAction.START);
 					}
@@ -296,9 +297,9 @@ public class BatchServiceComponent {
 					previousLastProcessed = currentLastProcessed;
 					currentLastProcessed = nextLastProcessed;
 
-					// If there is no new data, finishes the batch.
+					// If there is no new data, finishes the batch; a postponed batch waits for its next step.
 					batchExecutorValue.setLastBatchError(null);
-					if (Objects.equals(previousLastProcessed, currentLastProcessed)) {
+					if (!batchExecutorValue.getLastBatchPostponed() && Objects.equals(previousLastProcessed, currentLastProcessed)) {
 						batchExecutorValue.finish();
 						batchExecutorValue.setLastFinishedAt(DateTimeHelper.getCurrentLocalDateTime());
 					}

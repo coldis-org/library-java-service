@@ -3,6 +3,7 @@ package org.coldis.library.test.service.tiering;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.util.List;
+import java.util.Objects;
 
 import org.coldis.library.service.tiering.model.Rehydration;
 import org.coldis.library.service.tiering.model.PartitionTieredTable;
@@ -15,6 +16,8 @@ import org.coldis.library.service.tiering.repository.FolderColdStorageRepository
 import org.springframework.beans.factory.DisposableBean;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.jms.config.JmsListenerEndpointRegistry;
+import org.springframework.jms.listener.AbstractMessageListenerContainer;
 
 /**
  * The tiered tables of the tests: what a consumer declares.
@@ -45,6 +48,21 @@ public class ColdTieringTestConfiguration {
 
 	/** A disabled partition-tiered definition of the same table. */
 	public static final String MONTHLY_DISABLED_TABLE = "tiered-monthly-snapshot-disabled";
+
+	/**
+	 * The listener containers of a queue (a test stops them to let the queue fill, and starts
+	 * them again).
+	 *
+	 * @param  registry Listener registry.
+	 * @param  queue    Queue.
+	 * @return          The containers.
+	 */
+	public static List<AbstractMessageListenerContainer> listenerContainersOf(
+			final JmsListenerEndpointRegistry registry,
+			final String queue) {
+		return registry.getListenerContainers().stream().filter(AbstractMessageListenerContainer.class::isInstance)
+				.map(AbstractMessageListenerContainer.class::cast).filter(container -> Objects.equals(queue, container.getDestinationName())).toList();
+	}
 
 	/**
 	 * Snapshots: composite key with a time version, JSONB payload, sliding TTL, rehydration.

@@ -162,6 +162,7 @@ Properties, under `org.coldis.library.service.tiering.`:
 | `block-codec` | `gzip` | Codec of new exports (`gzip` built in; another name needs a consumer bean); reads follow the index |
 | `index-cache.ttl` | `PT5M` | Process-local TTL cache of manifests and shard indexes; bounded by the TTL, not by a size (an entry is ~40 KB: at 10 cold reads a second with no repeated shard, 3,000 entries ≈ 120 MB worst case, far less in practice since a shard serves ~240 k keys). A shared Redis level is future work |
 | `table.<id>.export.{enabled,cron,finish-within}` | `false`, `0 15 * * * *`, `P2D` | The export batch (boundaries pass, then enqueues shards) |
+| `table.<id>.export.max-pending` | `10000` | Most shard requests `cold-tiering/export` may hold for a step to start another partition's export; above it (or when the depth cannot be read) the step starts nothing and the run waits for its next step |
 | `table.<id>.export.quiet-period` | `P2D` | Heuristic eligibility: a partition with no `loaded_at` signal is exported when its newest `updated_at` is older than this and its range end is in the past (backfill of existing months) |
 | `table.<id>.export.exclude-partitions` | `*_legacy` | Leaf partitions never exported nor swept (glob on the name); open-ended ranges (`MAXVALUE`) are always excluded |
 | `table.<id>.export.shard-strategy` / `shards` / `shard-digits` | `equi-depth` / `1000` / `3` | Boundaries for new exports; `shards` is the equi-depth target, `shard-digits` the prefix option |
@@ -305,6 +306,14 @@ exportStartedAt)` per shard to `cold-tiering/export`, sent **after the record's 
 batch step is one transaction); a request that still overtakes the record (an unseen generation)
 is redelivered by the broker. The listeners do the work, N per instance, so parallelism is `export.concurrency ×
 instances`, independent of the batch.
+
+**Backpressure** (as the row backfill's): when the GET finds a partition to export, it first reads
+the depth of `cold-tiering/export` (Artemis core `queueQuery` message count, cached 100 ms). Above
+the table's `export.max-pending` (default `10000`) no export starts: the GET returns null, the batch
+service postpones the run (it does not finish; the next step comes after `delay-between-chunks`),
+and the partition stays a candidate. A depth that cannot be read counts as full (`WARN`, fail
+safe). The queue is shared by every partition-tiered table. One step still enqueues a whole
+partition's shards (`export.shards`, ~1,000), so the bound is about `max-pending + shards`.
 
 `exportShard`, one shard, no long transaction:
 
@@ -644,7 +653,9 @@ FROM cold_tiering_partition_archive WHERE state IN ('VERIFIED', 'STALE', 'EXPORT
 SELECT count(*) FROM ONLY boa_vista_report_full_2026_08 WHERE updated_at > '<exported_at>';
 ```
 
-Alarm on: export queue age > 1 h; a `STALE` record older than a day; a sweep run that deleted
+Alarm on: export queue age > 1 h; `artemis_message_count{queue="cold-tiering/export"}` above
+`export.max-pending` plus one partition's shards (the guard should keep it below); repeated
+`[COLD_TIERING_EXPORT] … depth unreadable` warnings (the export is stalled, failing safe); a `STALE` record older than a day; a sweep run that deleted
 nothing on a partition with `sweep_cursor < blocks`; cold read p99 > 500 ms; any cold read on a
 partition in state `LOADED`/`EXPORTING` (should be zero: it means a hot row went missing);
 replica lag above its usual ceiling during a sweep.
@@ -674,7 +685,10 @@ Library, `src/test/java/org/coldis/library/test/service/tiering/`:
   `partitionLoaded`; a month inside its hold is not swept although its rows are expired; a corrupted
   block byte → CRC failure → cache dropped, retry, then `coldTiering.cold.block.corrupt`; an index
   with `formatVersion=99` is refused; a redelivered shard request writes nothing; `_plus` and an
-  excluded partition are never exported; the registry rejects a table whose PK does not lead with
+  excluded partition are never exported; with the export listener stopped and a runtime
+`export.max-pending` below one partition's shards, January's shards stay queued, the February
+candidate is not started (record still `LOADED`, run not finished) until the listener drains the
+queue, then it is exported and `VERIFIED`; the registry rejects a table whose PK does not lead with
   the shard key, a non-digit shard key value at export, a shard key of another type and a
   partition column that is not the last key column.
 - `ShardedBlockFormatUnitTest` (plain JUnit): writer/reader round trip for gzip, block cut at the size, index `first`/`last`, CRC, a tax id spanning two

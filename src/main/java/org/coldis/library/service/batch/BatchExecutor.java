@@ -182,6 +182,9 @@ public class BatchExecutor<Type> implements Typable {
 	/** Last batch error. */
 	private String lastBatchError;
 
+	/** Whether the last batch was postponed (its GET returned null: nothing to do yet). */
+	private Boolean lastBatchPostponed;
+
 	/**
 	 * No arguments constructor.
 	 */
@@ -500,6 +503,29 @@ public class BatchExecutor<Type> implements Typable {
 					.setScale(0, RoundingMode.HALF_UP).longValueExact());
 		}
 		return targetFinishWithin;
+	}
+
+	/**
+	 * Whether the last batch was postponed: its GET returned null (nothing to do yet), so the run
+	 * kept its cursor and waits for its next step instead of finishing.
+	 *
+	 * @return Whether the last batch was postponed (false when never set, as in records of earlier
+	 *         versions).
+	 */
+	@JsonView({ ModelView.Persistent.class, ModelView.Public.class })
+	public Boolean getLastBatchPostponed() {
+		this.lastBatchPostponed = (this.lastBatchPostponed == null ? false : this.lastBatchPostponed);
+		return this.lastBatchPostponed;
+	}
+
+	/**
+	 * Sets whether the last batch was postponed.
+	 *
+	 * @param lastBatchPostponed Whether the last batch was postponed.
+	 */
+	public void setLastBatchPostponed(
+			final Boolean lastBatchPostponed) {
+		this.lastBatchPostponed = lastBatchPostponed;
 	}
 
 	/**
@@ -1038,6 +1064,7 @@ public class BatchExecutor<Type> implements Typable {
 		this.setLastCancelledAt(null);
 		this.setLastProcessed(null);
 		this.setLastProcessedCount(null);
+		this.setLastBatchPostponed(false);
 		this.getLastStartedAt();
 		this.getLastProcessedCount();
 	}
@@ -1110,7 +1137,9 @@ public class BatchExecutor<Type> implements Typable {
 	/**
 	 * Gets the next batch to be processed.
 	 *
-	 * @return                   The next batch to be processed.
+	 * @return                   The next batch to be processed: empty finishes the run; null
+	 *                           postpones it (nothing to do yet: the cursor stays and the run
+	 *                           waits for its next step).
 	 * @throws BusinessException If the next to process cannot be retrieved.
 	 */
 	@SuppressWarnings("unchecked")

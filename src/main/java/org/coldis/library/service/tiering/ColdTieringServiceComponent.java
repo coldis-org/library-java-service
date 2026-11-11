@@ -56,7 +56,7 @@ public class ColdTieringServiceComponent {
 	private static final String UPLOAD_QUEUE = "cold-tiering/upload";
 
 	/** Backfill queue. */
-	private static final String BACKFILL_QUEUE = "cold-tiering/backfill";
+	public static final String BACKFILL_QUEUE = "cold-tiering/backfill";
 
 	/** Touch queue. */
 	private static final String TOUCH_QUEUE = "cold-tiering/touch";
@@ -323,7 +323,9 @@ public class ColdTieringServiceComponent {
 
 	/**
 	 * Archives a row (row tiering): locks it, uploads its current content, marks it archived at
-	 * the uploaded watermark.
+	 * the uploaded watermark. A plain read first drops, without locking, uploading or writing, a
+	 * request whose row is no longer hot (evicted or deleted) or already archived at its current
+	 * watermark (a duplicate); the locked re-check stays the authority for the rest.
 	 *
 	 * @param  key Key.
 	 * @return     Whether an upload happened.
@@ -336,7 +338,8 @@ public class ColdTieringServiceComponent {
 			final TieredRowKey key) {
 		Boolean isUploaded = false;
 		final TieredTable table = this.registry.getTable(key.tableId());
-		final Optional<HotRow> hotRow = this.hotTierRepository.lockForArchive(table, key);
+		final Boolean isUploadNeeded = this.hotTierRepository.findArchived(table, key).map(isArchived -> !isArchived).orElse(false);
+		final Optional<HotRow> hotRow = isUploadNeeded ? this.hotTierRepository.lockForArchive(table, key) : Optional.empty();
 		if (hotRow.isPresent() && !hotRow.get().isArchived()) {
 			this.coldStorageRepository.store(this.tieredRepository.objectKeyOf(table, key), this.codec.encode(hotRow.get().rowJson()),
 					Map.of(ColdTieringServiceComponent.TABLE_METADATA, table.getId(), ColdTieringServiceComponent.UPDATED_AT_METADATA, hotRow.get().watermark(),
@@ -349,7 +352,7 @@ public class ColdTieringServiceComponent {
 						table.getId());
 			}
 		}
-		ColdTieringServiceComponent.LOGGER.debug("[COLD_TIERING_UPLOAD] table={} uploaded={}", key.tableId(), isUploaded);
+		ColdTieringServiceComponent.LOGGER.debug("[COLD_TIERING_UPLOAD] table={} uploadNeeded={} uploaded={}", key.tableId(), isUploadNeeded, isUploaded);
 		return isUploaded;
 	}
 

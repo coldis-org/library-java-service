@@ -176,6 +176,26 @@ public class HotTierRepository {
 	}
 
 	/**
+	 * Whether a row's current content is archived, read without a lock (a cheap filter of
+	 * duplicate archive requests before {@link #lockForArchive}, which stays the authority).
+	 *
+	 * @param  table Table.
+	 * @param  key   Row key.
+	 * @return       Whether it is archived (archive mark at or after the watermark), or empty when
+	 *               the row is not hot (evicted or deleted).
+	 */
+	public Optional<Boolean> findArchived(
+			final TieredTable table,
+			final TieredRowKey key) {
+		final String sql = "SELECT (hot." + table.getArchivedAtColumn() + " IS NOT NULL AND hot." + table.getArchivedAtColumn() + " >= hot." + table.getWatermarkColumn()
+				+ ") AS archived_ FROM " + table.getTableName() + " hot WHERE " + HotTierRepository.keyPredicate(table);
+		final List<Boolean> rows = this.jdbcTemplate.query(sql, HotTierRepository.keyParameters(ColumnValues.parseKey(table, table.getColumnTypes(), key)), (
+				resultSet,
+				rowNumber) -> resultSet.getBoolean("archived_"));
+		return rows.stream().findFirst();
+	}
+
+	/**
 	 * The row locked for archiving: serializes archivers of one key with each other and with the
 	 * writers, so the object always follows the latest content.
 	 *

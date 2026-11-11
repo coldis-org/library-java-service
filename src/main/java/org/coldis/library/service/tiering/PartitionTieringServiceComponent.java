@@ -75,7 +75,7 @@ public class PartitionTieringServiceComponent implements ColdLookupStrategy {
 	}
 
 	/** Export queue. */
-	private static final String EXPORT_QUEUE = "cold-tiering/export";
+	public static final String EXPORT_QUEUE = "cold-tiering/export";
 
 	/** Generation format. */
 	private static final DateTimeFormatter GENERATION_FORMAT = DateTimeFormatter.ofPattern("yyyyMMdd'T'HHmmssSSS");
