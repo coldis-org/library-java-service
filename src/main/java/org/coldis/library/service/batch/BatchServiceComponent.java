@@ -206,13 +206,11 @@ public class BatchServiceComponent {
 				throw exception;
 			}
 		}
-		final Boolean isPostponed = (postponement != null);
-		batchExecutorValue.setLastBatchPostponed(isPostponed);
-		batchExecutorValue.setPostponedCount(isPostponed ? batchExecutorValue.getPostponedCount() + 1 : 0L);
-		if (isPostponed) {
-			BatchServiceComponent.LOGGER.info("Batch '{}' postponed: {} ({} consecutive steps).", key, postponement.getMessage(), batchExecutorValue.getPostponedCount());
-			if ((batchExecutorValue.getPostponedCount() % Math.max(1L, this.postponedWarnSteps)) == 0) {
-				BatchServiceComponent.LOGGER.warn("Batch '{}' has been postponed for {} consecutive steps.", key, batchExecutorValue.getPostponedCount());
+		final Long postponedCount = batchExecutorValue.markPostponed(postponement != null);
+		if (postponement != null) {
+			BatchServiceComponent.LOGGER.info("Batch '{}' postponed: {} ({} consecutive steps).", key, postponement.getMessage(), postponedCount);
+			if ((postponedCount % Math.max(1L, this.postponedWarnSteps)) == 0) {
+				BatchServiceComponent.LOGGER.warn("Batch '{}' has been postponed for {} consecutive steps.", key, postponedCount);
 			}
 		}
 		for (final Type next : nextBatchToProcess) {

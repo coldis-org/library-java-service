@@ -1095,6 +1095,20 @@ public class BatchExecutor<Type> implements Typable {
 	}
 
 	/**
+	 * Records whether the last batch was postponed: counts consecutive postponements, and resets the
+	 * count when a batch is not postponed.
+	 *
+	 * @param  isPostponed Whether the last batch was postponed.
+	 * @return             The consecutive postponements up to the last batch.
+	 */
+	public Long markPostponed(
+			final Boolean isPostponed) {
+		this.setLastBatchPostponed(isPostponed);
+		this.setPostponedCount(isPostponed ? this.getPostponedCount() + 1 : 0L);
+		return this.getPostponedCount();
+	}
+
+	/**
 	 * @see org.coldis.library.model.Typable#getTypeName()
 	 */
 	@Override
