@@ -15,6 +15,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.support.DefaultListableBeanFactory;
+import org.springframework.beans.factory.support.RootBeanDefinition;
 import org.springframework.boot.jms.ConnectionFactoryUnwrapper;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.context.SpringBootTest.WebEnvironment;
@@ -24,12 +25,13 @@ import jakarta.jms.ConnectionFactory;
 
 /**
  * {@link ArtemisQueueDepthReader} against the test broker: a queue's message count, an unknown
- * queue, the cache, and an unreadable depth.
+ * queue, the cache, and an unreadable depth; and {@link QueueDepthComponent}'s choice of connection
+ * factory (the given one, else the unique or primary one).
  */
 @TestWithContainer(reuse = true)
 @ExtendWith(StartTestWithContainerExtension.class)
 @SpringBootTest(webEnvironment = WebEnvironment.RANDOM_PORT)
-@DisplayName("ArtemisQueueDepthReader — integration")
+@DisplayName("ArtemisQueueDepthReader and QueueDepthComponent — integration")
 class ArtemisQueueDepthReaderTest extends ContainerTestHelper {
 
 	/** Messages sent. */
@@ -109,30 +111,65 @@ class ArtemisQueueDepthReaderTest extends ContainerTestHelper {
 	}
 
 	/**
-	 * Several connection factories with none primary (one per service client, as in services):
-	 * the depth on no given factory is empty, never an exception, and the depth on the factory
-	 * that sends to the queue is its message count.
+	 * A queue depth component on these connection factories.
+	 *
+	 * @param  unreachableIsPrimary   Whether the unreachable factory is registered too, as primary
+	 *                                (null: not registered).
+	 * @param  unreachableFactory     A factory on no broker.
+	 * @param  registerTestFactoryTwice Whether the test broker's factory is registered twice (none
+	 *                                primary), as services do with one per service client.
+	 * @return                        The component.
+	 */
+	private QueueDepthComponent component(
+			final Boolean unreachableIsPrimary,
+			final ConnectionFactory unreachableFactory,
+			final Boolean registerTestFactoryTwice) {
+		final DefaultListableBeanFactory beanFactory = new DefaultListableBeanFactory();
+		beanFactory.registerSingleton("testServiceJmsConnectionFactory", this.connectionFactory);
+		if (registerTestFactoryTwice) {
+			beanFactory.registerSingleton("otherServiceJmsConnectionFactory", this.connectionFactory);
+		}
+		if (unreachableIsPrimary != null) {
+			final RootBeanDefinition definition = new RootBeanDefinition(ConnectionFactory.class, () -> unreachableFactory);
+			definition.setPrimary(unreachableIsPrimary);
+			beanFactory.registerBeanDefinition("unreachableJmsConnectionFactory", definition);
+		}
+		return new QueueDepthComponent(beanFactory.getBeanProvider(ConnectionFactory.class));
+	}
+
+	/**
+	 * The component reads on the factory it is given (the test broker's: the message count; one on
+	 * no broker: empty); with no factory given, on the application's unique or primary one, and
+	 * empty, never an exception, with several and none primary (one per service client, as in
+	 * services).
 	 *
 	 * @throws Exception If the test fails.
 	 */
 	@Test
-	@DisplayName("with several connection factories and none primary, the depth is read on the given one")
-	void testSeveralConnectionFactories() throws Exception {
+	@DisplayName("the component reads on the given factory, else on the unique or primary one, and is empty with several and none primary")
+	void testComponentConnectionFactories() throws Exception {
 		final String queueName = "queue-depth/test-" + System.nanoTime();
-		final DefaultListableBeanFactory beanFactory = new DefaultListableBeanFactory();
-		beanFactory.registerSingleton("firstServiceJmsConnectionFactory", this.connectionFactory);
-		beanFactory.registerSingleton("secondServiceJmsConnectionFactory", this.connectionFactory);
-		final QueueDepthComponent component = new QueueDepthComponent(beanFactory.getBeanProvider(ConnectionFactory.class));
+		final Optional<Long> sent = Optional.of((long) ArtemisQueueDepthReaderTest.MESSAGES);
+		for (int message = 0; message < ArtemisQueueDepthReaderTest.MESSAGES; message++) {
+			this.jmsTemplate.convertAndSend(queueName, "message-" + message);
+		}
+		final ActiveMQConnectionFactory unreachableFactory = new ActiveMQConnectionFactory("tcp://127.0.0.1:1");
+		final QueueDepthComponent unique = this.component(null, unreachableFactory, false);
+		final QueueDepthComponent primaryUnreachable = this.component(true, unreachableFactory, false);
+		final QueueDepthComponent severalNonePrimary = this.component(false, unreachableFactory, true);
 		try {
-			for (int message = 0; message < ArtemisQueueDepthReaderTest.MESSAGES; message++) {
-				this.jmsTemplate.convertAndSend(queueName, "message-" + message);
-			}
-			Assertions.assertEquals(Optional.empty(), component.findDepth(queueName));
-			Assertions.assertTrue(TestHelper.waitUntilValid(() -> component.findDepth(this.jmsTemplate.getConnectionFactory(), queueName),
-					depth -> Optional.of((long) ArtemisQueueDepthReaderTest.MESSAGES).equals(depth), TestHelper.REGULAR_WAIT, TestHelper.SHORT_WAIT));
+			Assertions.assertTrue(TestHelper.waitUntilValid(() -> unique.findDepth(queueName), sent::equals, TestHelper.REGULAR_WAIT, TestHelper.SHORT_WAIT));
+			Assertions.assertEquals(Optional.empty(), primaryUnreachable.findDepth(queueName));
+			Assertions.assertEquals(Optional.empty(), severalNonePrimary.findDepth(queueName));
+			Assertions.assertEquals(Optional.empty(), severalNonePrimary.findDepth(unreachableFactory, queueName));
+			Assertions.assertTrue(TestHelper.waitUntilValid(() -> severalNonePrimary.findDepth(this.jmsTemplate.getConnectionFactory(), queueName), sent::equals,
+					TestHelper.REGULAR_WAIT, TestHelper.SHORT_WAIT));
 		}
 		finally {
-			component.close();
+			unique.close();
+			primaryUnreachable.close();
+			severalNonePrimary.close();
+			unreachableFactory.close();
 		}
 	}
 

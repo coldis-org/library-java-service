@@ -151,9 +151,10 @@ public class QueueDepthComponent {
 	 * A queue's depth on a connection factory's broker (its message count; {@code 0} for a queue
 	 * the broker does not know yet).
 	 *
-	 * @param  connectionFactory Connection factory (the one that sends to the queue), or null.
+	 * @param  connectionFactory Connection factory (the one that sends to the queue), or null (only
+	 *                               from {@link #findDepth(String)}, which logs its absence once).
 	 * @param  queueName         Queue name.
-	 * @return                   The depth, or empty when it cannot be read.
+	 * @return                   The depth, or empty when it cannot be read (or no factory is given).
 	 */
 	public Optional<Long> findDepth(
 			final ConnectionFactory connectionFactory,
