@@ -1,5 +1,7 @@
 package org.coldis.library.service.http;
 
+import java.util.Objects;
+
 import org.apache.catalina.connector.Connector;
 import org.apache.coyote.AbstractProtocol;
 import org.coldis.library.service.ServiceConfiguration;
@@ -10,6 +12,7 @@ import org.springframework.boot.context.properties.source.ConfigurationPropertyS
 import org.springframework.boot.web.embedded.tomcat.ConfigurableTomcatWebServerFactory;
 import org.springframework.boot.web.server.WebServerFactoryCustomizer;
 import org.springframework.core.Ordered;
+import org.springframework.core.env.CompositePropertySource;
 import org.springframework.core.env.ConfigurableEnvironment;
 import org.springframework.core.env.PropertySource;
 import org.springframework.core.env.PropertySources;
@@ -66,18 +69,48 @@ public class RequestThreadsFloorCustomizer implements WebServerFactoryCustomizer
 	}
 
 	/**
+	 * Gets the source that holds the request-thread cap, as Spring reads it: the
+	 * source itself or, when Spring merged several files under one name into a
+	 * composite source, the first nested source that holds the cap.
+	 *
+	 * @param  propertySource Property source, possibly composite. May be null.
+	 * @return                The source that holds the cap, or null when there is
+	 *                            none.
+	 */
+	private static PropertySource<?> getMaxThreadsHolder(
+			final PropertySource<?> propertySource) {
+		PropertySource<?> maxThreadsSource = propertySource;
+		while (maxThreadsSource instanceof final CompositePropertySource compositePropertySource) {
+			maxThreadsSource = compositePropertySource.getPropertySources().stream()
+					.filter(nestedPropertySource -> nestedPropertySource.containsProperty(RequestThreadsFloorCustomizer.MAX_THREADS_PROPERTY)).findFirst()
+					.orElse(null);
+		}
+		return ((maxThreadsSource != null) && maxThreadsSource.containsProperty(RequestThreadsFloorCustomizer.MAX_THREADS_PROPERTY)) ? maxThreadsSource : null;
+	}
+
+	/**
 	 * Whether the request-thread cap comes from the library defaults. Spring uses
-	 * the first property source, in precedence order, that holds the property.
+	 * the first property source, in precedence order, that holds the property;
+	 * the cap comes from the library defaults when that source is the library
+	 * defaults or a copy of them. A library a service depends on may load
+	 * {@code service.properties} again under another name, and Spring gives that
+	 * copy precedence over the library defaults; several such copies are merged
+	 * into one composite source. A copy is recognised by holding exactly the
+	 * library defaults' content, as {@code @PropertySource} loads it, before
+	 * placeholders resolve. So a cap the service sets itself is used as is, even
+	 * when it is the default's own expression or resolves to the same number.
 	 *
 	 * @param  propertySources Property sources, in precedence order.
 	 * @return                 Whether the cap comes from the library defaults.
 	 */
 	public static Boolean isMaxThreadsFromLibraryDefaults(
 			final PropertySources propertySources) {
-		final PropertySource<?> capSource = propertySources.stream()
+		final PropertySource<?> libraryDefaults = RequestThreadsFloorCustomizer
+				.getMaxThreadsHolder(propertySources.get(ServiceConfiguration.LIBRARY_DEFAULTS_PROPERTY_SOURCE));
+		final PropertySource<?> capSource = RequestThreadsFloorCustomizer.getMaxThreadsHolder(propertySources.stream()
 				.filter(propertySource -> !ConfigurationPropertySources.isAttachedConfigurationPropertySource(propertySource))
-				.filter(propertySource -> propertySource.containsProperty(RequestThreadsFloorCustomizer.MAX_THREADS_PROPERTY)).findFirst().orElse(null);
-		return (capSource != null) && ServiceConfiguration.LIBRARY_DEFAULTS_PROPERTY_SOURCE.equals(capSource.getName());
+				.filter(propertySource -> propertySource.containsProperty(RequestThreadsFloorCustomizer.MAX_THREADS_PROPERTY)).findFirst().orElse(null));
+		return (libraryDefaults != null) && (capSource != null) && Objects.equals(capSource.getSource(), libraryDefaults.getSource());
 	}
 
 	/**
