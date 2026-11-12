@@ -230,8 +230,8 @@ public class DataInstaller implements ApplicationListener<ApplicationReadyEvent>
 
 	/**
 	 * Gets the value of a search path placeholder: the data object's property. A placeholder naming a
-	 * property the data object does not have fails the data set (a search that always misses would
-	 * create every object again over the existing ones).
+	 * property the data object does not have (or has as null) fails the data set (a search that always
+	 * misses would create every object again over the existing ones).
 	 *
 	 * @param  propertyName Property named by the placeholder.
 	 * @param  dataObject   Data object.
@@ -240,8 +240,9 @@ public class DataInstaller implements ApplicationListener<ApplicationReadyEvent>
 	private String getSearchPathValue(
 			final String propertyName,
 			final Map<String, Object> dataObject) {
-		if (!dataObject.containsKey(propertyName)) {
-			throw new IllegalArgumentException("Search operation path placeholder '{" + propertyName + "}' names no property of the data object.");
+		if (dataObject.get(propertyName) == null) {
+			throw new IllegalArgumentException(
+					"Search operation path placeholder '{" + propertyName + "}' names no property (or a null one) of the data object.");
 		}
 		return Objects.toString(dataObject.get(propertyName));
 	}
@@ -268,13 +269,20 @@ public class DataInstaller implements ApplicationListener<ApplicationReadyEvent>
 			final Map<String, Object> dataObject) {
 		final String actualSearchOperationPath = Objects.toString(searchOperationPath, "");
 		final Matcher searchPathPlaceholder = DataInstaller.SEARCH_PATH_PLACEHOLDER.matcher(actualSearchOperationPath);
-		return (searchPathPlaceholder.find()
-				? this.getActualServiceOperationUrl(serviceOperationBaseUrl) + "/" + searchPathPlaceholder.reset()
-						.replaceAll(placeholder -> Matcher.quoteReplacement(this.getSearchPathValue(placeholder.group(1), dataObject)))
-				: this.appendSearchProperties(
-						this.getActualServiceOperationUrl(
-								serviceOperationBaseUrl + (StringUtils.isBlank(actualSearchOperationPath) ? "" : "/" + actualSearchOperationPath)),
-						searchStrategy, searchProperties, dataObject));
+		final String searchOperationUrl;
+		// Template: the placeholders are filled, nothing is appended.
+		if (searchPathPlaceholder.find()) {
+			searchOperationUrl = this.getActualServiceOperationUrl(serviceOperationBaseUrl) + "/"
+					+ searchPathPlaceholder.replaceAll(placeholder -> Matcher.quoteReplacement(this.getSearchPathValue(placeholder.group(1), dataObject)));
+		}
+		// Otherwise, the search properties are appended.
+		else {
+			final String serviceOperationUrl = serviceOperationBaseUrl
+					+ (StringUtils.isBlank(actualSearchOperationPath) ? "" : "/" + actualSearchOperationPath);
+			searchOperationUrl = this.appendSearchProperties(this.getActualServiceOperationUrl(serviceOperationUrl), searchStrategy, searchProperties,
+					dataObject);
+		}
+		return searchOperationUrl;
 	}
 
 	/**
@@ -386,14 +394,19 @@ public class DataInstaller implements ApplicationListener<ApplicationReadyEvent>
 			DataInstaller.LOGGER.info("Installing data for data set '" + dataSetName + "'.");
 			// Gets the service client bean to be used.
 			final GenericRestServiceClient serviceClient = this.getGenericRestServiceClient(dataSetMetadata.getServiceClientBean());
+			// Search URLs, built for every object before any is installed: a bad search path template fails the
+			// data set, and nothing is installed from it.
+			final List<Map<String, Object>> dataObjects = dataSetMetadata.getData();
+			final List<String> searchOperationUrls = dataObjects.stream()
+					.map(dataObject -> this.getSearchOperationUrl(dataSetMetadata.getServiceOperationUrl(), dataSetMetadata.getSearchOperationPath(),
+							dataSetMetadata.getSearchPropertiesStrategy(), dataSetMetadata.getSearchProperties(), dataObject))
+					.toList();
 			// For each data object to be installed.
-			for (final Map<String, Object> dataObject : dataSetMetadata.getData()) {
+			for (int objectIndex = 0; objectIndex < dataObjects.size(); objectIndex++) {
+				final Map<String, Object> dataObject = dataObjects.get(objectIndex);
+				final String searchOperationUrl = searchOperationUrls.get(objectIndex);
 				// Retrieved object.
 				Map<String, Object> existentDataObject = null;
-				// Search URL (built before the search: a bad search path template fails the data set).
-				final String searchOperationUrl = this.getSearchOperationUrl(dataSetMetadata.getServiceOperationUrl(),
-						dataSetMetadata.getSearchOperationPath(), dataSetMetadata.getSearchPropertiesStrategy(), dataSetMetadata.getSearchProperties(),
-						dataObject);
 				// Tries to get existent data.
 				try {
 					existentDataObject = (serviceClient
