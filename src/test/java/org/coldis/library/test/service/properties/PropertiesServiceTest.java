@@ -11,6 +11,7 @@ import org.coldis.library.test.TestWithContainer;
 import org.coldis.library.test.service.ContainerTestHelper;
 import org.coldis.library.service.properties.PropertiesService;
 import org.junit.jupiter.api.Assertions;
+import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.messaginghub.pooled.jms.JmsPoolConnectionFactory;
@@ -125,6 +126,7 @@ public class PropertiesServiceTest extends ContainerTestHelper {
 
 	/** A value set through the endpoint is logged masked: a password-like string by its length only. */
 	@Test
+	@DisplayName("A value set through the endpoint is logged masked")
 	public void testPropertyValueLoggedMasked() {
 		final ch.qos.logback.classic.Logger propertiesLogger = (ch.qos.logback.classic.Logger) LoggerFactory.getLogger(PropertiesService.class);
 		final ListAppender<ILoggingEvent> appender = new ListAppender<>();
@@ -133,10 +135,11 @@ public class PropertiesServiceTest extends ContainerTestHelper {
 		try {
 			this.restTemplate.put("http://localhost:" + this.port + "/properties/string/testProperties1/property1", "FAKE_TEST_PASSWORD", Void.class);
 			Assertions.assertEquals("FAKE_TEST_PASSWORD", this.testProperties1.getProperty1());
-			final List<String> messages = List.copyOf(appender.list).stream().filter(event -> event.getLevel() == Level.INFO)
-					.map(ILoggingEvent::getFormattedMessage).toList();
-			Assertions.assertTrue(messages.stream().anyMatch(message -> message.contains("property1 to <18 characters> in bean testProperties1")));
-			Assertions.assertTrue(messages.stream().noneMatch(message -> message.contains("FAKE_TEST_PASSWORD")));
+			final List<ILoggingEvent> events = List.copyOf(appender.list);
+			Assertions.assertTrue(events.stream().anyMatch(event -> (event.getLevel() == Level.INFO)
+					&& event.getFormattedMessage().contains("property1 to <18 characters> in bean testProperties1")));
+			// At any level: the secret must not reach the log at all.
+			Assertions.assertTrue(events.stream().noneMatch(event -> event.getFormattedMessage().contains("FAKE_TEST_PASSWORD")));
 		}
 		finally {
 			propertiesLogger.detachAppender(appender);
