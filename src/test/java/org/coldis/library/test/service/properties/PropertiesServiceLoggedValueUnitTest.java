@@ -24,25 +24,49 @@ public class PropertiesServiceLoggedValueUnitTest {
 	}
 
 	/**
-	 * A database URL keeps its scheme, host, port and database, and loses user information and
-	 * parameters, which may carry credentials.
+	 * A database URL keeps its scheme, host and port; path and parameters, which may carry
+	 * credentials, are only counted.
 	 */
 	@Test
-	@DisplayName("A database URL loses its credentials and parameters")
-	public void testDatabaseUrlLosesCredentialsAndParameters() {
-		final String loggedValue = PropertiesService.getLoggedValue("dataSource.pool.dataSource.jdbcUrl",
-				"jdbc:postgresql://FAKE_USER:FAKE_TEST_PASSWORD@10.0.1.4:5432/app?sslmode=require&password=FAKE_TEST_PASSWORD");
-		Assertions.assertEquals("jdbc:postgresql://10.0.1.4:5432/app (parameters hidden)", loggedValue);
+	@DisplayName("A database URL keeps its host and port only")
+	public void testDatabaseUrlKeepsHostAndPortOnly() {
+		final String hidden = "/app?sslmode=require&password=FAKE_TEST_PASSWORD";
+		final String loggedValue = PropertiesService.getLoggedValue("dataSource.pool.dataSource.jdbcUrl", "jdbc:postgresql://10.0.1.4:5432" + hidden);
+		Assertions.assertEquals("jdbc:postgresql://10.0.1.4:5432 (+" + hidden.length() + " characters hidden)", loggedValue);
 		Assertions.assertFalse(loggedValue.contains("FAKE"));
 	}
 
 	/**
-	 * Several hosts, and a URL with no parameters, are kept whole.
+	 * A URL with user information is logged by its length only, whatever its password holds.
 	 */
 	@Test
-	@DisplayName("Several hosts, and a URL with no parameters, are kept whole")
+	@DisplayName("A URL with user information is logged by its length only")
+	public void testUrlWithUserInformationLoggedByLength() {
+		for (final String password : new String[] { "FAKE_TEST_PASSWORD", "FAKE/pass", "FAKE?pass", "FAKE#pass", "FAKE;pass", "FAKE@pass" }) {
+			final String url = "jdbc:postgresql://FAKE_USER:" + password + "@10.0.1.4:5432/app";
+			final String loggedValue = PropertiesService.getLoggedValue("jdbcUrl", url);
+			Assertions.assertEquals("<" + url.length() + " characters>", loggedValue);
+		}
+	}
+
+	/**
+	 * A token in a URL path is not logged.
+	 */
+	@Test
+	@DisplayName("A token in a URL path is not logged")
+	public void testPathTokenHidden() {
+		final String hidden = "/services/T000/B000/FAKEtoken123";
+		final String loggedValue = PropertiesService.getLoggedValue("alertWebhookUrl", "https://hooks.example.com" + hidden);
+		Assertions.assertEquals("https://hooks.example.com (+" + hidden.length() + " characters hidden)", loggedValue);
+	}
+
+	/**
+	 * Several hosts, and a URL with no path, keep their hosts and ports.
+	 */
+	@Test
+	@DisplayName("Several hosts, and a URL with no path, keep their hosts and ports")
 	public void testMultiHostAndPlainUrlsKept() {
-		Assertions.assertEquals("jdbc:postgresql://10.0.1.4:5432,10.0.1.5:5432/app",
+		Assertions.assertEquals("jdbc:postgresql://10.0.1.4:5432,10.0.1.5:5432 (+4 characters hidden)",
 				PropertiesService.getLoggedValue("jdbcUrl", "jdbc:postgresql://10.0.1.4:5432,10.0.1.5:5432/app"));
 		Assertions.assertEquals("http://10.0.1.6:8080", PropertiesService.getLoggedValue("serviceEndpoint", "http://10.0.1.6:8080"));
 	}
@@ -53,8 +77,9 @@ public class PropertiesServiceLoggedValueUnitTest {
 	@Test
 	@DisplayName("Parameters after a semicolon are hidden")
 	public void testSemicolonParametersHidden() {
-		final String loggedValue = PropertiesService.getLoggedValue("url", "jdbc:sqlserver://10.0.1.7:1433;user=FAKE_USER;password=FAKE_TEST_PASSWORD");
-		Assertions.assertEquals("jdbc:sqlserver://10.0.1.7:1433 (parameters hidden)", loggedValue);
+		final String hidden = ";user=FAKE_USER;password=FAKE_TEST_PASSWORD";
+		final String loggedValue = PropertiesService.getLoggedValue("url", "jdbc:sqlserver://10.0.1.7:1433" + hidden);
+		Assertions.assertEquals("jdbc:sqlserver://10.0.1.7:1433 (+" + hidden.length() + " characters hidden)", loggedValue);
 	}
 
 	/**

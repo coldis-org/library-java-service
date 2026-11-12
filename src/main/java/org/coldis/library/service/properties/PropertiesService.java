@@ -42,9 +42,10 @@ public class PropertiesService implements ApplicationContextAware {
 	private static final Pattern ADDRESS_PROPERTY_NAME = Pattern.compile(".*(hosts?|ports?|urls?|uris?|address(es)?|endpoints?)");
 
 	/**
-	 * Characters that end the address part of a URL: parameters (? # and the ; of some JDBC drivers).
+	 * Characters that end the hosts and ports of a URL: a path, or parameters (? # and the ; of some
+	 * JDBC drivers).
 	 */
-	private static final Pattern URL_PARAMETERS_START = Pattern.compile("[?#;]");
+	private static final Pattern URL_ADDRESS_END = Pattern.compile("[/?#;]");
 
 	/**
 	 * Application context.
@@ -72,8 +73,8 @@ public class PropertiesService implements ApplicationContextAware {
 	}
 
 	/**
-	 * Whether a property holds an address, judged by the last segment of its name (after the last dot,
-	 * without a query such as ?fieldAccess=true).
+	 * Whether a property holds an address, judged by the last segment of its name (after the last
+	 * dot). The name is a path variable: a query such as ?fieldAccess=true never reaches it.
 	 *
 	 * @param  name Property name.
 	 * @return      Whether the property holds an address.
@@ -82,39 +83,33 @@ public class PropertiesService implements ApplicationContextAware {
 			final String name) {
 		boolean isAddress = false;
 		if (name != null) {
-			final String withoutQuery = name.split("\\?", 2)[0];
-			final String lastSegment = withoutQuery.substring(withoutQuery.lastIndexOf('.') + 1);
+			final String lastSegment = name.substring(name.lastIndexOf('.') + 1);
 			isAddress = PropertiesService.ADDRESS_PROPERTY_NAME.matcher(lastSegment.toLowerCase(Locale.ROOT)).matches();
 		}
 		return isAddress;
 	}
 
 	/**
-	 * Gets the address part of a URL: the scheme, the hosts and ports without user information, and
-	 * the path, without parameters, which may carry credentials.
+	 * Gets the address part of a URL: its scheme, hosts and ports. The rest (path and parameters) is
+	 * only counted, since a path can carry a token as well (webhook and bot addresses, signed links).
 	 *
-	 * @param  url URL (contains "://").
+	 * @param  url URL (contains "://", and no user information).
 	 * @return     The address part of the URL.
 	 */
 	private static String getUrlAddress(
 			final String url) {
 		final int schemeEnd = url.indexOf("://") + 3;
-		final String scheme = url.substring(0, schemeEnd);
 		final String afterScheme = url.substring(schemeEnd);
-		final String[] addressAndParameters = PropertiesService.URL_PARAMETERS_START.split(afterScheme, 2);
-		final String address = addressAndParameters[0];
-		final int pathStart = address.indexOf('/');
-		final String authority = (pathStart < 0 ? address : address.substring(0, pathStart));
-		final String path = (pathStart < 0 ? "" : address.substring(pathStart));
-		final String hostsAndPorts = authority.substring(authority.lastIndexOf('@') + 1);
-		return scheme + hostsAndPorts + path + (addressAndParameters.length > 1 ? " (parameters hidden)" : "");
+		final String hostsAndPorts = PropertiesService.URL_ADDRESS_END.split(afterScheme, 2)[0];
+		final int hiddenLength = afterScheme.length() - hostsAndPorts.length();
+		return url.substring(0, schemeEnd) + hostsAndPorts + (hiddenLength > 0 ? " (+" + hiddenLength + " characters hidden)" : "");
 	}
 
 	/**
 	 * Gets the value as it may be logged. Values can be credentials, or carry them (a database URL
 	 * with a password), and the log is kept: booleans and numbers are logged as they are, addresses
-	 * (a property named after a host, port, URL, URI, address or endpoint) as their scheme, hosts,
-	 * ports and path, and anything else by its length only.
+	 * (a property named after a host, port, URL, URI, address or endpoint) as their scheme, hosts and
+	 * ports, and anything else, or anything with an @, by its length only.
 	 *
 	 * @param  name  Property name.
 	 * @param  value Property value.
@@ -130,7 +125,9 @@ public class PropertiesService implements ApplicationContextAware {
 		else {
 			final String textValue = value.toString();
 			final boolean isAddress = PropertiesService.isAddressProperty(name);
-			if (isAddress && textValue.contains("://")) {
+			// An @ means user information, or an unusual value: by its length only, wherever it is,
+			// so a password with an unencoded / ? # or ; cannot be cut in two.
+			if (isAddress && !textValue.contains("@") && textValue.contains("://")) {
 				loggedValue = PropertiesService.getUrlAddress(textValue);
 			}
 			else if (isAddress && !textValue.contains("@")) {
