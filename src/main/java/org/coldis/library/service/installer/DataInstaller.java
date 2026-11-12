@@ -8,12 +8,14 @@ import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
+import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 import org.apache.commons.collections4.CollectionUtils;
@@ -57,6 +59,13 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 		matchIfMissing = true
 )
 public class DataInstaller implements ApplicationListener<ApplicationReadyEvent>, EmbeddedValueResolverAware {
+
+	/**
+	 * Placeholder in a search operation path template ("{property}"): replaced with that property of
+	 * the data object.
+	 */
+	private static final Pattern SEARCH_PATH_PLACEHOLDER = Pattern.compile("\\{([^{}/]+)\\}");
+
 
 	/**
 	 * Logger.
@@ -175,26 +184,27 @@ public class DataInstaller implements ApplicationListener<ApplicationReadyEvent>
 	}
 
 	/**
-	 * Gets the service operation URL.
+	 * Appends the search properties to the search operation URL, as path segments or as query
+	 * parameters (by the search strategy).
 	 *
-	 * @param  serviceOperationBaseUrl Service operation base URL.
-	 * @param  searchStrategy          Search strategy.
-	 * @param  searchProperties        Search properties.
-	 * @param  dataObject              Data object.
-	 * @return                         The service operation URL.
+	 * @param  resolvedSearchBaseUrl     Search operation URL, resolved, before the search properties.
+	 * @param  searchStrategy            Search strategy.
+	 * @param  searchProperties          Search properties.
+	 * @param  dataObject                Data object.
+	 * @return                           The search operation URL with the search properties.
 	 */
-	private String getSearchOperationUrl(
-			final String serviceOperationBaseUrl,
+	private String appendSearchProperties(
+			final String resolvedSearchBaseUrl,
 			final DataInstallerSearchStrategy searchStrategy,
 			final String[] searchProperties,
 			final Map<String, Object> dataObject) {
 
 		// Service operation URL.
-		final StringBuffer serviceOperationUrl = new StringBuffer(this.getActualServiceOperationUrl(serviceOperationBaseUrl));
+		final StringBuffer searchOperationUrl = new StringBuffer(resolvedSearchBaseUrl);
 		// If the search uses parameter strategy.
 		if (DataInstallerSearchStrategy.PARAMETER.equals(searchStrategy)) {
 			// Appends the search context.
-			serviceOperationUrl.append("?");
+			searchOperationUrl.append("?");
 		}
 		// For each property.
 		for (final String searchProperty : searchProperties) {
@@ -204,18 +214,75 @@ public class DataInstaller implements ApplicationListener<ApplicationReadyEvent>
 				// For path strategy.
 				case PATH:
 					// Adds the property to the URL.
-					serviceOperationUrl.append("/");
-					serviceOperationUrl.append(dataObject.get(searchProperty));
+					searchOperationUrl.append("/");
+					searchOperationUrl.append(dataObject.get(searchProperty));
 					break;
 				// For query parameter strategy.
 				case PARAMETER:
 					// Adds the property to the URL.
-					serviceOperationUrl.append(searchProperty + "=" + dataObject.get(searchProperty) + "&");
+					searchOperationUrl.append(searchProperty + "=" + dataObject.get(searchProperty) + "&");
 					break;
 			}
 		}
 		// Returns the search operation URL.
-		return serviceOperationUrl.toString();
+		return searchOperationUrl.toString();
+	}
+
+	/**
+	 * Gets the value of a search path placeholder: the data object's property. A placeholder naming a
+	 * property the data object does not have (or has as null) fails the data set (a search that always
+	 * misses would create every object again over the existing ones).
+	 *
+	 * @param  propertyName Property named by the placeholder.
+	 * @param  dataObject   Data object.
+	 * @return              The property value.
+	 */
+	private String getSearchPathValue(
+			final String propertyName,
+			final Map<String, Object> dataObject) {
+		if (dataObject.get(propertyName) == null) {
+			throw new IllegalArgumentException(
+					"Search operation path placeholder '{" + propertyName + "}' names no property (or a null one) of the data object.");
+		}
+		return Objects.toString(dataObject.get(propertyName));
+	}
+
+	/**
+	 * Gets the search operation URL. A search operation path with placeholders ("{property}", e.g.
+	 * "{code}/code") is a template: each placeholder is replaced with that property of the data object,
+	 * and the search properties are not appended. Otherwise, the search properties are appended to the
+	 * URL (with the search operation path, if any), as path segments or as query parameters (by the
+	 * search strategy). Only the search operation path can be a template, never the service URL.
+	 *
+	 * @param  serviceOperationBaseUrl Service operation base URL.
+	 * @param  searchOperationPath     Search operation path (empty for none).
+	 * @param  searchStrategy          Search strategy.
+	 * @param  searchProperties        Search properties.
+	 * @param  dataObject              Data object.
+	 * @return                         The search operation URL.
+	 */
+	private String getSearchOperationUrl(
+			final String serviceOperationBaseUrl,
+			final String searchOperationPath,
+			final DataInstallerSearchStrategy searchStrategy,
+			final String[] searchProperties,
+			final Map<String, Object> dataObject) {
+		final String actualSearchOperationPath = Objects.toString(searchOperationPath, "");
+		final Matcher searchPathPlaceholder = DataInstaller.SEARCH_PATH_PLACEHOLDER.matcher(actualSearchOperationPath);
+		final String searchOperationUrl;
+		// Template: the placeholders are filled, nothing is appended.
+		if (searchPathPlaceholder.find()) {
+			searchOperationUrl = this.getActualServiceOperationUrl(serviceOperationBaseUrl) + "/"
+					+ searchPathPlaceholder.replaceAll(placeholder -> Matcher.quoteReplacement(this.getSearchPathValue(placeholder.group(1), dataObject)));
+		}
+		// Otherwise, the search properties are appended.
+		else {
+			final String unresolvedSearchBaseUrl = serviceOperationBaseUrl
+					+ (StringUtils.isBlank(actualSearchOperationPath) ? "" : "/" + actualSearchOperationPath);
+			searchOperationUrl = this.appendSearchProperties(this.getActualServiceOperationUrl(unresolvedSearchBaseUrl), searchStrategy,
+					searchProperties, dataObject);
+		}
+		return searchOperationUrl;
 	}
 
 	/**
@@ -327,19 +394,23 @@ public class DataInstaller implements ApplicationListener<ApplicationReadyEvent>
 			DataInstaller.LOGGER.info("Installing data for data set '" + dataSetName + "'.");
 			// Gets the service client bean to be used.
 			final GenericRestServiceClient serviceClient = this.getGenericRestServiceClient(dataSetMetadata.getServiceClientBean());
+			// Search URLs, built for every object before any is installed: a bad search path template fails the
+			// data set, and nothing is installed from it.
+			final List<Map<String, Object>> dataObjects = dataSetMetadata.getData();
+			final List<String> searchOperationUrls = dataObjects.stream()
+					.map(dataObject -> this.getSearchOperationUrl(dataSetMetadata.getServiceOperationUrl(), dataSetMetadata.getSearchOperationPath(),
+							dataSetMetadata.getSearchPropertiesStrategy(), dataSetMetadata.getSearchProperties(), dataObject))
+					.toList();
 			// For each data object to be installed.
-			for (final Map<String, Object> dataObject : dataSetMetadata.getData()) {
+			for (int objectIndex = 0; objectIndex < dataObjects.size(); objectIndex++) {
+				final Map<String, Object> dataObject = dataObjects.get(objectIndex);
+				final String searchOperationUrl = searchOperationUrls.get(objectIndex);
 				// Retrieved object.
 				Map<String, Object> existentDataObject = null;
 				// Tries to get existent data.
 				try {
 					existentDataObject = (serviceClient
-							.executeOperation(
-									this.getSearchOperationUrl(
-											dataSetMetadata.getServiceOperationUrl() + (StringUtils.isBlank(dataSetMetadata.getSearchOperationPath()) ? ""
-													: "/" + dataSetMetadata.getSearchOperationPath()),
-											dataSetMetadata.getSearchPropertiesStrategy(), dataSetMetadata.getSearchProperties(), dataObject),
-									HttpMethod.GET, null, null, null, new ParameterizedTypeReference<Map<String, Object>>() {})
+							.executeOperation(searchOperationUrl, HttpMethod.GET, null, null, null, new ParameterizedTypeReference<Map<String, Object>>() {})
 							.getBody());
 				}
 				// If the object does not exist.
@@ -370,7 +441,7 @@ public class DataInstaller implements ApplicationListener<ApplicationReadyEvent>
 						// Tries to update the object.
 						try {
 							serviceClient.executeOperation(
-									this.getSearchOperationUrl(dataSetMetadata.getServiceOperationUrl(), dataSetMetadata.getIdPropertiesStrategy(),
+									this.getSearchOperationUrl(dataSetMetadata.getServiceOperationUrl(), "", dataSetMetadata.getIdPropertiesStrategy(),
 											dataSetMetadata.getIdProperties(), existentDataObject),
 									HttpMethod.PUT, null, dataObject, null, new ParameterizedTypeReference<Void>() {});
 							DataInstaller.LOGGER.debug("Object '" + this.serializeForLog(dataObject) + "' updated.");

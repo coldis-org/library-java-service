@@ -13,6 +13,7 @@ import org.coldis.library.test.TestWithContainer;
 import org.coldis.library.test.service.ContainerTestHelper;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Assertions;
+import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.slf4j.LoggerFactory;
@@ -102,6 +103,71 @@ public class DataInstallerTest extends ContainerTestHelper {
 					() -> this.testRepository.findById(new DataInstallerTestEntityKey(testEntity.getProperty1(), testEntity.getProperty2())).orElse(null),
 					data -> Objects.equals(testEntity, data), TestHelper.LONG_WAIT, TestHelper.SHORT_WAIT));
 		}
+	}
+
+	/**
+	 * Changes property 3 of a test entity, in its own transaction (AspectJ-woven, so it applies to this
+	 * private method too; the repository save needs it).
+	 *
+	 * @param key   The entity key.
+	 * @param value The new value.
+	 */
+	@Transactional
+	private void changeProperty3(
+			final DataInstallerTestEntityKey key,
+			final String value) {
+		final DataInstallerTestEntity entity = this.testRepository.findById(key).orElseThrow();
+		entity.setProperty3(value);
+		this.testRepository.save(entity);
+	}
+
+	/**
+	 * A search path template ("{property1}/{property2}/by-key") is filled with the data object's
+	 * values, and nothing is appended: an existing object is found, so a create-only data set keeps it
+	 * (without the template, the search misses and the object is created again over it).
+	 *
+	 * @throws Exception If the test fails.
+	 */
+	@Test
+	@DisplayName("Search path template: a create-only data set keeps an object changed after installation")
+	public void testSearchPathTemplate() throws Exception {
+		final DataInstallerTestEntityKey key = new DataInstallerTestEntityKey(15, 25);
+		this.dataInstaller.install("data-set-4-search-path-template.json");
+		Assertions.assertTrue(TestHelper.waitUntilValid(() -> this.testRepository.findById(key).orElse(null),
+				data -> (data != null) && "35".equals(data.getProperty3()), TestHelper.LONG_WAIT, TestHelper.SHORT_WAIT));
+
+		// Changed after the installation: kept by the next one.
+		this.changeProperty3(key, "changed");
+		this.dataInstaller.install("data-set-4-search-path-template.json");
+		Assertions.assertEquals("changed", this.testRepository.findById(key).orElseThrow().getProperty3());
+	}
+
+	/**
+	 * A search path template naming a property one data object does not have fails the whole data set:
+	 * no object is created, not even the one before it that has the property (a search that always
+	 * misses would create every object again over the existing ones), and the failure is logged. The
+	 * data set also fails, the same way, on every automatic installation of this module (expected).
+	 *
+	 * @throws Exception If the test fails.
+	 */
+	@Test
+	@DisplayName("Search path template: a placeholder naming a missing property fails the data set, creating nothing")
+	public void testSearchPathTemplateMissingProperty() throws Exception {
+		final Logger installerLogger = (Logger) LoggerFactory.getLogger(DataInstaller.class);
+		final ListAppender<ILoggingEvent> appender = new ListAppender<>();
+		appender.start();
+		installerLogger.addAppender(appender);
+		try {
+			this.dataInstaller.install("data-set-5-search-path-template-missing-property.json");
+			Assertions.assertTrue(appender.list.stream()
+					.anyMatch(event -> Level.ERROR.equals(event.getLevel()) && (event.getThrowableProxy() != null)
+							&& event.getThrowableProxy().getMessage().contains("'{missing}'")));
+		}
+		finally {
+			installerLogger.detachAppender(appender);
+		}
+		Assertions.assertTrue(this.testRepository.findById(new DataInstallerTestEntityKey(16, 26)).isEmpty());
+		Assertions.assertTrue(this.testRepository.findById(new DataInstallerTestEntityKey(17, 27)).isEmpty());
 	}
 
 	/**
