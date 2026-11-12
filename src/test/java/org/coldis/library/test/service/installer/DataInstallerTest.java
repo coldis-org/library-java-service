@@ -105,6 +105,41 @@ public class DataInstallerTest extends ContainerTestHelper {
 	}
 
 	/**
+	 * Changes property 3 of a test entity (in its own transaction).
+	 *
+	 * @param key   The entity key.
+	 * @param value The new value.
+	 */
+	@Transactional
+	private void changeProperty3(
+			final DataInstallerTestEntityKey key,
+			final String value) {
+		final DataInstallerTestEntity entity = this.testRepository.findById(key).orElseThrow();
+		entity.setProperty3(value);
+		this.testRepository.save(entity);
+	}
+
+	/**
+	 * A search path template ("{property1}/{property2}/by-key") is filled with the data object's
+	 * values, and nothing is appended: an existing object is found, so a create-only data set keeps it
+	 * (without the template, the search misses and the object is created again over it).
+	 *
+	 * @throws Exception If the test fails.
+	 */
+	@Test
+	public void testSearchPathTemplate() throws Exception {
+		final DataInstallerTestEntityKey key = new DataInstallerTestEntityKey(15, 25);
+		this.dataInstaller.install("data-set-4-search-path-template.json");
+		Assertions.assertTrue(TestHelper.waitUntilValid(() -> this.testRepository.findById(key).orElse(null),
+				data -> (data != null) && "35".equals(data.getProperty3()), TestHelper.LONG_WAIT, TestHelper.SHORT_WAIT));
+
+		// Changed after the installation: kept by the next one.
+		this.changeProperty3(key, "changed");
+		this.dataInstaller.install("data-set-4-search-path-template.json");
+		Assertions.assertEquals("changed", this.testRepository.findById(key).orElseThrow().getProperty3());
+	}
+
+	/**
 	 * Tests the single file installation.
 	 *
 	 * @throws Exception If the test fails.

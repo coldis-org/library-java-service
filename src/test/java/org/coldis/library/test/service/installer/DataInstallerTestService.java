@@ -50,6 +50,20 @@ public class DataInstallerTestService {
 	}
 
 	/**
+	 * Finds the test entity by its properties, at a path with a suffix after them (searched through a
+	 * search path template).
+	 *
+	 * @param  property1 Test property 1.
+	 * @param  property2 Test property 2.
+	 * @return           The test entity.
+	 */
+	@RequestMapping(method = { RequestMethod.GET }, path = "{property1}/{property2}/by-key")
+	public DataInstallerTestEntity findByKey(@PathVariable final Integer property1,
+			@PathVariable final Integer property2) {
+		return this.testRepository.findById(new DataInstallerTestEntityKey(property1, property2)).orElse(null);
+	}
+
+	/**
 	 * Updates the test entity.
 	 *
 	 * @param property1  Test property 1.

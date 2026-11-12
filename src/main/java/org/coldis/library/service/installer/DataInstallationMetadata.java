@@ -47,7 +47,9 @@ public class DataInstallationMetadata {
 	private DataInstallerSearchStrategy searchPropertiesStrategy = DataInstallerSearchStrategy.PATH;
 
 	/**
-	 * Search operation path.
+	 * Search operation path (after the service operation URL). With placeholders ("{property}", e.g.
+	 * "{code}/code"), a template: each placeholder is replaced with that property of the data object,
+	 * and the search properties are not appended.
 	 */
 	private String searchOperationPath = "";
 

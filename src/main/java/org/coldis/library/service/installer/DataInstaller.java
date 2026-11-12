@@ -8,12 +8,14 @@ import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
+import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 import org.apache.commons.collections4.CollectionUtils;
@@ -57,6 +59,13 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 		matchIfMissing = true
 )
 public class DataInstaller implements ApplicationListener<ApplicationReadyEvent>, EmbeddedValueResolverAware {
+
+	/**
+	 * Placeholder in a search operation path template ("{property}"): replaced with that property of
+	 * the data object.
+	 */
+	private static final Pattern SEARCH_PATH_PLACEHOLDER = Pattern.compile("\\{([^{}/]+)\\}");
+
 
 	/**
 	 * Logger.
@@ -175,9 +184,12 @@ public class DataInstaller implements ApplicationListener<ApplicationReadyEvent>
 	}
 
 	/**
-	 * Gets the service operation URL.
+	 * Gets the search operation URL. A search operation path with placeholders ("{property}", e.g.
+	 * "{code}/code") is a template: each placeholder is replaced with that property of the data object,
+	 * and nothing else is appended. Otherwise, the search properties are appended to the URL, as path
+	 * segments or as query parameters (by the search strategy).
 	 *
-	 * @param  serviceOperationBaseUrl Service operation base URL.
+	 * @param  serviceOperationBaseUrl Service operation base URL (with the search operation path).
 	 * @param  searchStrategy          Search strategy.
 	 * @param  searchProperties        Search properties.
 	 * @param  dataObject              Data object.
@@ -188,9 +200,32 @@ public class DataInstaller implements ApplicationListener<ApplicationReadyEvent>
 			final DataInstallerSearchStrategy searchStrategy,
 			final String[] searchProperties,
 			final Map<String, Object> dataObject) {
+		final String actualServiceOperationUrl = this.getActualServiceOperationUrl(serviceOperationBaseUrl);
+		final Matcher searchPathPlaceholder = DataInstaller.SEARCH_PATH_PLACEHOLDER.matcher(actualServiceOperationUrl);
+		return (searchPathPlaceholder.find()
+				? searchPathPlaceholder.reset()
+						.replaceAll(placeholder -> Matcher.quoteReplacement(Objects.toString(dataObject.get(placeholder.group(1)))))
+				: this.appendSearchProperties(actualServiceOperationUrl, searchStrategy, searchProperties, dataObject));
+	}
+
+	/**
+	 * Appends the search properties to the search operation URL, as path segments or as query
+	 * parameters (by the search strategy).
+	 *
+	 * @param  actualServiceOperationUrl Search operation URL (resolved).
+	 * @param  searchStrategy            Search strategy.
+	 * @param  searchProperties          Search properties.
+	 * @param  dataObject                Data object.
+	 * @return                           The search operation URL with the search properties.
+	 */
+	private String appendSearchProperties(
+			final String actualServiceOperationUrl,
+			final DataInstallerSearchStrategy searchStrategy,
+			final String[] searchProperties,
+			final Map<String, Object> dataObject) {
 
 		// Service operation URL.
-		final StringBuffer serviceOperationUrl = new StringBuffer(this.getActualServiceOperationUrl(serviceOperationBaseUrl));
+		final StringBuffer serviceOperationUrl = new StringBuffer(actualServiceOperationUrl);
 		// If the search uses parameter strategy.
 		if (DataInstallerSearchStrategy.PARAMETER.equals(searchStrategy)) {
 			// Appends the search context.
