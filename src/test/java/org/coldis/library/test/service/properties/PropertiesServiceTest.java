@@ -1,6 +1,7 @@
 package org.coldis.library.test.service.properties;
 
 import java.sql.Connection;
+import java.util.List;
 
 import javax.sql.DataSource;
 
@@ -8,7 +9,9 @@ import org.coldis.library.test.StartTestWithContainerExtension;
 import org.coldis.library.test.TestHelper;
 import org.coldis.library.test.TestWithContainer;
 import org.coldis.library.test.service.ContainerTestHelper;
+import org.coldis.library.service.properties.PropertiesService;
 import org.junit.jupiter.api.Assertions;
+import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.messaginghub.pooled.jms.JmsPoolConnectionFactory;
@@ -24,6 +27,10 @@ import org.springframework.web.client.RestTemplate;
 import org.testcontainers.containers.GenericContainer;
 
 import com.zaxxer.hikari.HikariDataSource;
+
+import ch.qos.logback.classic.Level;
+import ch.qos.logback.classic.spi.ILoggingEvent;
+import ch.qos.logback.core.read.ListAppender;
 
 /**
  * Properties service test.
@@ -114,6 +121,28 @@ public class PropertiesServiceTest extends ContainerTestHelper {
 					this.originalArtemisPort, Void.class);
 			this.connectionFactory.clear();
 		} catch (final Exception exception) {
+		}
+	}
+
+	/** A value set through the endpoint is logged masked: a password-like string by its length only. */
+	@Test
+	@DisplayName("A value set through the endpoint is logged masked")
+	public void testPropertyValueLoggedMasked() {
+		final ch.qos.logback.classic.Logger propertiesLogger = (ch.qos.logback.classic.Logger) LoggerFactory.getLogger(PropertiesService.class);
+		final ListAppender<ILoggingEvent> appender = new ListAppender<>();
+		appender.start();
+		propertiesLogger.addAppender(appender);
+		try {
+			this.restTemplate.put("http://localhost:" + this.port + "/properties/string/testProperties1/property1", "FAKE_TEST_PASSWORD", Void.class);
+			Assertions.assertEquals("FAKE_TEST_PASSWORD", this.testProperties1.getProperty1());
+			final List<ILoggingEvent> events = List.copyOf(appender.list);
+			Assertions.assertTrue(events.stream().anyMatch(event -> (event.getLevel() == Level.INFO)
+					&& event.getFormattedMessage().contains("property1 to <18 characters> in bean testProperties1")));
+			// At any level: the secret must not reach the log at all.
+			Assertions.assertTrue(events.stream().noneMatch(event -> event.getFormattedMessage().contains("FAKE_TEST_PASSWORD")));
+		}
+		finally {
+			propertiesLogger.detachAppender(appender);
 		}
 	}
 
