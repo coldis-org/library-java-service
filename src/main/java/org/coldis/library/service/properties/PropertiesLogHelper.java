@@ -23,6 +23,13 @@ public final class PropertiesLogHelper {
 	private static final Pattern HOSTS_AND_PORTS = Pattern.compile("[A-Za-z0-9.\\-\\[\\]:]+(,[A-Za-z0-9.\\-\\[\\]:]+)*");
 
 	/**
+	 * A URL: a well-formed scheme, compound ones included (jdbc:postgresql), right at the start and
+	 * followed by "://". A "://" further in (a callback parameter, an H2 AUTO_SERVER_URL) does not
+	 * make the text before it a scheme.
+	 */
+	private static final Pattern URL = Pattern.compile("[A-Za-z][A-Za-z0-9+.\\-]*(:[A-Za-z][A-Za-z0-9+.\\-]*)*://.*", Pattern.DOTALL);
+
+	/**
 	 * Characters that end the hosts and ports of a URL: a path, or parameters (? # and the ; of some
 	 * JDBC drivers).
 	 */
@@ -68,7 +75,7 @@ public final class PropertiesLogHelper {
 	 * When what follows the scheme does not start with hosts and ports, the URL is logged by its
 	 * length only.
 	 *
-	 * @param  url URL (contains "://", and no user information).
+	 * @param  url URL (starts with a scheme and "://", and has no user information).
 	 * @return     The address part of the URL.
 	 */
 	private static String getUrlAddress(
@@ -109,7 +116,7 @@ public final class PropertiesLogHelper {
 			// An @ means user information, or an unusual value: by its length only, wherever it is,
 			// so a password with an unencoded / ? # or ; cannot be cut in two.
 			final boolean isLoggableAddress = PropertiesLogHelper.isAddressProperty(name) && !textValue.contains("@");
-			if (isLoggableAddress && textValue.contains("://")) {
+			if (isLoggableAddress && PropertiesLogHelper.URL.matcher(textValue).matches()) {
 				loggedValue = PropertiesLogHelper.getUrlAddress(textValue);
 			}
 			else if (isLoggableAddress && PropertiesLogHelper.HOSTS_AND_PORTS.matcher(textValue).matches()) {

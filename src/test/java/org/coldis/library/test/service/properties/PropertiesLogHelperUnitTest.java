@@ -135,4 +135,20 @@ public class PropertiesLogHelperUnitTest {
 		}
 	}
 
+
+	/**
+	 * Only a scheme at the start makes a value a URL; a "://" further in, or a URL whose host part is
+	 * not plain hosts and ports, is logged by its length only.
+	 */
+	@Test
+	@DisplayName("A misplaced scheme or an unusual host part is logged by its length")
+	public void testMisplacedSchemeAndUnusualHostLoggedByLength() {
+		for (final String value : new String[] { "hooks.example.com/FAKEtoken123?next=https://x", "jdbc:h2:file:/data/app;PASSWORD=FAKE_TEST_PASSWORD;AUTO_SERVER_URL=tcp://10.0.0.1",
+				"file:///etc/app/FAKE_secret.key", "http://my_host/hooks/FAKEtoken123" }) {
+			final String loggedValue = PropertiesLogHelper.getLoggedValue("callbackUrl", value);
+			Assertions.assertEquals("<" + value.length() + " characters>", loggedValue);
+			Assertions.assertFalse(loggedValue.contains("FAKE"));
+		}
+	}
+
 }
