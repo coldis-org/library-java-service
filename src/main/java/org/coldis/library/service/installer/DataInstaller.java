@@ -187,24 +187,24 @@ public class DataInstaller implements ApplicationListener<ApplicationReadyEvent>
 	 * Appends the search properties to the search operation URL, as path segments or as query
 	 * parameters (by the search strategy).
 	 *
-	 * @param  actualServiceOperationUrl Search operation URL (resolved).
+	 * @param  resolvedSearchBaseUrl     Search operation URL, resolved, before the search properties.
 	 * @param  searchStrategy            Search strategy.
 	 * @param  searchProperties          Search properties.
 	 * @param  dataObject                Data object.
 	 * @return                           The search operation URL with the search properties.
 	 */
 	private String appendSearchProperties(
-			final String actualServiceOperationUrl,
+			final String resolvedSearchBaseUrl,
 			final DataInstallerSearchStrategy searchStrategy,
 			final String[] searchProperties,
 			final Map<String, Object> dataObject) {
 
 		// Service operation URL.
-		final StringBuffer serviceOperationUrl = new StringBuffer(actualServiceOperationUrl);
+		final StringBuffer searchOperationUrl = new StringBuffer(resolvedSearchBaseUrl);
 		// If the search uses parameter strategy.
 		if (DataInstallerSearchStrategy.PARAMETER.equals(searchStrategy)) {
 			// Appends the search context.
-			serviceOperationUrl.append("?");
+			searchOperationUrl.append("?");
 		}
 		// For each property.
 		for (final String searchProperty : searchProperties) {
@@ -214,18 +214,18 @@ public class DataInstaller implements ApplicationListener<ApplicationReadyEvent>
 				// For path strategy.
 				case PATH:
 					// Adds the property to the URL.
-					serviceOperationUrl.append("/");
-					serviceOperationUrl.append(dataObject.get(searchProperty));
+					searchOperationUrl.append("/");
+					searchOperationUrl.append(dataObject.get(searchProperty));
 					break;
 				// For query parameter strategy.
 				case PARAMETER:
 					// Adds the property to the URL.
-					serviceOperationUrl.append(searchProperty + "=" + dataObject.get(searchProperty) + "&");
+					searchOperationUrl.append(searchProperty + "=" + dataObject.get(searchProperty) + "&");
 					break;
 			}
 		}
 		// Returns the search operation URL.
-		return serviceOperationUrl.toString();
+		return searchOperationUrl.toString();
 	}
 
 	/**
@@ -277,10 +277,10 @@ public class DataInstaller implements ApplicationListener<ApplicationReadyEvent>
 		}
 		// Otherwise, the search properties are appended.
 		else {
-			final String serviceOperationUrl = serviceOperationBaseUrl
+			final String unresolvedSearchBaseUrl = serviceOperationBaseUrl
 					+ (StringUtils.isBlank(actualSearchOperationPath) ? "" : "/" + actualSearchOperationPath);
-			searchOperationUrl = this.appendSearchProperties(this.getActualServiceOperationUrl(serviceOperationUrl), searchStrategy, searchProperties,
-					dataObject);
+			searchOperationUrl = this.appendSearchProperties(this.getActualServiceOperationUrl(unresolvedSearchBaseUrl), searchStrategy,
+					searchProperties, dataObject);
 		}
 		return searchOperationUrl;
 	}
