@@ -1,0 +1,14 @@
+{
+	"serviceOperationUrl": "http://localhost:${property:local.server.port}/test/data-installer",
+	"idProperties": ["property1", "property2"],
+	"searchProperties": ["property1", "property2"],
+	"searchOperationPath": "{missing}/{property2}/by-key",
+	"createOnly": true,
+	"data": [
+		{
+			"property1": 16,
+			"property2": 26,
+			"property3": "36"
+		}
+	]
+}

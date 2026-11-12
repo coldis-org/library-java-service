@@ -49,7 +49,8 @@ public class DataInstallationMetadata {
 	/**
 	 * Search operation path (after the service operation URL). With placeholders ("{property}", e.g.
 	 * "{code}/code"), a template: each placeholder is replaced with that property of the data object,
-	 * and the search properties are not appended.
+	 * and the search properties are not appended. A placeholder naming a property the data object does
+	 * not have fails the data set.
 	 */
 	private String searchOperationPath = "";
 
