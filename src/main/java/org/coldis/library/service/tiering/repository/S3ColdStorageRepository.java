@@ -1,29 +1,52 @@
 package org.coldis.library.service.tiering.repository;
 
+import java.nio.ByteBuffer;
 import java.util.ArrayList;
+import java.util.Base64;
+import java.util.zip.CRC32C;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 
 import org.coldis.library.service.tiering.model.ColdObject;
+import org.coldis.library.service.tiering.model.ColdUpload;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import software.amazon.awssdk.core.sync.RequestBody;
 import software.amazon.awssdk.services.s3.S3Client;
+import software.amazon.awssdk.services.s3.model.AbortMultipartUploadRequest;
+import software.amazon.awssdk.services.s3.model.ChecksumAlgorithm;
+import software.amazon.awssdk.services.s3.model.CompleteMultipartUploadRequest;
+import software.amazon.awssdk.services.s3.model.CompletedMultipartUpload;
+import software.amazon.awssdk.services.s3.model.CompletedPart;
+import software.amazon.awssdk.services.s3.model.CreateMultipartUploadRequest;
 import software.amazon.awssdk.services.s3.model.DeleteObjectRequest;
 import software.amazon.awssdk.services.s3.model.GetObjectRequest;
+import software.amazon.awssdk.services.s3.model.HeadObjectRequest;
 import software.amazon.awssdk.services.s3.model.ListObjectsV2Request;
 import software.amazon.awssdk.services.s3.model.ListObjectsV2Response;
 import software.amazon.awssdk.services.s3.model.NoSuchKeyException;
 import software.amazon.awssdk.services.s3.model.PutObjectRequest;
+import software.amazon.awssdk.services.s3.model.S3Exception;
 import software.amazon.awssdk.services.s3.model.S3Object;
+import software.amazon.awssdk.services.s3.model.UploadPartRequest;
+import software.amazon.awssdk.services.s3.model.UploadPartResponse;
 
 /**
- * S3 cold tier, on the consumer's {@link S3Client} bean (see {@link ColdTieringS3Configuration}).
- * The SDK's transfer checksums cover the integrity of every PUT and GET.
+ * Cold storage on S3, through the consumer's {@link S3Client}. Integrity in transit is the SDK's
+ * checksums; keys are the derived object keys. Range reads and multipart uploads serve partition
+ * tiering.
  */
 public class S3ColdStorageRepository implements ColdStorageRepository {
 
-	/** S3 client. */
+	/** Logger. */
+	private static final Logger LOGGER = LoggerFactory.getLogger(S3ColdStorageRepository.class);
+
+	/** S3 multipart minimum part size (5 MiB). */
+	private static final Integer MINIMUM_PART_SIZE = 5 * 1024 * 1024;
+
+	/** Client. */
 	private final S3Client s3Client;
 
 	/** Bucket. */
@@ -32,7 +55,7 @@ public class S3ColdStorageRepository implements ColdStorageRepository {
 	/**
 	 * Constructor.
 	 *
-	 * @param s3Client S3 client.
+	 * @param s3Client Client.
 	 * @param bucket   Bucket.
 	 */
 	public S3ColdStorageRepository(
@@ -69,6 +92,120 @@ public class S3ColdStorageRepository implements ColdStorageRepository {
 			content = Optional.empty();
 		}
 		return content;
+	}
+
+	/**
+	 * @see ColdStorageRepository#loadRange(String, Long, Integer)
+	 */
+	@Override
+	public Optional<byte[]> loadRange(
+			final String key,
+			final Long offset,
+			final Integer length) {
+		Optional<byte[]> content;
+		try {
+			content = Optional.of(this.s3Client.getObjectAsBytes(
+					GetObjectRequest.builder().bucket(this.bucket).key(key).range("bytes=" + offset + "-" + ((offset + length) - 1)).build()).asByteArray());
+		}
+		catch (final NoSuchKeyException exception) {
+			content = Optional.empty();
+		}
+		return content;
+	}
+
+	/**
+	 * @see ColdStorageRepository#head(String)
+	 */
+	@Override
+	public Optional<ColdObject> head(
+			final String key) {
+		Optional<ColdObject> object;
+		try {
+			object = Optional.of(new ColdObject(key, this.s3Client.headObject(HeadObjectRequest.builder().bucket(this.bucket).key(key).build()).contentLength()));
+		}
+		catch (final NoSuchKeyException exception) {
+			object = Optional.empty();
+		}
+		return object;
+	}
+
+	/**
+	 * @see ColdStorageRepository#minimumPartSize()
+	 */
+	@Override
+	public Integer minimumPartSize() {
+		return S3ColdStorageRepository.MINIMUM_PART_SIZE;
+	}
+
+	/**
+	 * @see ColdStorageRepository#beginUpload(String, Map)
+	 */
+	@Override
+	public ColdUpload beginUpload(
+			final String key,
+			final Map<String, String> metadata) {
+		final String uploadId = this.s3Client.createMultipartUpload(CreateMultipartUploadRequest.builder().bucket(this.bucket).key(key)
+				.contentType(metadata.get(ColdStorageRepository.CONTENT_TYPE_METADATA)).metadata(metadata).checksumAlgorithm(ChecksumAlgorithm.CRC32_C).build()).uploadId();
+		return new ColdUpload() {
+
+			/** Completed parts. */
+			private final List<CompletedPart> parts = new ArrayList<>();
+
+			/** Bytes. */
+			private Long size = 0L;
+
+			/** Whether the upload completed. */
+			private Boolean isCompleted = false;
+
+			@Override
+			public void part(
+					final byte[] content) {
+				final int number = this.parts.size() + 1;
+				// The part's CRC32C is computed here and sent as a header (no trailer), so S3 verifies the
+				// bytes it received against it and the completion names the same checksum per part.
+				final CRC32C crc = new CRC32C();
+				crc.update(content);
+				final String checksum = Base64.getEncoder().encodeToString(ByteBuffer.allocate(4).putInt((int) crc.getValue()).array());
+				final UploadPartResponse response = S3ColdStorageRepository.this.s3Client.uploadPart(UploadPartRequest.builder()
+						.bucket(S3ColdStorageRepository.this.bucket).key(key).uploadId(uploadId).partNumber(number).checksumCRC32C(checksum).build(),
+						RequestBody.fromBytes(content));
+				this.parts.add(CompletedPart.builder().partNumber(number).eTag(response.eTag()).checksumCRC32C(checksum).build());
+				this.size += content.length;
+			}
+
+			@Override
+			public ColdObject complete() {
+				ColdObject object;
+				if (this.parts.isEmpty()) {
+					// S3 refuses a multipart completion with no part: the upload is aborted and the
+					// empty object is a plain put.
+					this.abort();
+					object = S3ColdStorageRepository.this.store(key, new byte[0], metadata);
+				}
+				else {
+					S3ColdStorageRepository.this.s3Client.completeMultipartUpload(CompleteMultipartUploadRequest.builder().bucket(S3ColdStorageRepository.this.bucket)
+							.key(key).uploadId(uploadId).multipartUpload(CompletedMultipartUpload.builder().parts(this.parts).build()).build());
+					object = new ColdObject(key, this.size);
+				}
+				this.isCompleted = true;
+				return object;
+			}
+
+			@Override
+			public void abort() {
+				if (!this.isCompleted) {
+					this.isCompleted = true;
+					try {
+						S3ColdStorageRepository.this.s3Client
+								.abortMultipartUpload(AbortMultipartUploadRequest.builder().bucket(S3ColdStorageRepository.this.bucket).key(key).uploadId(uploadId).build());
+					}
+					catch (final S3Exception exception) {
+						// Best effort: the bucket's lifecycle rule for incomplete uploads cleans what is left.
+						S3ColdStorageRepository.LOGGER.warn("[COLD_TIERING_UPLOAD] abort of the multipart upload failed: {}", exception.getLocalizedMessage());
+					}
+				}
+			}
+		};
 	}
 
 	/**

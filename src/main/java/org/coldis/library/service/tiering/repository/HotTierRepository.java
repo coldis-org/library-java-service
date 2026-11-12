@@ -45,8 +45,10 @@ public class HotTierRepository {
 	 *
 	 * @param watermark Watermark value when read (string form; the archive mark takes it).
 	 * @param rowJson   The whole row as JSON.
+	 * @param isArchived Whether the cold tier already holds this content (archive mark at or after
+	 *                       the watermark): a duplicate archive request has nothing to upload.
 	 */
-	public record HotRow(String watermark, String rowJson) {
+	public record HotRow(String watermark, String rowJson, Boolean isArchived) {
 
 	}
 
@@ -115,6 +117,17 @@ public class HotTierRepository {
 	}
 
 	/**
+	 * Whether a hot row's current content is archived: archive mark at or after the watermark.
+	 *
+	 * @param  table Table (aliased {@code hot}).
+	 * @return       The boolean SQL expression.
+	 */
+	private static String archivedExpression(
+			final TieredTable table) {
+		return "(hot." + table.getArchivedAtColumn() + " IS NOT NULL AND hot." + table.getArchivedAtColumn() + " >= hot." + table.getWatermarkColumn() + ")";
+	}
+
+	/**
 	 * A timestamp column as a local date time.
 	 *
 	 * @param  resultSet Result set.
@@ -174,6 +187,26 @@ public class HotTierRepository {
 	}
 
 	/**
+	 * Whether a row's current content is archived, read without a lock (a cheap filter of
+	 * duplicate archive requests before {@link #lockForArchive}, which stays the authority).
+	 *
+	 * @param  table Table.
+	 * @param  key   Row key.
+	 * @return       Whether it is archived (archive mark at or after the watermark), or empty when
+	 *               the row is not hot (evicted or deleted).
+	 */
+	public Optional<Boolean> findArchived(
+			final TieredTable table,
+			final TieredRowKey key) {
+		final String sql = "SELECT " + HotTierRepository.archivedExpression(table) + " AS archived_ FROM " + table.getTableName() + " hot WHERE "
+				+ HotTierRepository.keyPredicate(table);
+		final List<Boolean> rows = this.jdbcTemplate.query(sql, HotTierRepository.keyParameters(ColumnValues.parseKey(table, table.getColumnTypes(), key)), (
+				resultSet,
+				rowNumber) -> resultSet.getBoolean("archived_"));
+		return rows.stream().findFirst();
+	}
+
+	/**
 	 * The row locked for archiving: serializes archivers of one key with each other and with the
 	 * writers, so the object always follows the latest content.
 	 *
@@ -184,12 +217,13 @@ public class HotTierRepository {
 	public Optional<HotRow> lockForArchive(
 			final TieredTable table,
 			final TieredRowKey key) {
-		final String sql = "SELECT hot." + table.getWatermarkColumn() + " AS watermark_, CAST(row_to_json(hot) AS text) AS row_ FROM " + table.getTableName()
-				+ " hot WHERE " + HotTierRepository.keyPredicate(table) + " FOR UPDATE";
+		final String sql = "SELECT hot." + table.getWatermarkColumn() + " AS watermark_, CAST(row_to_json(hot) AS text) AS row_, "
+				+ HotTierRepository.archivedExpression(table) + " AS archived_ FROM " + table.getTableName() + " hot WHERE " + HotTierRepository.keyPredicate(table)
+				+ " FOR UPDATE";
 		final List<HotRow> rows = this.jdbcTemplate.query(sql, HotTierRepository.keyParameters(ColumnValues.parseKey(table, table.getColumnTypes(), key)), (
 				resultSet,
 				rowNumber) -> new HotRow(ColumnValues.format(ColumnValues.read(resultSet, "watermark_", table.getColumnTypes().get(table.getWatermarkColumn()))),
-						resultSet.getString("row_")));
+						resultSet.getString("row_"), resultSet.getBoolean("archived_")));
 		return rows.stream().findFirst();
 	}
 

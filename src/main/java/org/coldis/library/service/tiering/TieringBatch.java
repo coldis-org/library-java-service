@@ -9,7 +9,13 @@ public enum TieringBatch {
 	EVICTION("eviction"),
 
 	/** Archives rows whose current content is not in the cold tier. */
-	BACKFILL("backfill");
+	BACKFILL("backfill"),
+
+	/** Partition export (partition tiering). */
+	EXPORT("export"),
+
+	/** Partition sweep (partition tiering). */
+	PARTITION_SWEEP("sweep");
 
 	/** Key segment. */
 	private final String keySegment;

@@ -1,25 +1,41 @@
 package org.coldis.library.test.service.tiering;
 
 import java.nio.file.Files;
+import java.sql.Connection;
+import java.sql.PreparedStatement;
+import java.sql.Timestamp;
 import java.time.Duration;
 import java.time.LocalDateTime;
+import java.util.Arrays;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
 import java.util.concurrent.ScheduledFuture;
+import java.util.concurrent.TimeUnit;
+
+import javax.sql.DataSource;
 
 import org.coldis.library.helper.DateTimeHelper;
+import org.coldis.library.persistence.keyvalue.KeyValue;
 import org.coldis.library.persistence.keyvalue.KeyValueServiceComponent;
+import org.coldis.library.service.batch.BatchExecutor;
 import org.coldis.library.service.batch.BatchService;
 import org.coldis.library.service.tiering.model.ColdRow;
 import org.coldis.library.service.tiering.ColdTieringBatchServiceComponent;
+import org.coldis.library.service.tiering.ColdTieringProperties;
+import org.coldis.library.service.tiering.ColdTieringProperties.TableProperties;
 import org.coldis.library.service.tiering.ColdTieringServiceComponent;
 import org.coldis.library.service.tiering.TieredHit;
 import org.coldis.library.service.tiering.model.TieredRowKey;
 import org.coldis.library.service.tiering.model.TieredTable;
 import org.coldis.library.service.tiering.TieringBatch;
 import org.coldis.library.service.tiering.repository.FolderColdStorageRepository;
+import org.coldis.library.service.jms.QueueDepthComponent;
+import org.coldis.library.service.jms.QueueDepthComponentTestSeam;
 import org.coldis.library.test.StartTestWithContainerExtension;
 import org.coldis.library.test.TestHelper;
 import org.coldis.library.test.TestWithContainer;
@@ -34,6 +50,8 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.context.SpringBootTest.WebEnvironment;
+import org.springframework.jms.config.JmsListenerEndpointRegistry;
+import org.springframework.jms.listener.AbstractMessageListenerContainer;
 import org.springframework.transaction.annotation.Transactional;
 
 /**
@@ -79,6 +97,26 @@ public class ColdTieringServiceTest extends ContainerTestHelper {
 	/** Event repository. */
 	@Autowired
 	private TieredEventRepository eventRepository;
+
+	/** Tiering properties (one test slows a run down by overriding a table at runtime). */
+	@Autowired
+	private ColdTieringProperties properties;
+
+	/** Batch service. */
+	@Autowired
+	private BatchService batchService;
+
+	/** Queue depths. */
+	@Autowired
+	private QueueDepthComponent queueDepthComponent;
+
+	/** JMS listeners. */
+	@Autowired
+	private JmsListenerEndpointRegistry listenerRegistry;
+
+	/** Data source (a second connection holding a row lock). */
+	@Autowired
+	private DataSource dataSource;
 
 	/**
 	 * Clean state.
@@ -283,24 +321,267 @@ public class ColdTieringServiceTest extends ContainerTestHelper {
 	}
 
 	/**
-	 * The backfill archives rows written without the hook, resuming across chunks.
+	 * The snapshot table's backfill batch record.
 	 *
-	 * @throws Exception If the test fails.
+	 * @return The record, or null when none.
 	 */
-	@Test
-	@DisplayName("Snapshot: the backfill archives every unarchived row")
-	public void testBackfill() throws Exception {
+	private BatchExecutor<?> snapshotBackfillRecord() {
+		return (BatchExecutor<?>) this.keyValueService.getRepository()
+				.findById(BatchService.BATCH_KEY_PREFIX + TieringBatch.BACKFILL.keySuffix(ColdTieringTestConfiguration.SNAPSHOT_TABLE)).map(KeyValue::getValue)
+				.orElse(null);
+	}
+
+	/**
+	 * Seeds snapshots without the hook (rows only the backfill finds), one per key.
+	 *
+	 * @return The keys, in key order.
+	 */
+	private List<TieredSnapshotKey> seedUnarchived() {
 		final List<TieredSnapshotKey> keys = List.of(new TieredSnapshotKey("owner-3", LocalDateTime.of(2026, 1, 1, 0, 0)),
 				new TieredSnapshotKey("owner-3", LocalDateTime.of(2026, 1, 2, 0, 0)), new TieredSnapshotKey("owner-4", LocalDateTime.of(2026, 1, 3, 0, 0)),
 				new TieredSnapshotKey("owner-5", LocalDateTime.of(2026, 1, 4, 0, 0)), new TieredSnapshotKey("owner-6", LocalDateTime.of(2026, 1, 5, 0, 0)));
 		for (final TieredSnapshotKey key : keys) {
 			this.seed(new TieredSnapshot(key.getOwnerId(), key.getCachedAt(), new HashMap<>(Map.of("marker", key.getOwnerId()))));
 		}
+		return keys;
+	}
+
+	/**
+	 * The backfill enqueues rows written without the hook, across chunks, each key once (the cursor
+	 * never selects a key enqueued earlier in the run, archived or not yet), and the backfill
+	 * listener archives every one; the deprecated delegate that runs persisted by earlier versions
+	 * still name enqueues too.
+	 *
+	 * @throws Exception If the test fails.
+	 */
+	@Test
+	@SuppressWarnings("deprecation")
+	@DisplayName("Snapshot: the backfill enqueues every unarchived row once and the listener archives it")
+	public void testBackfill() throws Exception {
+		final List<TieredSnapshotKey> keys = this.seedUnarchived();
 		Assertions.assertTrue(this.batchServiceComponent.run(ColdTieringTestConfiguration.SNAPSHOT_TABLE, TieringBatch.BACKFILL));
 		for (final TieredSnapshotKey key : keys) {
 			this.waitArchived(key);
 		}
 		Assertions.assertEquals(keys.size(), this.coldStorage.list("cold-tiering/tiered-snapshot/").size());
+		Assertions.assertTrue(TestHelper.waitUntilValid(this::snapshotBackfillRecord, batchRecord -> (batchRecord != null) && batchRecord.isFinished(),
+				TestHelper.REGULAR_WAIT * 4, TestHelper.SHORT_WAIT));
+		Assertions.assertEquals(Long.valueOf(keys.size()), this.snapshotBackfillRecord().getLastProcessedCount());
+
+		// A run persisted before the upgrade still names the old delegate: it enqueues as well.
+		final TieredSnapshotKey legacyKey = new TieredSnapshotKey("owner-9", LocalDateTime.of(2026, 1, 6, 0, 0));
+		this.seed(new TieredSnapshot(legacyKey.getOwnerId(), legacyKey.getCachedAt(), new HashMap<>(Map.of("marker", "legacy"))));
+		this.batchServiceComponent.archiveKey(this.rowKey(legacyKey));
+		this.waitArchived(legacyKey);
+	}
+
+	/**
+	 * A duplicate archive request for content already archived uploads nothing and leaves the row
+	 * archived at the same watermark.
+	 *
+	 * @throws Exception If the test fails.
+	 */
+	@Test
+	@DisplayName("Snapshot: a duplicate archive request of an archived row uploads nothing")
+	public void testDuplicateArchiveRequest() throws Exception {
+		final TieredSnapshotKey key = this.write(new TieredSnapshot("owner-8", LocalDateTime.of(2026, 3, 1, 12, 0), new HashMap<>(Map.of("marker", "once"))));
+		this.waitArchived(key);
+		final LocalDateTime archivedAt = this.snapshotRepository.findById(key).orElseThrow().getArchivedAt();
+		// A sentinel in place of the object: any new upload would replace it.
+		final String objectKey = this.tieringServiceComponent.objectKeyOf(this.rowKey(key));
+		final byte[] sentinel = new byte[] { 1 };
+		this.coldStorage.store(objectKey, sentinel, Map.of());
+
+		// The duplicate, then an unarchived row as a barrier, both on the backfill queue: its single
+		// consumer (pinned in the test properties) takes them in order.
+		this.tieringServiceComponent.requestArchive(this.rowKey(key));
+		final TieredSnapshotKey barrierKey = new TieredSnapshotKey("owner-8", LocalDateTime.of(2026, 3, 2, 12, 0));
+		this.seed(new TieredSnapshot(barrierKey.getOwnerId(), barrierKey.getCachedAt(), new HashMap<>(Map.of("marker", "barrier"))));
+		this.tieringServiceComponent.requestArchive(this.rowKey(barrierKey));
+		this.waitArchived(barrierKey);
+
+		// The sentinel survives: the duplicate uploaded nothing.
+		Assertions.assertTrue(Arrays.equals(sentinel, this.coldStorage.load(objectKey).orElseThrow()));
+		// The mark is kept (not cleared); this alone would not catch a re-upload, which writes the same mark.
+		Assertions.assertEquals(archivedAt, this.snapshotRepository.findById(key).orElseThrow().getArchivedAt());
+		Assertions.assertFalse(this.tieringServiceComponent.archive(this.rowKey(key)));
+	}
+
+	/**
+	 * A start while a run is active continues that run instead of starting another one: same
+	 * start, same cursor and count, no key enqueued ahead of the run's own pace.
+	 *
+	 * @throws Exception If the test fails.
+	 */
+	@Test
+	@DisplayName("Snapshot: a backfill start while a run is active does not start a parallel run")
+	public void testBackfillNoParallelRun() throws Exception {
+		final List<TieredSnapshotKey> keys = this.seedUnarchived();
+		// A long pause between chunks keeps the run active after its first chunk.
+		final TableProperties snapshotTable = this.properties.getTable().get(ColdTieringTestConfiguration.SNAPSHOT_TABLE);
+		snapshotTable.getBackfill().setDelayBetweenChunks(Duration.ofMinutes(10));
+		try {
+			Assertions.assertTrue(this.batchServiceComponent.run(ColdTieringTestConfiguration.SNAPSHOT_TABLE, TieringBatch.BACKFILL));
+			Assertions.assertTrue(TestHelper.waitUntilValid(this::snapshotBackfillRecord,
+					batchRecord -> (batchRecord != null) && Long.valueOf(2).equals(batchRecord.getLastProcessedCount()), TestHelper.REGULAR_WAIT * 4, TestHelper.SHORT_WAIT));
+			final LocalDateTime startedAt = this.snapshotBackfillRecord().getLastStartedAt();
+			this.waitArchived(keys.get(0));
+			this.waitArchived(keys.get(1));
+
+			// The second start (an hourly cron on any instance) joins the active run.
+			Assertions.assertTrue(this.batchServiceComponent.run(ColdTieringTestConfiguration.SNAPSHOT_TABLE, TieringBatch.BACKFILL));
+			Thread.sleep(TestHelper.REGULAR_WAIT);
+			final BatchExecutor<?> batchRecord = this.snapshotBackfillRecord();
+			Assertions.assertEquals(startedAt, batchRecord.getLastStartedAt());
+			Assertions.assertEquals(Long.valueOf(2), batchRecord.getLastProcessedCount());
+			Assertions.assertFalse(batchRecord.isFinished());
+			Assertions.assertNull(this.snapshotRepository.findById(keys.get(2)).orElseThrow().getArchivedAt());
+			Assertions.assertEquals(2, this.coldStorage.list("cold-tiering/tiered-snapshot/").size());
+		}
+		finally {
+			snapshotTable.getBackfill().setDelayBetweenChunks(null);
+			this.batchService.cancel(TieringBatch.BACKFILL.keySuffix(ColdTieringTestConfiguration.SNAPSHOT_TABLE));
+		}
+	}
+
+	/**
+	 * Archives a snapshot in its own thread, failing when it waits past the timeout (a row lock).
+	 *
+	 * @param  key       Key.
+	 * @return           Whether an upload happened.
+	 * @throws Exception If the archive fails or waits.
+	 */
+	private Boolean archiveWithin(
+			final TieredSnapshotKey key) throws Exception {
+		final ExecutorService executor = Executors.newSingleThreadExecutor();
+		try {
+			final Future<Boolean> archived = executor.submit(() -> this.tieringServiceComponent.archive(this.rowKey(key)));
+			return archived.get(TestHelper.REGULAR_WAIT, TimeUnit.MILLISECONDS);
+		}
+		finally {
+			executor.shutdownNow();
+		}
+	}
+
+	/**
+	 * An archive request whose row is gone (evicted) or already archived is dropped by the
+	 * lock-free read: no lock taken (another transaction holds the row's lock and the archive does
+	 * not wait), no object uploaded, no write; a row needing an upload still archives.
+	 *
+	 * @throws Exception If the test fails.
+	 */
+	@Test
+	@DisplayName("Snapshot: archive requests for evicted or archived rows are dropped without the row lock")
+	public void testArchiveSkipsWithoutLock() throws Exception {
+		final TieredSnapshotKey archivedKey = this.write(new TieredSnapshot("owner-10", LocalDateTime.of(2026, 4, 1, 12, 0), new HashMap<>(Map.of("marker", "kept"))));
+		this.waitArchived(archivedKey);
+		final LocalDateTime archivedAt = this.snapshotRepository.findById(archivedKey).orElseThrow().getArchivedAt();
+		final String archivedObjectKey = this.tieringServiceComponent.objectKeyOf(this.rowKey(archivedKey));
+		final byte[] sentinel = new byte[] { 2 };
+		this.coldStorage.store(archivedObjectKey, sentinel, Map.of());
+
+		// Another transaction holds the archived row's lock: a FOR UPDATE would wait for it.
+		try (Connection lockConnection = this.dataSource.getConnection()) {
+			lockConnection.setAutoCommit(false);
+			try (PreparedStatement lock = lockConnection.prepareStatement("SELECT owner_id FROM tiered_snapshot WHERE owner_id = ? AND cached_at = ? FOR UPDATE")) {
+				lock.setString(1, archivedKey.getOwnerId());
+				lock.setTimestamp(2, Timestamp.valueOf(archivedKey.getCachedAt()));
+				Assertions.assertTrue(lock.executeQuery().next());
+			}
+			Assertions.assertFalse(this.archiveWithin(archivedKey));
+			lockConnection.rollback();
+		}
+		Assertions.assertTrue(Arrays.equals(sentinel, this.coldStorage.load(archivedObjectKey).orElseThrow()));
+		Assertions.assertEquals(archivedAt, this.snapshotRepository.findById(archivedKey).orElseThrow().getArchivedAt());
+
+		// No hot row (evicted): nothing uploaded.
+		final TieredSnapshotKey evictedKey = new TieredSnapshotKey("owner-10", LocalDateTime.of(2026, 4, 2, 12, 0));
+		Assertions.assertFalse(this.archiveWithin(evictedKey));
+		Assertions.assertTrue(this.coldStorage.load(this.tieringServiceComponent.objectKeyOf(this.rowKey(evictedKey))).isEmpty());
+
+		// A row needing an upload still archives.
+		final TieredSnapshotKey unarchivedKey = new TieredSnapshotKey("owner-10", LocalDateTime.of(2026, 4, 3, 12, 0));
+		this.seed(new TieredSnapshot(unarchivedKey.getOwnerId(), unarchivedKey.getCachedAt(), new HashMap<>(Map.of("marker", "new"))));
+		Assertions.assertTrue(this.archiveWithin(unarchivedKey));
+		Assertions.assertTrue(this.coldStorage.load(this.tieringServiceComponent.objectKeyOf(this.rowKey(unarchivedKey))).isPresent());
+		Assertions.assertNotNull(this.snapshotRepository.findById(unarchivedKey).orElseThrow().getArchivedAt());
+	}
+
+	/**
+	 * The backfill run of the snapshot table waits (postponed) with nothing enqueued.
+	 *
+	 * @param  postponedCountAbove Postponed steps the record must have passed.
+	 * @throws Exception           If the wait fails.
+	 */
+	private void assertBackfillWaiting(
+			final Long postponedCountAbove) throws Exception {
+		Assertions.assertTrue(TestHelper.waitUntilValid(this::snapshotBackfillRecord,
+				batchRecord -> (batchRecord != null) && batchRecord.getLastBatchPostponed() && (batchRecord.getPostponedCount() > postponedCountAbove),
+				TestHelper.REGULAR_WAIT * 4, TestHelper.SHORT_WAIT));
+		final BatchExecutor<?> waitingRecord = this.snapshotBackfillRecord();
+		Assertions.assertEquals(Long.valueOf(0), waitingRecord.getLastProcessedCount());
+		Assertions.assertNull(waitingRecord.getLastProcessed());
+		Assertions.assertFalse(waitingRecord.isFinished());
+	}
+
+	/**
+	 * Backpressure: while the backfill queue's depth cannot be read, and then while the queue (its
+	 * listener stopped) is above the table's {@code max-pending}, the backfill steps enqueue
+	 * nothing and keep the cursor (the run waits, not finished); once the listener drains the
+	 * queue the run resumes and archives every row.
+	 *
+	 * @throws Exception If the test fails.
+	 */
+	@Test
+	@DisplayName("Snapshot: the backfill enqueues nothing while its queue depth is unreadable or above max-pending, then resumes")
+	public void testBackfillBacklogGuard() throws Exception {
+		final List<AbstractMessageListenerContainer> listeners = ColdTieringTestConfiguration.listenerContainersOf(this.listenerRegistry, "cold-tiering/backfill");
+		Assertions.assertFalse(listeners.isEmpty());
+		final TableProperties snapshotTable = this.properties.getTable().get(ColdTieringTestConfiguration.SNAPSHOT_TABLE);
+		snapshotTable.getBackfill().setMaxPending(2L);
+		Boolean isReaderReplaced = false;
+		try {
+			// Depth unreadable (no broker behind the reader): fail safe, nothing enqueued.
+			final List<TieredSnapshotKey> keys = this.seedUnarchived();
+			QueueDepthComponentTestSeam.makeUnreadable(this.queueDepthComponent);
+			isReaderReplaced = true;
+			Assertions.assertTrue(this.tieringServiceComponent.findBackfillBacklog().isEmpty());
+			Assertions.assertTrue(this.batchServiceComponent.run(ColdTieringTestConfiguration.SNAPSHOT_TABLE, TieringBatch.BACKFILL));
+			this.assertBackfillWaiting(1L);
+
+			// A backlog of three requests for rows no longer hot (dropped once drained).
+			listeners.forEach(AbstractMessageListenerContainer::stop);
+			QueueDepthComponentTestSeam.restore(this.queueDepthComponent);
+			isReaderReplaced = false;
+			for (int request = 1; request <= 3; request++) {
+				this.tieringServiceComponent.requestArchive(this.rowKey(new TieredSnapshotKey("owner-gone", LocalDateTime.of(2026, 5, request, 0, 0))));
+			}
+			Assertions.assertTrue(TestHelper.waitUntilValid(() -> this.tieringServiceComponent.findBackfillBacklog(), depth -> depth.orElse(0L) >= 3L,
+					TestHelper.REGULAR_WAIT, TestHelper.VERY_SHORT_WAIT));
+
+			// Readable now, but above max-pending: more steps (PT0.2S apart) still enqueue nothing.
+			this.assertBackfillWaiting(this.snapshotBackfillRecord().getPostponedCount() + 2);
+			Assertions.assertEquals(Optional.of(3L), this.tieringServiceComponent.findBackfillBacklog());
+
+			// The listener drains the backlog: the run resumes and archives every row once.
+			listeners.forEach(AbstractMessageListenerContainer::start);
+			for (final TieredSnapshotKey key : keys) {
+				this.waitArchived(key);
+			}
+			Assertions.assertTrue(TestHelper.waitUntilValid(this::snapshotBackfillRecord, batchRecord -> (batchRecord != null) && batchRecord.isFinished(),
+					TestHelper.REGULAR_WAIT * 4, TestHelper.SHORT_WAIT));
+			Assertions.assertEquals(Long.valueOf(keys.size()), this.snapshotBackfillRecord().getLastProcessedCount());
+			Assertions.assertFalse(this.snapshotBackfillRecord().getLastBatchPostponed());
+			Assertions.assertEquals(keys.size(), this.coldStorage.list("cold-tiering/tiered-snapshot/").size());
+		}
+		finally {
+			if (isReaderReplaced) {
+				QueueDepthComponentTestSeam.restore(this.queueDepthComponent);
+			}
+			listeners.stream().filter(container -> !container.isRunning()).forEach(AbstractMessageListenerContainer::start);
+			snapshotTable.getBackfill().setMaxPending(null);
+			this.batchService.cancel(TieringBatch.BACKFILL.keySuffix(ColdTieringTestConfiguration.SNAPSHOT_TABLE));
+		}
 	}
 
 	/**
@@ -454,7 +735,7 @@ public class ColdTieringServiceTest extends ContainerTestHelper {
 					archivedAt -> archivedAt != null, TestHelper.REGULAR_WAIT * 4, TestHelper.SHORT_WAIT));
 		}
 		final String objectKey = this.tieringServiceComponent.objectKeyOf(this.tieringServiceComponent.keyOf(TieredEvent.class, recentKey));
-		Assertions.assertTrue(objectKey.startsWith("cold-tiering/tiered-event/web/") && objectKey.endsWith("Z.json.gz"), objectKey);
+		Assertions.assertTrue(objectKey.startsWith("cold-tiering-events/tiered-event/web/") && objectKey.endsWith("Z.json.gz"), objectKey);
 
 		// The TTL (15 days) counts from the column: the old event goes, the recent one stays.
 		Assertions.assertTrue(this.batchServiceComponent.run(ColdTieringTestConfiguration.EVENT_TABLE, TieringBatch.EVICTION));

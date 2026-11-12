@@ -9,6 +9,7 @@ import java.util.Properties;
 
 import org.apache.commons.lang3.StringUtils;
 import org.apache.commons.lang3.exception.ExceptionUtils;
+import org.apache.commons.lang3.exception.ExceptionUtils;
 import org.coldis.library.exception.BusinessException;
 import org.coldis.library.helper.DateTimeHelper;
 import org.coldis.library.model.RetriableIn;
@@ -24,6 +25,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.BeanUtils;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.jms.annotation.JmsListener;
 import org.springframework.jms.core.JmsTemplate;
@@ -94,6 +96,13 @@ public class BatchServiceComponent {
 	 */
 	@Autowired(required = false)
 	private KeyValueServiceComponent keyValueService;
+
+	/**
+	 * Consecutive postponed steps after which (and every multiple of which) a run's postponement
+	 * is logged at WARN.
+	 */
+	@Value("${org.coldis.configuration.service.batch-postponed-warn-steps:60}")
+	private Long postponedWarnSteps;
 
 	/**
 	 * Slack integration.
@@ -181,9 +190,29 @@ public class BatchServiceComponent {
 			throw new BatchExpiredException();
 		}
 
-		// For each item in the next batch.
+		// For each item in the next batch (a BatchPostponedException from the GET: nothing to do yet;
+		// null, or no GET delegate: an error).
 		this.log(batchExecutorValue, BatchAction.GET);
-		final List<Type> nextBatchToProcess = batchExecutorValue.get();
+		final String key = this.getKey(batchExecutorValue.getKeySuffix());
+		List<Type> nextBatchToProcess = List.of();
+		BatchPostponedException postponement = null;
+		try {
+			nextBatchToProcess = Objects.requireNonNull(batchExecutorValue.get(), "Batch '" + key
+					+ "' GET returned null (or has no GET delegate): return an empty list to finish, throw BatchPostponedException to wait.");
+		}
+		catch (final RuntimeException exception) {
+			postponement = ExceptionUtils.throwableOfType(exception, BatchPostponedException.class);
+			if (postponement == null) {
+				throw exception;
+			}
+		}
+		final Long postponedCount = batchExecutorValue.markPostponed(postponement != null);
+		if (postponement != null) {
+			BatchServiceComponent.LOGGER.info("Batch '{}' postponed: {} ({} consecutive steps).", key, postponement.getMessage(), postponedCount);
+			if ((postponedCount % Math.max(1L, this.postponedWarnSteps)) == 0) {
+				BatchServiceComponent.LOGGER.warn("Batch '{}' has been postponed for {} consecutive steps.", key, postponedCount);
+			}
+		}
 		for (final Type next : nextBatchToProcess) {
 			batchExecutorValue.execute(next);
 			this.log(batchExecutorValue, BatchAction.EXECUTE);
@@ -277,8 +306,8 @@ public class BatchServiceComponent {
 					Type previousLastProcessed = null;
 					Type currentLastProcessed = batchExecutorValue.getLastProcessed();
 
-					// Starts or resumes the batch.
-					if (currentLastProcessed == null) {
+					// Starts or resumes the batch (a run whose first batch was postponed has started).
+					if ((currentLastProcessed == null) && !batchExecutorValue.getLastBatchPostponed()) {
 						batchExecutorValue.start();
 						this.log(batchExecutorValue, BatchAction.START);
 					}
@@ -296,9 +325,9 @@ public class BatchServiceComponent {
 					previousLastProcessed = currentLastProcessed;
 					currentLastProcessed = nextLastProcessed;
 
-					// If there is no new data, finishes the batch.
+					// If there is no new data, finishes the batch; a postponed batch waits for its next step.
 					batchExecutorValue.setLastBatchError(null);
-					if (Objects.equals(previousLastProcessed, currentLastProcessed)) {
+					if (!batchExecutorValue.getLastBatchPostponed() && Objects.equals(previousLastProcessed, currentLastProcessed)) {
 						batchExecutorValue.finish();
 						batchExecutorValue.setLastFinishedAt(DateTimeHelper.getCurrentLocalDateTime());
 					}
@@ -379,25 +408,34 @@ public class BatchServiceComponent {
 		final String key = this.getKey(executor.getKeySuffix());
 		final KeyValue<Typable> batchExecutor = this.keyValueService.lock(key, LockBehavior.WAIT_AND_LOCK);
 
-		// If there is no previous record for the batch, saves the given one.
-		if (batchExecutor.getValue() == null) {
-			batchExecutor.setValue(new BatchExecutor<>());
-		}
-		// Updates fields.
-		BeanUtils.copyProperties(executor, batchExecutor.getValue(), "lastStartedAt", "lastFinishedAt", "lastTotalProcessingTime", "lastCancelledAt",
-				"lastProcessed", "lastBatchStartedAt", "lastBatchFinishedAt", "lastProcessedCount");
-		BatchServiceComponent.LOGGER.debug("Starting batch for: " + ObjectMapperHelper.serialize(this.objectMapper, batchExecutor, null, false));
-
-		// If the executor should be restarted, resets it.
+		// A running batch (neither finished nor expired) is only changed by a restart: a scheduled batch is
+		// started by every instance, and a later start would replace the running batch's arguments.
 		@SuppressWarnings("unchecked")
-		final BatchExecutor<Type> batchExecutorValue = (BatchExecutor<Type>) batchExecutor.getValue();
-		if (restart || batchExecutorValue.isExpired() || batchExecutorValue.isFinished()) {
-			batchExecutorValue.reset(useLastCountAsExpected);
+		final BatchExecutor<Type> previousValue = (BatchExecutor<Type>) batchExecutor.getValue();
+		if (!restart && (previousValue != null) && !previousValue.isExpired() && !previousValue.isFinished()) {
+			BatchServiceComponent.LOGGER.debug("Batch '{}' is already running: start ignored.", key);
 		}
+		else {
+			// If there is no previous record for the batch, saves the given one.
+			if (previousValue == null) {
+				batchExecutor.setValue(new BatchExecutor<>());
+			}
+			// Updates fields.
+			BeanUtils.copyProperties(executor, batchExecutor.getValue(), "lastStartedAt", "lastFinishedAt", "lastTotalProcessingTime",
+					"lastCancelledAt", "lastProcessed", "lastBatchStartedAt", "lastBatchFinishedAt", "lastProcessedCount", "lastBatchPostponed", "postponedCount");
+			BatchServiceComponent.LOGGER.debug("Starting batch for: " + ObjectMapperHelper.serialize(this.objectMapper, batchExecutor, null, false));
 
-		// Saves and resumes the batch.
-		this.keyValueService.getRepository().save(batchExecutor);
-		this.queueResumeAsync(batchExecutorValue.getKeySuffix(), DateTimeHelper.getCurrentLocalDateTime());
+			// If the executor should be restarted, resets it.
+			@SuppressWarnings("unchecked")
+			final BatchExecutor<Type> batchExecutorValue = (BatchExecutor<Type>) batchExecutor.getValue();
+			if (restart || batchExecutorValue.isExpired() || batchExecutorValue.isFinished()) {
+				batchExecutorValue.reset(useLastCountAsExpected);
+			}
+
+			// Saves and resumes the batch.
+			this.keyValueService.getRepository().save(batchExecutor);
+			this.queueResumeAsync(batchExecutorValue.getKeySuffix(), DateTimeHelper.getCurrentLocalDateTime());
+		}
 	}
 
 	/**

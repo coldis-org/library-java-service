@@ -67,6 +67,9 @@ public class TieredTable implements ColdTable {
 	/** SQL types of the hot table's columns, bound by the registry at startup. */
 	private Map<String, String> columnTypes;
 
+	/** Object key prefix bound at registration (the table's own, else the global one). */
+	private String objectPrefix;
+
 	/**
 	 * Checks a SQL identifier before it reaches generated SQL.
 	 *
@@ -153,6 +156,16 @@ public class TieredTable implements ColdTable {
 	@Override
 	public List<String> getKeyColumns() {
 		return this.keyColumns;
+	}
+
+	/**
+	 * Archive unit: one row per object for this definition; a {@link PartitionTieredTable} says
+	 * {@link ArchiveUnit#PARTITION}.
+	 *
+	 * @return Unit.
+	 */
+	public ArchiveUnit getArchiveUnit() {
+		return ArchiveUnit.ROW;
 	}
 
 	/**
@@ -352,6 +365,36 @@ public class TieredTable implements ColdTable {
 			throw new IntegrationException(new SimpleMessage("coldTiering.table.unregistered", new Object[] { this.id }));
 		}
 		return this.columnTypes;
+	}
+
+	/**
+	 * Object key prefix of every object of this table, bound at registration.
+	 *
+	 * @return Prefix, null before registration.
+	 */
+	public String getObjectPrefix() {
+		return this.objectPrefix;
+	}
+
+	/**
+	 * Object key prefix to use: the one bound at registration, else the given global one.
+	 *
+	 * @param  globalPrefix Global prefix.
+	 * @return              Prefix.
+	 */
+	public String objectPrefixOr(
+			final String globalPrefix) {
+		return this.objectPrefix == null ? globalPrefix : this.objectPrefix;
+	}
+
+	/**
+	 * Binds the object key prefix.
+	 *
+	 * @param objectPrefix Prefix.
+	 */
+	public void bindObjectPrefix(
+			final String objectPrefix) {
+		this.objectPrefix = objectPrefix;
 	}
 
 	/**

@@ -8,9 +8,6 @@ import java.util.concurrent.atomic.AtomicLong;
 import org.apache.activemq.artemis.api.core.ActiveMQException;
 import org.apache.activemq.artemis.api.core.Interceptor;
 import org.apache.activemq.artemis.api.core.SimpleString;
-import org.apache.activemq.artemis.api.core.client.ActiveMQClient;
-import org.apache.activemq.artemis.api.core.client.ClientSession;
-import org.apache.activemq.artemis.api.core.client.ClientSessionFactory;
 import org.apache.activemq.artemis.core.protocol.core.Packet;
 import org.apache.activemq.artemis.core.protocol.core.impl.wireformat.SessionConsumerCloseMessage;
 import org.apache.activemq.artemis.core.protocol.core.impl.wireformat.SessionConsumerFlowCreditMessage;
@@ -91,8 +88,6 @@ public class DynamicCreditClientInterceptor implements Interceptor {
 	private final long depthThreshold;
 	private final double multiplier;
 	private final int maxCredits;
-	private final long cacheTtlMillis;
-	private final ActiveMQConnectionFactory connectionFactory;
 
 	/**
 	 * True when the broker-side consumer window is positive — in that case the
@@ -127,15 +122,11 @@ public class DynamicCreditClientInterceptor implements Interceptor {
 	 */
 	private final ConcurrentHashMap<String, AtomicInteger> queueConsumerCounts = new ConcurrentHashMap<>();
 
-	/** queueName → {pendingDepth, timestampMillis}, invalidated after cacheTtlMillis. */
-	private final ConcurrentHashMap<String, long[]> depthCache = new ConcurrentHashMap<>();
+	/** Queue depth reader (cached for cacheTtlMillis, never throws). */
+	private final ArtemisQueueDepthReader depthReader;
 
 	/** queueName → last timestamp (ms) a scaling INFO log was emitted. */
 	private final ConcurrentHashMap<String, Long> lastScalingLogAt = new ConcurrentHashMap<>();
-
-	private volatile ClientSession querySession;
-	private volatile ClientSessionFactory querySessionFactory;
-	private final Object querySessionLock = new Object();
 
 	/** Total consumer-create packets seen by this interceptor. */
 	private final AtomicLong consumersRegistered = new AtomicLong(0);
@@ -155,11 +146,10 @@ public class DynamicCreditClientInterceptor implements Interceptor {
 			final double multiplier,
 			final int maxCredits,
 			final long cacheTtlMillis) {
-		this.connectionFactory = connectionFactory;
 		this.depthThreshold = depthThreshold;
 		this.multiplier = multiplier;
 		this.maxCredits = maxCredits;
-		this.cacheTtlMillis = cacheTtlMillis;
+		this.depthReader = new ArtemisQueueDepthReader(connectionFactory, cacheTtlMillis);
 		final int consumerWindowSize = (connectionFactory != null) ? connectionFactory.getServerLocator().getConsumerWindowSize() : 0;
 		this.disabled = consumerWindowSize > 0;
 		if (this.disabled) {
@@ -206,68 +196,6 @@ public class DynamicCreditClientInterceptor implements Interceptor {
 	}
 
 	/**
-	 * Closes and forgets the query session and its session factory, so they are
-	 * recreated on the next query (a broker restart would otherwise leave a broken
-	 * session cached, and dropping it without closing leaks the factory's
-	 * connection). Close failures are logged: the resources are being discarded.
-	 *
-	 * @param failedSession The session that failed (null when its creation failed).
-	 */
-	private void closeQuerySession(
-			final ClientSession failedSession) {
-		synchronized (this.querySessionLock) {
-			// Only the session that failed: another thread may already have replaced it
-			// with a healthy one (null when the session could not be created).
-			if (this.querySession == failedSession) {
-				if (this.querySession != null) {
-					try {
-						this.querySession.close();
-					}
-					catch (final Exception exception) {
-						LOGGER.debug("DynamicCredit — could not close query session: {}", exception.getMessage());
-					}
-				}
-				if (this.querySessionFactory != null) {
-					this.querySessionFactory.close();
-				}
-				this.querySession = null;
-				this.querySessionFactory = null;
-			}
-		}
-	}
-
-	/**
-	 * Lazily creates (and caches) the client session used to query queue depth.
-	 * Returns {@code null} when the session cannot be created; callers treat that
-	 * as depth {@code 0}.
-	 */
-	private ClientSession getQuerySession() {
-		if (this.querySession == null) {
-			synchronized (this.querySessionLock) {
-				if (this.querySession == null) {
-					try {
-						this.querySessionFactory = this.connectionFactory.getServerLocator().createSessionFactory();
-						this.querySession = this.querySessionFactory.createSession(
-								this.connectionFactory.getUser(),
-								this.connectionFactory.getPassword(),
-								false,
-								true,
-								true,
-								false,
-								ActiveMQClient.DEFAULT_ACK_BATCH_SIZE);
-					}
-					catch (final Exception exception) {
-						LOGGER.warn("DynamicCredit — could not create query session: {}", exception.getMessage());
-						this.closeQuerySession(null);
-					}
-				}
-			}
-		}
-		return this.querySession;
-	}
-
-
-	/**
 	 * Returns the queue's message count, used as the scaling signal. Cached for
 	 * {@code cacheTtlMillis} to bound broker round-trips. Returns {@code 0} (which
 	 * keeps scaling off) when the query session is unavailable or the query fails.
@@ -275,35 +203,7 @@ public class DynamicCreditClientInterceptor implements Interceptor {
 	 * <p>Non-final and package-visible so tests can stub the depth without a broker.
 	 */
 	protected long getPendingDepth(final String queueName) {
-		final long[] cachedDepth = this.depthCache.get(queueName);
-		final long currentTimeMillis = System.currentTimeMillis();
-		long pendingDepth = 0L;
-		if ((cachedDepth != null) && ((currentTimeMillis - cachedDepth[1]) < this.cacheTtlMillis)) {
-			pendingDepth = cachedDepth[0];
-		}
-		else {
-			// Never throws (null when the session cannot be created).
-			final ClientSession session = this.getQuerySession();
-			try {
-				if (session != null) {
-					final ClientSession.QueueQuery queueQuery;
-					synchronized (session) {
-						queueQuery = session.queueQuery(SimpleString.of(queueName));
-					}
-					pendingDepth = queueQuery.getMessageCount();
-					this.depthCache.put(queueName, new long[] { pendingDepth, currentTimeMillis });
-					// A persistently-zero depth (queue not found / name mismatch) silently keeps
-					// scaling off, so make the actual reading observable for diagnosis.
-					LOGGER.debug("DynamicCredit — depth query queue='{}' exists={} messageCount={}", queueName, queueQuery.isExists(),
-							pendingDepth);
-				}
-			}
-			catch (final Exception exception) {
-				LOGGER.warn("DynamicCredit — could not query depth for queue '{}': {}", queueName, exception.getMessage());
-				this.closeQuerySession(session);
-			}
-		}
-		return pendingDepth;
+		return this.depthReader.findDepth(queueName).orElse(0L);
 	}
 
 	/** Returns the number of tracked consumers attached to the queue, never below one. */
@@ -345,7 +245,7 @@ public class DynamicCreditClientInterceptor implements Interceptor {
 						return (entryOutstanding != null) ? entryOutstanding.get() : 0L;
 					}).sum();
 			LOGGER.info("DynamicCredit — queue={} depth={} requested={} granted={} totalOutstanding={}", queueName,
-					this.depthCache.getOrDefault(queueName, new long[] { 0L, 0L })[0], requestedCredits, grantedCredits, totalOutstandingForQueue);
+					this.depthReader.getLastDepth(queueName), requestedCredits, grantedCredits, totalOutstandingForQueue);
 		}
 	}
 

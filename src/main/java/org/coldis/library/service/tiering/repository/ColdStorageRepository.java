@@ -2,6 +2,7 @@ package org.coldis.library.service.tiering.repository;
 
 import java.util.List;
 import org.coldis.library.service.tiering.model.ColdObject;
+import org.coldis.library.service.tiering.model.ColdUpload;
 import org.coldis.library.service.tiering.model.ObjectKeyStrategy;
 import java.util.Map;
 import java.util.Optional;
@@ -54,5 +55,46 @@ public interface ColdStorageRepository {
 	 */
 	List<String> list(
 			String prefix);
+
+
+	/**
+	 * Reads a byte range of an object (partition tiering reads one block of a shard).
+	 *
+	 * @param  key    Object key.
+	 * @param  offset First byte.
+	 * @param  length Bytes.
+	 * @return        The range, empty when the object does not exist.
+	 */
+	Optional<byte[]> loadRange(
+			final String key,
+			final Long offset,
+			final Integer length);
+
+	/**
+	 * Object size and metadata without its content.
+	 *
+	 * @param  key Object key.
+	 * @return     The object, empty when it does not exist.
+	 */
+	Optional<ColdObject> head(
+			final String key);
+
+	/**
+	 * Starts a streaming upload (parts of at least {@link #minimumPartSize()} bytes but the last).
+	 *
+	 * @param  key      Object key.
+	 * @param  metadata Metadata.
+	 * @return          The upload.
+	 */
+	ColdUpload beginUpload(
+			final String key,
+			final Map<String, String> metadata);
+
+	/**
+	 * Minimum size of every part but the last of a streaming upload.
+	 *
+	 * @return Bytes.
+	 */
+	Integer minimumPartSize();
 
 }

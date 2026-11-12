@@ -4,6 +4,7 @@ import java.util.ArrayList;
 import java.util.List;
 
 import org.coldis.library.service.tiering.model.TieredTable;
+import org.coldis.library.service.tiering.repository.PartitionArchiveRepository;
 
 /**
  * DDL a tiered table needs on its hot table: the lifecycle columns and the eviction index. The
@@ -72,6 +73,20 @@ public final class ColdTieringSchema {
 		statements.add(ColdTieringSchema.columnsStatement(table, watermarkType));
 		statements.add(ColdTieringSchema.evictionIndexStatement(table, concurrently));
 		return statements;
+	}
+
+
+	/**
+	 * DDL of the per-partition archive record table (partition tiering).
+	 *
+	 * @return Statements.
+	 */
+	public static List<String> partitionArchiveStatements() {
+		return List.of("CREATE TABLE IF NOT EXISTS " + PartitionArchiveRepository.TABLE + " (table_id varchar NOT NULL, partition_name varchar NOT NULL,"
+				+ " range_from text, range_to text, state varchar(16) NOT NULL, loaded_at timestamptz, export_started_at timestamptz, exported_at timestamptz,"
+				+ " verified_at timestamptz, swept_at timestamptz, format_version integer, shard_count integer, shards_done integer, row_count bigint, loaded_rows bigint, generation text,"
+				+ " size_bytes bigint, reexport_confirmed boolean NOT NULL DEFAULT FALSE, boundaries jsonb, shards jsonb, sweep_blocks bigint, sweep_cursor bigint, sweep_deleted bigint, sweep_kept bigint,"
+				+ " manifest_key text, created_at timestamptz NOT NULL, updated_at timestamptz NOT NULL, PRIMARY KEY (table_id, partition_name))");
 	}
 
 }
