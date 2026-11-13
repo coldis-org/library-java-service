@@ -83,17 +83,17 @@ final class ServiceWarmUpExecution<InputType> {
 	/**
 	 * Number of calls.
 	 */
-	private long calls;
+	private long callCount;
 
 	/**
 	 * Number of failed calls.
 	 */
-	private long errors;
+	private long failedCallCount;
 
 	/**
 	 * Number of consecutive failed calls.
 	 */
-	private long consecutiveErrors;
+	private long consecutiveFailedCallCount;
 
 	/**
 	 * First error.
@@ -241,15 +241,27 @@ final class ServiceWarmUpExecution<InputType> {
 	}
 
 	/**
+	 * Stops the warm-up, unless it already stopped for another reason.
+	 *
+	 * @param reason Why it stops, or null to keep it running.
+	 */
+	synchronized void stop(
+			final ServiceWarmUpStopReason reason) {
+		if ((this.stopReason == null) && (reason != null)) {
+			this.stopReason = reason;
+		}
+	}
+
+	/**
 	 * Records that the inputs could not be read, which stops the warm-up.
 	 *
-	 * @param exception Error from reading the inputs.
+	 * @param error Error from reading the inputs.
 	 */
 	private synchronized void failInputs(
-			final Exception exception) {
-		ServiceWarmUpExecution.LOGGER.warn("Warm-up '" + this.name + "' could not read its inputs, so it makes no calls.", exception);
+			final Throwable error) {
+		ServiceWarmUpExecution.LOGGER.warn("Warm-up '" + this.name + "' could not read its inputs, so it makes no calls.", error);
 		if (this.firstError == null) {
-			this.firstError = exception;
+			this.firstError = error;
 		}
 		this.stop(ServiceWarmUpStopReason.INPUTS_FAILED);
 	}
@@ -272,6 +284,13 @@ final class ServiceWarmUpExecution<InputType> {
 					catch (final Exception exception) {
 						this.failInputs(exception);
 					}
+					// Only errors the JVM cannot recover from end the thread.
+					catch (final Error inputsError) {
+						if (inputsError instanceof VirtualMachineError) {
+							throw inputsError;
+						}
+						this.failInputs(inputsError);
+					}
 					this.inputs = readInputs;
 				}
 				currentInputs = this.inputs;
@@ -288,18 +307,18 @@ final class ServiceWarmUpExecution<InputType> {
 	 */
 	private synchronized void record(
 			final long durationNanos,
-			final Exception error) {
-		if (this.calls < ServiceWarmUpExecution.DURATION_WINDOW) {
-			this.firstDurations[(int) this.calls] = durationNanos;
+			final Throwable error) {
+		if (this.callCount < ServiceWarmUpExecution.DURATION_WINDOW) {
+			this.firstDurations[(int) this.callCount] = durationNanos;
 		}
-		this.lastDurations[(int) (this.calls % ServiceWarmUpExecution.DURATION_WINDOW)] = durationNanos;
-		this.calls++;
+		this.lastDurations[(int) (this.callCount % ServiceWarmUpExecution.DURATION_WINDOW)] = durationNanos;
+		this.callCount++;
 		if (error == null) {
-			this.consecutiveErrors = 0;
+			this.consecutiveFailedCallCount = 0;
 		}
 		else {
-			this.errors++;
-			this.consecutiveErrors++;
+			this.failedCallCount++;
+			this.consecutiveFailedCallCount++;
 			if (this.firstError == null) {
 				this.firstError = error;
 				ServiceWarmUpExecution.LOGGER.warn("Warm-up '" + this.name + "' call failed. Later failures are only counted and logged at debug.", error);
@@ -307,7 +326,7 @@ final class ServiceWarmUpExecution<InputType> {
 			else {
 				ServiceWarmUpExecution.LOGGER.debug("Warm-up '" + this.name + "' call failed.", error);
 			}
-			if (this.consecutiveErrors >= this.maximumConsecutiveErrors) {
+			if (this.consecutiveFailedCallCount >= this.maximumConsecutiveErrors) {
 				this.stop(ServiceWarmUpStopReason.ERRORS);
 			}
 		}
@@ -327,20 +346,8 @@ final class ServiceWarmUpExecution<InputType> {
 	 *
 	 * @return The number of calls.
 	 */
-	synchronized long getCalls() {
-		return this.calls;
-	}
-
-	/**
-	 * Stops the warm-up, unless it already stopped for another reason.
-	 *
-	 * @param reason Why it stops, or null to keep it running.
-	 */
-	synchronized void stop(
-			final ServiceWarmUpStopReason reason) {
-		if ((this.stopReason == null) && (reason != null)) {
-			this.stopReason = reason;
-		}
+	synchronized long getCallCount() {
+		return this.callCount;
 	}
 
 	/**
@@ -355,7 +362,7 @@ final class ServiceWarmUpExecution<InputType> {
 		else {
 			final InputType input = currentInputs.get(inputIndex);
 			final long startNanos = System.nanoTime();
-			Exception error = null;
+			Throwable error = null;
 			try {
 				this.callInReadOnlyTransaction(() -> {
 					this.warmUp.warmUp(input);
@@ -364,6 +371,14 @@ final class ServiceWarmUpExecution<InputType> {
 			}
 			catch (final Exception exception) {
 				error = exception;
+			}
+			// An error from the call (an assertion, a class that fails to initialize) fails the call too; only errors the
+			// JVM cannot recover from end the thread.
+			catch (final Error callError) {
+				if (callError instanceof VirtualMachineError) {
+					throw callError;
+				}
+				error = callError;
 			}
 			this.record(System.nanoTime() - startNanos, error);
 		}
@@ -375,8 +390,8 @@ final class ServiceWarmUpExecution<InputType> {
 	 * @return The result of the warm-up.
 	 */
 	synchronized ServiceWarmUpResult toResult() {
-		final int durationCount = (int) Math.min(this.calls, ServiceWarmUpExecution.DURATION_WINDOW);
-		return new ServiceWarmUpResult(this.name, this.calls, this.errors, ServiceWarmUpExecution.getMedianMillis(this.firstDurations, durationCount),
+		final int durationCount = (int) Math.min(this.callCount, ServiceWarmUpExecution.DURATION_WINDOW);
+		return new ServiceWarmUpResult(this.name, this.callCount, this.failedCallCount, ServiceWarmUpExecution.getMedianMillis(this.firstDurations, durationCount),
 				ServiceWarmUpExecution.getMedianMillis(this.lastDurations, durationCount), this.stopReason, this.firstError);
 	}
 

@@ -20,8 +20,9 @@ import org.springframework.transaction.interceptor.TransactionAttributeSource;
 /**
  * Service warm-up configuration. Everything here, apart from the warning about warm-ups that do not run, is registered
  * only when the service turns the warm-up on ({@value ServiceWarmUpProperties#ENABLED_PROPERTY}): the health check
- * filter, the guards on caches and {@code RestTemplate} requests, and the read-only transactions. The JMS connection
- * and statistics guards live where those side effects happen, and do nothing while no warm-up runs.
+ * filter, the guards on caches, {@code RestTemplate} requests and transaction managers, and the read-only
+ * {@code @Transactional} methods. The JMS connection and statistics guards live where those side effects happen, and
+ * do nothing while no warm-up runs.
  */
 @Configuration
 public class ServiceWarmUpAutoConfiguration {

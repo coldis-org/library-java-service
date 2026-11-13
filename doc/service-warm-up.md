@@ -48,9 +48,9 @@ public class OrderWarmUp implements ServiceWarmUp<Long> {
   processor by default), apart from the request threads, taking the warm-ups in turns.
 - The health check answers 503 from the start until they stop, so that the orchestrator sends
   no traffic yet. The filter answers without reaching the repository.
-- They stop when the JIT stays idle (under 100 ms of compilation per second for 3 seconds)
-  after each warm-up made 500 calls, or at the 60-second time limit, whichever comes first. A
-  warm-up also stops alone when its inputs end, when they cannot be read, or after 20
+- They stop when the JIT stays idle (under 100 ms of compilation per second) for 3 seconds
+  after every running warm-up made 500 calls, or at the 60-second time limit, whichever comes
+  first. A warm-up also stops alone when its inputs end, when they cannot be read, or after 20
   consecutive errors.
 - It fails open: any error is logged and the health check opens, so the service takes traffic
   as it would without a warm-up. Keep the time limit well under the orchestrator's health
@@ -62,8 +62,8 @@ With the warm-up on, on warm-up threads only (other threads are not affected):
 
 | Side effect | What happens |
 |---|---|
-| Database writes | Each call runs in a read-only transaction that is rolled back, and every `@Transactional` method it reaches is read-only, `REQUIRES_NEW` included. The database refuses writes (PostgreSQL SQL state 25006). |
-| JMS | Connections and contexts from `MeteredJmsPoolConnectionFactory` (the factories `JmsConfigurationHelper` creates) are refused. |
+| Transactions | Each call runs in a read-only transaction that is rolled back (on the single or primary transaction manager). The service's `@Transactional` methods run read-only, `REQUIRES_NEW` included, and the database refuses their writes (PostgreSQL SQL state 25006). Any other new read-write transaction, from a repository, a `TransactionTemplate` or another transaction manager, is refused before it begins. |
+| JMS | Connections and contexts from `MeteredJmsPoolConnectionFactory` (the pooled factories of `JmsConfigurationHelper.createPooledJmsConnectionFactory`) are refused. |
 | HTTP | Requests through any `RestTemplate` bean are refused. |
 | Caches | Writes, evictions and clears are dropped; reads work. |
 | Statistics | Events and summary deltas are refused (they are written later on other threads). |
@@ -72,10 +72,13 @@ A refused side effect throws `ServiceWarmUpSideEffectException`, which fails the
 counted as an error. Code outside this library can skip its own side effects with
 `ServiceWarmUpContext.isWarmingUp()`, for instance a log interceptor.
 
-Not covered, so warm-up calls must not use them: work handed to another thread (`@Async`,
-executors), HTTP clients other than `RestTemplate` beans, JMS connection factories built
-outside `JmsConfigurationHelper`, and repositories of a second data source whose transaction
-manager is not the primary one.
+Not covered, so warm-up calls must not use them:
+
+- writes made outside any transaction (auto-commit), for instance a `JdbcTemplate` write in a
+  `NOT_SUPPORTED` method;
+- work handed to another thread (`@Async`, executors);
+- HTTP clients other than `RestTemplate` beans;
+- native JMS connection factories (`JmsConfigurationHelper.createNativeJmsConnectionFactory`).
 
 ## Properties
 

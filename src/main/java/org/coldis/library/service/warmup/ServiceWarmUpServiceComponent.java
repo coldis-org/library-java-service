@@ -37,10 +37,10 @@ import io.micrometer.core.instrument.MeterRegistry;
  *
  * <p>
  * The calls run on their own threads, apart from the request threads, taking the warm-ups in turns. They stop, for
- * every warm-up still running, when the JIT stays idle after each of them made the minimum of calls, or at the time
- * limit; a warm-up also stops alone when its inputs end or after too many consecutive errors. Any failure of the
- * warm-up itself opens the health check: the warm-up only makes the start faster, so the service then takes traffic
- * as it would without it.
+ * every warm-up still running, when the JIT stays idle for the idle period after each of them made the minimum of
+ * calls, or at the time limit; a warm-up also stops alone when its inputs end or after too many consecutive errors.
+ * Any failure of the warm-up itself opens the health check: the warm-up only makes the start faster, so the service
+ * then takes traffic as it would without it.
  * </p>
  */
 @Component
@@ -93,12 +93,17 @@ public class ServiceWarmUpServiceComponent implements ApplicationListener<Applic
 	/**
 	 * Whether the warm-up beans have yet to run, which holds the health check from the start.
 	 */
-	private final AtomicBoolean startupWarmUpPending;
+	private final AtomicBoolean isStartupWarmUpPending;
 
 	/**
 	 * Whether the warm-up beans were started.
 	 */
-	private final AtomicBoolean startupWarmUpStarted = new AtomicBoolean();
+	private final AtomicBoolean hasStartupWarmUpStarted = new AtomicBoolean();
+
+	/**
+	 * Whether the service is stopping.
+	 */
+	private final AtomicBoolean isDestroyed = new AtomicBoolean();
 
 	/**
 	 * Number of running warm-ups.
@@ -129,8 +134,7 @@ public class ServiceWarmUpServiceComponent implements ApplicationListener<Applic
 		this.transactionManagerProvider = transactionManagerProvider;
 		this.meterRegistryProvider = meterRegistryProvider;
 		// The health check is held from the start, since the server answers it before the application is ready.
-		this.startupWarmUpPending = new AtomicBoolean(
-				Boolean.TRUE.equals(properties.getEnabled()) && (beanFactory.getBeanNamesForType(ServiceWarmUp.class, true, false).length > 0));
+		this.isStartupWarmUpPending = new AtomicBoolean(beanFactory.getBeanNamesForType(ServiceWarmUp.class, true, false).length > 0);
 	}
 
 	/**
@@ -138,15 +142,15 @@ public class ServiceWarmUpServiceComponent implements ApplicationListener<Applic
 	 *
 	 * @param  executions Warm-up executions.
 	 * @param  turn       Turn counter.
-	 * @param  stopped    Whether the calls stopped.
+	 * @param  isStopped  Whether the calls stopped.
 	 * @return            The next warm-up, or null when no call is left to make.
 	 */
 	private static ServiceWarmUpExecution<?> getNextExecution(
 			final List<ServiceWarmUpExecution<?>> executions,
 			final AtomicLong turn,
-			final AtomicBoolean stopped) {
+			final AtomicBoolean isStopped) {
 		ServiceWarmUpExecution<?> nextExecution = null;
-		if (!stopped.get() && !Thread.currentThread().isInterrupted()) {
+		if (!isStopped.get() && !Thread.currentThread().isInterrupted()) {
 			final int firstIndex = (int) (turn.getAndIncrement() % executions.size());
 			for (int offset = 0; (offset < executions.size()) && (nextExecution == null); offset++) {
 				final ServiceWarmUpExecution<?> execution = executions.get((firstIndex + offset) % executions.size());
@@ -163,18 +167,18 @@ public class ServiceWarmUpServiceComponent implements ApplicationListener<Applic
 	 *
 	 * @param executions Warm-up executions.
 	 * @param turn       Turn counter.
-	 * @param stopped    Whether the calls stopped.
+	 * @param isStopped  Whether the calls stopped.
 	 */
 	private static void makeCalls(
 			final List<ServiceWarmUpExecution<?>> executions,
 			final AtomicLong turn,
-			final AtomicBoolean stopped) {
+			final AtomicBoolean isStopped) {
 		ServiceWarmUpContext.enter();
 		try {
-			ServiceWarmUpExecution<?> execution = ServiceWarmUpServiceComponent.getNextExecution(executions, turn, stopped);
+			ServiceWarmUpExecution<?> execution = ServiceWarmUpServiceComponent.getNextExecution(executions, turn, isStopped);
 			while (execution != null) {
 				execution.callNext();
-				execution = ServiceWarmUpServiceComponent.getNextExecution(executions, turn, stopped);
+				execution = ServiceWarmUpServiceComponent.getNextExecution(executions, turn, isStopped);
 			}
 		}
 		finally {
@@ -189,10 +193,10 @@ public class ServiceWarmUpServiceComponent implements ApplicationListener<Applic
 	 * @param  minimumCalls Minimum of calls.
 	 * @return              Whether every running warm-up made the minimum of calls.
 	 */
-	private static boolean madeMinimumCalls(
+	private static boolean haveMadeMinimumCalls(
 			final List<ServiceWarmUpExecution<?>> executions,
 			final Integer minimumCalls) {
-		return executions.stream().allMatch(execution -> !execution.isActive() || (execution.getCalls() >= minimumCalls));
+		return executions.stream().allMatch(execution -> !execution.isActive() || (execution.getCallCount() >= minimumCalls));
 	}
 
 	/**
@@ -216,7 +220,8 @@ public class ServiceWarmUpServiceComponent implements ApplicationListener<Applic
 		TransactionTemplate transactionTemplate = null;
 		if (transactionManager == null) {
 			ServiceWarmUpServiceComponent.LOGGER.info("Service warm-up calls run without an outer read-only transaction, since there is no single "
-					+ "transaction manager. The @Transactional methods they reach are still read-only.");
+					+ "transaction manager: the service's @Transactional methods run read-only and every other new read-write transaction is "
+					+ "refused, but writes made outside any transaction are not.");
 		}
 		else {
 			transactionTemplate = new TransactionTemplate(transactionManager);
@@ -229,13 +234,13 @@ public class ServiceWarmUpServiceComponent implements ApplicationListener<Applic
 	/**
 	 * Waits until the calls end or a stop condition holds.
 	 *
-	 * @param  executor             Executor of the calls, already shut down.
-	 * @param  executions           Warm-up executions.
-	 * @param  warmUpProperties     Properties.
-	 * @param  startNanos           Start of the warm-up, from {@link System#nanoTime()}.
-	 * @param  compilation          JIT compilation bean.
-	 * @param  compilationMonitored Whether the JIT compilation time is available.
-	 * @return                      Why the running warm-ups stop, or null when every warm-up ended on its own.
+	 * @param  executor                   Executor of the calls, already shut down.
+	 * @param  executions                 Warm-up executions.
+	 * @param  warmUpProperties           Properties.
+	 * @param  startNanos                 Start of the warm-up, from {@link System#nanoTime()}.
+	 * @param  compilation                JIT compilation bean.
+	 * @param  isCompilationTimeMonitored Whether the JIT compilation time is available.
+	 * @return                            Why the running warm-ups stop, or null when every warm-up ended on its own.
 	 */
 	private ServiceWarmUpStopReason awaitStop(
 			final ExecutorService executor,
@@ -243,17 +248,17 @@ public class ServiceWarmUpServiceComponent implements ApplicationListener<Applic
 			final ServiceWarmUpProperties warmUpProperties,
 			final long startNanos,
 			final CompilationMXBean compilation,
-			final boolean compilationMonitored) {
+			final boolean isCompilationTimeMonitored) {
 		final long deadlineNanos = startNanos + warmUpProperties.getTimeLimit().toNanos();
 		final long requiredIdleChecks = Math.max(1L, warmUpProperties.getIdleCompilationPeriod().toNanos() / ServiceWarmUpServiceComponent.CHECK_INTERVAL_NANOS);
 		long idleChecks = 0L;
 		long previousCheckNanos = startNanos;
-		long previousCompilationMillis = (compilationMonitored ? compilation.getTotalCompilationTime() : 0L);
-		boolean callsEnded = false;
+		long previousCompilationMillis = (isCompilationTimeMonitored ? compilation.getTotalCompilationTime() : 0L);
+		boolean haveCallsEnded = false;
 		ServiceWarmUpStopReason stopReason = null;
-		while (!callsEnded && (stopReason == null)) {
+		while (!haveCallsEnded && (stopReason == null)) {
 			try {
-				callsEnded = executor.awaitTermination(
+				haveCallsEnded = executor.awaitTermination(
 						Math.min(ServiceWarmUpServiceComponent.CHECK_INTERVAL_NANOS, Math.max(1L, deadlineNanos - System.nanoTime())), TimeUnit.NANOSECONDS);
 			}
 			catch (final InterruptedException exception) {
@@ -261,23 +266,29 @@ public class ServiceWarmUpServiceComponent implements ApplicationListener<Applic
 				stopReason = ServiceWarmUpStopReason.INTERRUPTED;
 			}
 			final long checkNanos = System.nanoTime();
-			if (compilationMonitored) {
+			final boolean haveMadeMinimumCalls = ServiceWarmUpServiceComponent.haveMadeMinimumCalls(executions, warmUpProperties.getMinimumCalls());
+			if (isCompilationTimeMonitored) {
 				final long compilationMillis = compilation.getTotalCompilationTime();
 				final long elapsedMillis = Math.max(1L, (checkNanos - previousCheckNanos) / ServiceWarmUpServiceComponent.NANOSECONDS_PER_MILLISECOND);
 				final long compilationMillisPerSecond = ((compilationMillis - previousCompilationMillis) * ServiceWarmUpServiceComponent.MILLISECONDS_PER_SECOND)
 						/ elapsedMillis;
-				idleChecks = (compilationMillisPerSecond < warmUpProperties.getIdleCompilationMillisPerSecond() ? idleChecks + 1 : 0L);
+				// The idle period counts only after every running warm-up made the minimum of calls.
+				idleChecks = (haveMadeMinimumCalls && (compilationMillisPerSecond < warmUpProperties.getIdleCompilationMillisPerSecond()) ? idleChecks + 1 : 0L);
 				previousCompilationMillis = compilationMillis;
 			}
 			previousCheckNanos = checkNanos;
-			if (!callsEnded && (stopReason == null)) {
+			if (!haveCallsEnded && (stopReason == null)) {
 				if (checkNanos >= deadlineNanos) {
 					stopReason = ServiceWarmUpStopReason.TIME_LIMIT;
 				}
-				else if ((idleChecks >= requiredIdleChecks) && ServiceWarmUpServiceComponent.madeMinimumCalls(executions, warmUpProperties.getMinimumCalls())) {
+				else if (idleChecks >= requiredIdleChecks) {
 					stopReason = ServiceWarmUpStopReason.COMPILATION_IDLE;
 				}
 			}
+		}
+		// The call threads also end, with warm-ups still running, when the service stops or a JVM error ends them.
+		if (haveCallsEnded && (stopReason == null) && executions.stream().anyMatch(ServiceWarmUpExecution::isActive)) {
+			stopReason = (this.isDestroyed.get() ? ServiceWarmUpStopReason.INTERRUPTED : ServiceWarmUpStopReason.CALL_THREADS_FAILED);
 		}
 		return stopReason;
 	}
@@ -302,7 +313,7 @@ public class ServiceWarmUpServiceComponent implements ApplicationListener<Applic
 				runOutcome, parallelism, compilationMillis);
 		for (final ServiceWarmUpResult result : results) {
 			ServiceWarmUpServiceComponent.LOGGER.info("Warm-up '{}' stopped by {} after {} calls, {} failed. Median call: {} ms in the first calls, {} ms in the last.",
-					result.getName(), result.getStopReason(), result.getCalls(), result.getErrors(),
+					result.getName(), result.getStopReason(), result.getCallCount(), result.getFailedCallCount(),
 					ServiceWarmUpServiceComponent.formatMillis(result.getFirstCallsMedianMillis()),
 					ServiceWarmUpServiceComponent.formatMillis(result.getLastCallsMedianMillis()));
 		}
@@ -310,8 +321,9 @@ public class ServiceWarmUpServiceComponent implements ApplicationListener<Applic
 		if (meterRegistry != null) {
 			meterRegistry.timer("service.warm.up", "outcome", runOutcome).record(Duration.ofMillis(durationMillis));
 			for (final ServiceWarmUpResult result : results) {
-				meterRegistry.counter("service.warm.up.calls", "warm.up", result.getName(), "outcome", "success").increment(result.getCalls() - result.getErrors());
-				meterRegistry.counter("service.warm.up.calls", "warm.up", result.getName(), "outcome", "error").increment(result.getErrors());
+				meterRegistry.counter("service.warm.up.calls", "warm.up", result.getName(), "outcome", "success")
+						.increment(result.getCallCount() - result.getFailedCallCount());
+				meterRegistry.counter("service.warm.up.calls", "warm.up", result.getName(), "outcome", "error").increment(result.getFailedCallCount());
 			}
 		}
 	}
@@ -334,62 +346,36 @@ public class ServiceWarmUpServiceComponent implements ApplicationListener<Applic
 		}
 		final int parallelism = (warmUpProperties.getParallelism() > 0 ? warmUpProperties.getParallelism() : Runtime.getRuntime().availableProcessors());
 		final CompilationMXBean compilation = ManagementFactory.getCompilationMXBean();
-		final boolean compilationMonitored = ((compilation != null) && compilation.isCompilationTimeMonitoringSupported());
-		final long compilationAtStartMillis = (compilationMonitored ? compilation.getTotalCompilationTime() : 0L);
-		final AtomicBoolean stopped = new AtomicBoolean();
+		final boolean isCompilationTimeMonitored = ((compilation != null) && compilation.isCompilationTimeMonitoringSupported());
+		final long compilationAtStartMillis = (isCompilationTimeMonitored ? compilation.getTotalCompilationTime() : 0L);
+		final AtomicBoolean isStopped = new AtomicBoolean();
 		final AtomicLong turn = new AtomicLong();
 		final ExecutorService executor = Executors.newFixedThreadPool(parallelism, Thread.ofPlatform().daemon().name("service-warm-up-", 1).factory());
 		this.executors.add(executor);
 		ServiceWarmUpStopReason runStopReason = null;
 		try {
 			for (int threadIndex = 0; threadIndex < parallelism; threadIndex++) {
-				executor.execute(() -> ServiceWarmUpServiceComponent.makeCalls(executions, turn, stopped));
+				executor.execute(() -> ServiceWarmUpServiceComponent.makeCalls(executions, turn, isStopped));
 			}
 			executor.shutdown();
-			runStopReason = this.awaitStop(executor, executions, warmUpProperties, startNanos, compilation, compilationMonitored);
+			runStopReason = this.awaitStop(executor, executions, warmUpProperties, startNanos, compilation, isCompilationTimeMonitored);
 		}
 		finally {
 			// Calls in progress end on their own; the health check does not wait for them.
-			stopped.set(true);
+			isStopped.set(true);
 		}
 		for (final ServiceWarmUpExecution<?> execution : executions) {
 			execution.stop(runStopReason);
 		}
 		final List<ServiceWarmUpResult> results = executions.stream().map(ServiceWarmUpExecution::toResult).toList();
 		this.report(results, runStopReason, (System.nanoTime() - startNanos) / ServiceWarmUpServiceComponent.NANOSECONDS_PER_MILLISECOND,
-				(compilationMonitored ? compilation.getTotalCompilationTime() - compilationAtStartMillis : -1L), parallelism);
+				(isCompilationTimeMonitored ? compilation.getTotalCompilationTime() - compilationAtStartMillis : -1L), parallelism);
 		return results;
 	}
 
 	/**
-	 * Runs the warm-up beans and opens the health check when they stop.
-	 *
-	 * @param warmUps Warm-up beans.
-	 */
-	private void runStartupWarmUps(
-			final List<ServiceWarmUp<?>> warmUps) {
-		this.runningWarmUps.incrementAndGet();
-		try {
-			this.startupWarmUpPending.set(false);
-			this.warmUp(warmUps, this.properties);
-		}
-		finally {
-			this.runningWarmUps.decrementAndGet();
-		}
-	}
-
-	/**
-	 * Gets whether the health check may pass, that is, whether no warm-up is pending or running.
-	 *
-	 * @return Whether the health check may pass.
-	 */
-	public boolean isTrafficAllowed() {
-		return !this.startupWarmUpPending.get() && (this.runningWarmUps.get() == 0);
-	}
-
-	/**
-	 * Runs warm-ups now, holding the health check while they run. Used for the warm-up beans when the application is
-	 * ready.
+	 * Runs warm-ups now. While they run the health check answers 503, which takes the instance out of rotation for up to
+	 * the time limit: it is meant for the warm-up beans, which run when the application is ready, and for tests.
 	 *
 	 * @param  warmUps          Warm-ups.
 	 * @param  warmUpProperties Properties.
@@ -416,6 +402,32 @@ public class ServiceWarmUpServiceComponent implements ApplicationListener<Applic
 	}
 
 	/**
+	 * Runs the warm-up beans and opens the health check when they stop.
+	 *
+	 * @param warmUps Warm-up beans.
+	 */
+	private void runStartupWarmUps(
+			final List<ServiceWarmUp<?>> warmUps) {
+		this.runningWarmUps.incrementAndGet();
+		try {
+			this.isStartupWarmUpPending.set(false);
+			this.warmUp(warmUps, this.properties);
+		}
+		finally {
+			this.runningWarmUps.decrementAndGet();
+		}
+	}
+
+	/**
+	 * Gets whether the health check may pass, that is, whether no warm-up is pending or running.
+	 *
+	 * @return Whether the health check may pass.
+	 */
+	public boolean isTrafficAllowed() {
+		return !this.isStartupWarmUpPending.get() && (this.runningWarmUps.get() == 0);
+	}
+
+	/**
 	 * @see org.springframework.core.Ordered#getOrder()
 	 */
 	@Override
@@ -430,7 +442,7 @@ public class ServiceWarmUpServiceComponent implements ApplicationListener<Applic
 	@Override
 	public void onApplicationEvent(
 			final ApplicationReadyEvent event) {
-		if (this.startupWarmUpPending.get() && this.startupWarmUpStarted.compareAndSet(false, true)) {
+		if (this.isStartupWarmUpPending.get() && this.hasStartupWarmUpStarted.compareAndSet(false, true)) {
 			try {
 				final List<ServiceWarmUp<?>> warmUps = new ArrayList<>();
 				for (final ServiceWarmUp<?> warmUp : this.beanFactory.getBeansOfType(ServiceWarmUp.class).values()) {
@@ -441,7 +453,7 @@ public class ServiceWarmUpServiceComponent implements ApplicationListener<Applic
 			// The warm-up fails open: the error is logged and the service takes traffic as it would without a warm-up.
 			catch (final RuntimeException exception) {
 				ServiceWarmUpServiceComponent.LOGGER.error("Service warm-up could not start, so the service takes traffic without it.", exception);
-				this.startupWarmUpPending.set(false);
+				this.isStartupWarmUpPending.set(false);
 			}
 		}
 	}
@@ -451,6 +463,7 @@ public class ServiceWarmUpServiceComponent implements ApplicationListener<Applic
 	 */
 	@Override
 	public void destroy() {
+		this.isDestroyed.set(true);
 		this.executors.forEach(ExecutorService::shutdownNow);
 	}
 

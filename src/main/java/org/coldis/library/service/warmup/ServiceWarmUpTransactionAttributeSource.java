@@ -2,16 +2,20 @@ package org.coldis.library.service.warmup;
 
 import java.lang.reflect.Method;
 
+import org.springframework.context.EmbeddedValueResolverAware;
 import org.springframework.transaction.interceptor.DelegatingTransactionAttribute;
 import org.springframework.transaction.interceptor.TransactionAttribute;
 import org.springframework.transaction.interceptor.TransactionAttributeSource;
+import org.springframework.util.StringValueResolver;
 
 /**
- * Transaction attribute source that makes every transaction read-only on warm-up threads, whatever its propagation, so
- * that the database refuses the writes of a warm-up call, even in a new transaction. Other threads get the wrapped
- * source's attributes unchanged.
+ * Transaction attribute source of the AspectJ transaction aspect that makes, on warm-up threads, the transactions of
+ * the service's {@code @Transactional} methods read-only, whatever their propagation, so that they still run and the
+ * database refuses their writes. Transactions started elsewhere (repositories, transaction templates) are refused when
+ * read-write (see {@link ServiceWarmUpTransactionExecutionListener}). Other threads get the wrapped source's attributes
+ * unchanged.
  */
-public class ServiceWarmUpTransactionAttributeSource implements TransactionAttributeSource {
+public class ServiceWarmUpTransactionAttributeSource implements TransactionAttributeSource, EmbeddedValueResolverAware {
 
 	/**
 	 * Transaction attribute source.
@@ -58,12 +62,17 @@ public class ServiceWarmUpTransactionAttributeSource implements TransactionAttri
 	}
 
 	/**
-	 * Gets the wrapped transaction attribute source.
+	 * Passes the resolver on to the wrapped source, when it takes one, so that wrapping does not change how its
+	 * placeholders resolve.
 	 *
-	 * @return The wrapped transaction attribute source.
+	 * @see org.springframework.context.EmbeddedValueResolverAware#setEmbeddedValueResolver(org.springframework.util.StringValueResolver)
 	 */
-	public TransactionAttributeSource getTransactionAttributeSource() {
-		return this.transactionAttributeSource;
+	@Override
+	public void setEmbeddedValueResolver(
+			final StringValueResolver resolver) {
+		if (this.transactionAttributeSource instanceof final EmbeddedValueResolverAware resolverAwareSource) {
+			resolverAwareSource.setEmbeddedValueResolver(resolver);
+		}
 	}
 
 	/**

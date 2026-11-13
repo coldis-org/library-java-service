@@ -13,12 +13,12 @@ public class ServiceWarmUpResult {
 	/**
 	 * Number of calls.
 	 */
-	private final Long calls;
+	private final Long callCount;
 
 	/**
 	 * Number of failed calls.
 	 */
-	private final Long errors;
+	private final Long failedCallCount;
 
 	/**
 	 * Median duration of the first calls, in milliseconds, or null without calls.
@@ -44,8 +44,8 @@ public class ServiceWarmUpResult {
 	 * Constructor.
 	 *
 	 * @param name                   Warm-up name.
-	 * @param calls                  Number of calls.
-	 * @param errors                 Number of failed calls.
+	 * @param callCount              Number of calls.
+	 * @param failedCallCount        Number of failed calls.
 	 * @param firstCallsMedianMillis Median duration of the first calls, in milliseconds.
 	 * @param lastCallsMedianMillis  Median duration of the last calls, in milliseconds.
 	 * @param stopReason             Why the warm-up stopped.
@@ -53,16 +53,16 @@ public class ServiceWarmUpResult {
 	 */
 	public ServiceWarmUpResult(
 			final String name,
-			final Long calls,
-			final Long errors,
+			final Long callCount,
+			final Long failedCallCount,
 			final Double firstCallsMedianMillis,
 			final Double lastCallsMedianMillis,
 			final ServiceWarmUpStopReason stopReason,
 			final Throwable firstError) {
 		super();
 		this.name = name;
-		this.calls = calls;
-		this.errors = errors;
+		this.callCount = callCount;
+		this.failedCallCount = failedCallCount;
 		this.firstCallsMedianMillis = firstCallsMedianMillis;
 		this.lastCallsMedianMillis = lastCallsMedianMillis;
 		this.stopReason = stopReason;
@@ -83,8 +83,8 @@ public class ServiceWarmUpResult {
 	 *
 	 * @return The number of calls.
 	 */
-	public Long getCalls() {
-		return this.calls;
+	public Long getCallCount() {
+		return this.callCount;
 	}
 
 	/**
@@ -92,8 +92,8 @@ public class ServiceWarmUpResult {
 	 *
 	 * @return The number of failed calls.
 	 */
-	public Long getErrors() {
-		return this.errors;
+	public Long getFailedCallCount() {
+		return this.failedCallCount;
 	}
 
 	/**

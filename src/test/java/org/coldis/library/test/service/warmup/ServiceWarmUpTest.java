@@ -21,6 +21,7 @@ import org.coldis.library.test.StartTestWithContainerExtension;
 import org.coldis.library.test.TestWithContainer;
 import org.coldis.library.test.service.ContainerTestHelper;
 import org.junit.jupiter.api.Assertions;
+import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -127,13 +128,13 @@ public class ServiceWarmUpTest extends ContainerTestHelper {
 	private static boolean hasCause(
 			final Throwable error,
 			final Class<? extends Throwable> type) {
-		boolean found = false;
+		boolean isFound = false;
 		Throwable cause = error;
-		while (!found && (cause != null)) {
-			found = type.isInstance(cause);
+		while (!isFound && (cause != null)) {
+			isFound = type.isInstance(cause);
 			cause = cause.getCause();
 		}
-		return found;
+		return isFound;
 	}
 
 	/**
@@ -146,13 +147,13 @@ public class ServiceWarmUpTest extends ContainerTestHelper {
 	private static boolean hasCauseMessage(
 			final Throwable error,
 			final String text) {
-		boolean found = false;
+		boolean isFound = false;
 		Throwable cause = error;
-		while (!found && (cause != null)) {
-			found = ((cause.getMessage() != null) && cause.getMessage().contains(text));
+		while (!isFound && (cause != null)) {
+			isFound = ((cause.getMessage() != null) && cause.getMessage().contains(text));
 			cause = cause.getCause();
 		}
-		return found;
+		return isFound;
 	}
 
 	/**
@@ -165,13 +166,13 @@ public class ServiceWarmUpTest extends ContainerTestHelper {
 	private static boolean hasSqlState(
 			final Throwable error,
 			final String sqlState) {
-		boolean found = false;
+		boolean isFound = false;
 		Throwable cause = error;
-		while (!found && (cause != null)) {
-			found = ((cause instanceof final SQLException sqlException) && sqlState.equals(sqlException.getSQLState()));
+		while (!isFound && (cause != null)) {
+			isFound = ((cause instanceof final SQLException sqlException) && sqlState.equals(sqlException.getSQLState()));
 			cause = cause.getCause();
 		}
-		return found;
+		return isFound;
 	}
 
 	/**
@@ -202,7 +203,7 @@ public class ServiceWarmUpTest extends ContainerTestHelper {
 		final List<ServiceWarmUpResult> results = this.serviceWarmUpServiceComponent
 				.warmUp(List.of(new ServiceWarmUpTestRoutine<>(() -> List.of(input), call)), this.createProperties());
 		Assertions.assertEquals(1, results.size());
-		Assertions.assertEquals(1L, results.get(0).getCalls());
+		Assertions.assertEquals(1L, results.get(0).getCallCount());
 		return results.get(0);
 	}
 
@@ -226,6 +227,7 @@ public class ServiceWarmUpTest extends ContainerTestHelper {
 	 * Tests that, without warm-up beans, nothing holds the health check.
 	 */
 	@Test
+	@DisplayName("Without warm-up beans, nothing holds the health check")
 	public void testNoWarmUpBean() {
 		Assertions.assertTrue(this.serviceWarmUpServiceComponent.isTrafficAllowed());
 		Assertions.assertEquals(200, this.getHealthCheckStatus());
@@ -235,6 +237,7 @@ public class ServiceWarmUpTest extends ContainerTestHelper {
 	 * Tests that a disabled warm-up makes no calls.
 	 */
 	@Test
+	@DisplayName("A disabled warm-up makes no calls")
 	public void testDisabled() {
 		final AtomicInteger calls = new AtomicInteger();
 		final ServiceWarmUpProperties properties = this.createProperties();
@@ -249,6 +252,7 @@ public class ServiceWarmUpTest extends ContainerTestHelper {
 	 * Tests that a warm-up uses each input once and stops when they end.
 	 */
 	@Test
+	@DisplayName("A warm-up uses each input once and stops when they end")
 	public void testInputsExhausted() {
 		final AtomicInteger calls = new AtomicInteger();
 		final ServiceWarmUpProperties properties = this.createProperties();
@@ -257,8 +261,8 @@ public class ServiceWarmUpTest extends ContainerTestHelper {
 				List.of(new ServiceWarmUpTestRoutine<>(() -> IntStream.range(0, 50).boxed().toList(), input -> calls.incrementAndGet())), properties);
 		Assertions.assertEquals(1, results.size());
 		Assertions.assertEquals(ServiceWarmUpStopReason.INPUTS_EXHAUSTED, results.get(0).getStopReason());
-		Assertions.assertEquals(50L, results.get(0).getCalls());
-		Assertions.assertEquals(0L, results.get(0).getErrors());
+		Assertions.assertEquals(50L, results.get(0).getCallCount());
+		Assertions.assertEquals(0L, results.get(0).getFailedCallCount());
 		Assertions.assertEquals(50, calls.get());
 		Assertions.assertNotNull(results.get(0).getFirstCallsMedianMillis());
 		Assertions.assertNotNull(results.get(0).getLastCallsMedianMillis());
@@ -266,9 +270,10 @@ public class ServiceWarmUpTest extends ContainerTestHelper {
 	}
 
 	/**
-	 * Tests that an idle JIT stops the warm-up after the minimum of calls.
+	 * Tests that an idle JIT stops the warm-up once the minimum of calls is made.
 	 */
 	@Test
+	@DisplayName("An idle JIT stops the warm-up once the minimum of calls is made")
 	public void testCompilationIdle() {
 		final ServiceWarmUpProperties properties = this.createProperties();
 		properties.setParallelism(2);
@@ -281,14 +286,36 @@ public class ServiceWarmUpTest extends ContainerTestHelper {
 				.warmUp(List.of(new ServiceWarmUpTestRoutine<>(() -> ServiceWarmUpTest.UNENDING_INPUTS, input -> Thread.sleep(1))), properties);
 		final Duration duration = Duration.ofNanos(System.nanoTime() - startNanos);
 		Assertions.assertEquals(ServiceWarmUpStopReason.COMPILATION_IDLE, results.get(0).getStopReason());
-		Assertions.assertTrue(results.get(0).getCalls() >= 20L);
+		Assertions.assertTrue(results.get(0).getCallCount() >= 20L);
 		Assertions.assertTrue(duration.compareTo(ServiceWarmUpTest.TEST_TIMEOUT) < 0, duration.toString());
+	}
+
+	/**
+	 * Tests that an idle JIT does not stop the warm-up before the minimum of calls is made.
+	 */
+	@Test
+	@DisplayName("An idle JIT does not stop the warm-up before the minimum of calls is made")
+	public void testCompilationIdleWaitsForMinimumCalls() {
+		final ServiceWarmUpProperties properties = this.createProperties();
+		properties.setParallelism(2);
+		properties.setMinimumCalls(Integer.MAX_VALUE);
+		// Any compilation rate counts as idle, so only the unreachable minimum keeps the warm-up running.
+		properties.setIdleCompilationMillisPerSecond(Long.MAX_VALUE);
+		properties.setIdleCompilationPeriod(Duration.ofSeconds(1));
+		properties.setTimeLimit(Duration.ofSeconds(3));
+		final long startNanos = System.nanoTime();
+		final List<ServiceWarmUpResult> results = this.serviceWarmUpServiceComponent
+				.warmUp(List.of(new ServiceWarmUpTestRoutine<>(() -> ServiceWarmUpTest.UNENDING_INPUTS, input -> Thread.sleep(1))), properties);
+		final Duration duration = Duration.ofNanos(System.nanoTime() - startNanos);
+		Assertions.assertEquals(ServiceWarmUpStopReason.TIME_LIMIT, results.get(0).getStopReason());
+		Assertions.assertTrue(duration.compareTo(Duration.ofSeconds(3)) >= 0, duration.toString());
 	}
 
 	/**
 	 * Tests that the time limit stops the warm-up.
 	 */
 	@Test
+	@DisplayName("The time limit stops the warm-up")
 	public void testTimeLimit() {
 		final ServiceWarmUpProperties properties = this.createProperties();
 		properties.setTimeLimit(Duration.ofSeconds(2));
@@ -305,6 +332,7 @@ public class ServiceWarmUpTest extends ContainerTestHelper {
 	 * Tests that consecutive errors stop the warm-up, and that the health check opens.
 	 */
 	@Test
+	@DisplayName("Consecutive errors stop the warm-up and the health check opens")
 	public void testConsecutiveErrors() {
 		final ServiceWarmUpProperties properties = this.createProperties();
 		properties.setMaximumConsecutiveErrors(3);
@@ -313,22 +341,41 @@ public class ServiceWarmUpTest extends ContainerTestHelper {
 					throw new IllegalArgumentException("Test error.");
 				})), properties);
 		Assertions.assertEquals(ServiceWarmUpStopReason.ERRORS, results.get(0).getStopReason());
-		Assertions.assertEquals(3L, results.get(0).getCalls());
-		Assertions.assertEquals(3L, results.get(0).getErrors());
+		Assertions.assertEquals(3L, results.get(0).getCallCount());
+		Assertions.assertEquals(3L, results.get(0).getFailedCallCount());
 		Assertions.assertInstanceOf(IllegalArgumentException.class, results.get(0).getFirstError());
 		Assertions.assertTrue(this.serviceWarmUpServiceComponent.isTrafficAllowed());
+	}
+
+	/**
+	 * Tests that an error from a call, other than one the JVM cannot recover from, fails the call without ending its
+	 * thread.
+	 */
+	@Test
+	@DisplayName("An error from a call fails the call without ending its thread")
+	public void testCallError() {
+		final ServiceWarmUpProperties properties = this.createProperties();
+		properties.setMaximumConsecutiveErrors(3);
+		final List<ServiceWarmUpResult> results = this.serviceWarmUpServiceComponent
+				.warmUp(List.of(new ServiceWarmUpTestRoutine<>(() -> ServiceWarmUpTest.UNENDING_INPUTS, input -> {
+					throw new AssertionError("Test error.");
+				})), properties);
+		Assertions.assertEquals(ServiceWarmUpStopReason.ERRORS, results.get(0).getStopReason());
+		Assertions.assertEquals(3L, results.get(0).getFailedCallCount());
+		Assertions.assertInstanceOf(AssertionError.class, results.get(0).getFirstError());
 	}
 
 	/**
 	 * Tests that a warm-up whose inputs cannot be read makes no calls.
 	 */
 	@Test
+	@DisplayName("A warm-up whose inputs cannot be read makes no calls")
 	public void testInputsFailure() {
 		final List<ServiceWarmUpResult> results = this.serviceWarmUpServiceComponent.warmUp(List.of(new ServiceWarmUpTestRoutine<Integer>(() -> {
 			throw new IllegalStateException("Test inputs error.");
 		}, input -> {})), this.createProperties());
 		Assertions.assertEquals(ServiceWarmUpStopReason.INPUTS_FAILED, results.get(0).getStopReason());
-		Assertions.assertEquals(0L, results.get(0).getCalls());
+		Assertions.assertEquals(0L, results.get(0).getCallCount());
 		Assertions.assertTrue(ServiceWarmUpTest.hasCauseMessage(results.get(0).getFirstError(), "Test inputs error."));
 	}
 
@@ -338,6 +385,7 @@ public class ServiceWarmUpTest extends ContainerTestHelper {
 	 * @throws Exception If the test fails.
 	 */
 	@Test
+	@DisplayName("The health check answers 503 while a warm-up runs and passes after it")
 	public void testHealthCheckHeld() throws Exception {
 		final CountDownLatch callStarted = new CountDownLatch(1);
 		final CountDownLatch callReleased = new CountDownLatch(1);
@@ -361,19 +409,20 @@ public class ServiceWarmUpTest extends ContainerTestHelper {
 	}
 
 	/**
-	 * Tests that the database refuses the writes of warm-up calls, in the call's transaction and in a new one, and that
-	 * the same writes work outside the warm-up.
+	 * Tests that the database refuses the writes of the service's transactional methods, in the call's transaction and
+	 * in a new one, and that the same writes work outside the warm-up.
 	 *
 	 * @throws Exception If the test fails.
 	 */
 	@Test
+	@DisplayName("The database refuses writes of transactional methods, also in a new transaction")
 	public void testDatabaseWritesRefused() throws Exception {
 		final String key = "service-warm-up-test-" + UUID.randomUUID();
 		final ServiceWarmUpResult sameTransactionResult = this.warmUpOnce(key,
 				input -> this.keyValueServiceComponent.lock(input, LockBehavior.WAIT_AND_LOCK));
 		final ServiceWarmUpResult newTransactionResult = this.warmUpOnce(key, input -> this.serviceWarmUpTestServiceComponent.lockInNewTransaction(input));
 		for (final ServiceWarmUpResult result : List.of(sameTransactionResult, newTransactionResult)) {
-			Assertions.assertEquals(1L, result.getErrors());
+			Assertions.assertEquals(1L, result.getFailedCallCount());
 			Assertions.assertTrue(ServiceWarmUpTest.hasSqlState(result.getFirstError(), ServiceWarmUpTest.READ_ONLY_SQL_TRANSACTION),
 					String.valueOf(result.getFirstError()));
 		}
@@ -384,10 +433,50 @@ public class ServiceWarmUpTest extends ContainerTestHelper {
 	}
 
 	/**
+	 * Tests that a read-write transaction a transaction template starts is refused, and works outside the warm-up.
+	 *
+	 * @throws Exception If the test fails.
+	 */
+	@Test
+	@DisplayName("A read-write transaction a transaction template starts is refused")
+	public void testProgrammaticNewTransactionRefused() throws Exception {
+		final String key = "service-warm-up-test-" + UUID.randomUUID();
+		final ServiceWarmUpResult result = this.warmUpOnce(key, input -> this.serviceWarmUpTestServiceComponent.saveInProgrammaticNewTransaction(input));
+		Assertions.assertEquals(1L, result.getFailedCallCount());
+		Assertions.assertTrue(ServiceWarmUpTest.hasCause(result.getFirstError(), ServiceWarmUpSideEffectException.class),
+				String.valueOf(result.getFirstError()));
+		Assertions.assertNull(this.keyValueServiceComponent.findById(key, LockBehavior.NO_LOCK, true));
+		this.serviceWarmUpTestServiceComponent.saveInProgrammaticNewTransaction(key);
+		Assertions.assertNotNull(this.keyValueServiceComponent.findById(key, LockBehavior.NO_LOCK, true));
+		this.keyValueServiceComponent.delete(key);
+	}
+
+	/**
+	 * Tests that a read-write transaction started with the call's transaction suspended is refused, and works outside
+	 * the warm-up.
+	 *
+	 * @throws Exception If the test fails.
+	 */
+	@Test
+	@DisplayName("A read-write transaction started with the call's transaction suspended is refused")
+	public void testNewTransactionAfterSuspensionRefused() throws Exception {
+		final String key = "service-warm-up-test-" + UUID.randomUUID();
+		final ServiceWarmUpResult result = this.warmUpOnce(key, input -> this.serviceWarmUpTestServiceComponent.saveWithTransactionSuspended(input));
+		Assertions.assertEquals(1L, result.getFailedCallCount());
+		Assertions.assertTrue(ServiceWarmUpTest.hasCause(result.getFirstError(), ServiceWarmUpSideEffectException.class),
+				String.valueOf(result.getFirstError()));
+		Assertions.assertNull(this.keyValueServiceComponent.findById(key, LockBehavior.NO_LOCK, true));
+		this.serviceWarmUpTestServiceComponent.saveWithTransactionSuspended(key);
+		Assertions.assertNotNull(this.keyValueServiceComponent.findById(key, LockBehavior.NO_LOCK, true));
+		this.keyValueServiceComponent.delete(key);
+	}
+
+	/**
 	 * Tests that warm-up calls run cached methods without filling the caches, and that the same calls fill them outside
 	 * the warm-up.
 	 */
 	@Test
+	@DisplayName("Warm-up calls run cached methods without filling the caches")
 	public void testCacheWritesDropped() {
 		final String key = UUID.randomUUID().toString();
 		final int runsBefore = ServiceWarmUpTestServiceComponent.CACHED_METHOD_RUNS.get();
@@ -395,7 +484,7 @@ public class ServiceWarmUpTest extends ContainerTestHelper {
 			this.serviceWarmUpTestServiceComponent.getFromLocalCache(input);
 			this.serviceWarmUpTestServiceComponent.getFromCentralCache(input);
 		});
-		Assertions.assertEquals(0L, result.getErrors());
+		Assertions.assertEquals(0L, result.getFailedCallCount());
 		Assertions.assertEquals(runsBefore + 2, ServiceWarmUpTestServiceComponent.CACHED_METHOD_RUNS.get());
 		Assertions.assertNull(this.localCacheManager.getCache(ServiceWarmUpTestServiceComponent.LOCAL_CACHE).get(key));
 		Assertions.assertNull(this.centralCacheManager.getCache(ServiceWarmUpTestServiceComponent.CENTRAL_CACHE).get(key));
@@ -409,9 +498,10 @@ public class ServiceWarmUpTest extends ContainerTestHelper {
 	 * Tests that warm-up calls cannot send messages.
 	 */
 	@Test
+	@DisplayName("Warm-up calls cannot send messages")
 	public void testMessagesRefused() {
 		final ServiceWarmUpResult result = this.warmUpOnce("message", input -> this.serviceWarmUpTestServiceComponent.send(input));
-		Assertions.assertEquals(1L, result.getErrors());
+		Assertions.assertEquals(1L, result.getFailedCallCount());
 		Assertions.assertTrue(ServiceWarmUpTest.hasCause(result.getFirstError(), ServiceWarmUpSideEffectException.class),
 				String.valueOf(result.getFirstError()));
 		final JmsTemplate receiver = new JmsTemplate(this.jmsTemplate.getConnectionFactory());
@@ -424,21 +514,35 @@ public class ServiceWarmUpTest extends ContainerTestHelper {
 	 * Tests that warm-up calls cannot make HTTP requests, and that the same request works outside the warm-up.
 	 */
 	@Test
+	@DisplayName("Warm-up calls cannot make HTTP requests")
 	public void testHttpRequestsRefused() {
 		final ServiceWarmUpResult result = this.warmUpOnce(this.port, input -> this.serviceWarmUpTestServiceComponent.getHealthCheck(input));
-		Assertions.assertEquals(1L, result.getErrors());
+		Assertions.assertEquals(1L, result.getFailedCallCount());
 		Assertions.assertTrue(ServiceWarmUpTest.hasCause(result.getFirstError(), ServiceWarmUpSideEffectException.class),
 				String.valueOf(result.getFirstError()));
 		Assertions.assertNotNull(this.serviceWarmUpTestServiceComponent.getHealthCheck(this.port));
 	}
 
 	/**
-	 * Tests that warm-up calls cannot record statistics.
+	 * Tests that warm-up calls cannot record statistics events.
 	 */
 	@Test
+	@DisplayName("Warm-up calls cannot record statistics events")
 	public void testStatisticsRefused() {
 		final ServiceWarmUpResult result = this.warmUpOnce(1, input -> this.serviceWarmUpTestServiceComponent.recordStatisticsEvent());
-		Assertions.assertEquals(1L, result.getErrors());
+		Assertions.assertEquals(1L, result.getFailedCallCount());
+		Assertions.assertTrue(ServiceWarmUpTest.hasCause(result.getFirstError(), ServiceWarmUpSideEffectException.class),
+				String.valueOf(result.getFirstError()));
+	}
+
+	/**
+	 * Tests that warm-up calls cannot buffer statistics summary deltas, which the event guard does not cover.
+	 */
+	@Test
+	@DisplayName("Warm-up calls cannot buffer statistics summary deltas")
+	public void testStatisticsSummaryRefused() {
+		final ServiceWarmUpResult result = this.warmUpOnce(1, input -> this.serviceWarmUpTestServiceComponent.bufferStatisticsSummaryDelta());
+		Assertions.assertEquals(1L, result.getFailedCallCount());
 		Assertions.assertTrue(ServiceWarmUpTest.hasCause(result.getFirstError(), ServiceWarmUpSideEffectException.class),
 				String.valueOf(result.getFirstError()));
 	}

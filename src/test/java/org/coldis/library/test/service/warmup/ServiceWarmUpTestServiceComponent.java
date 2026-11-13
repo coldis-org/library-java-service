@@ -1,18 +1,28 @@
 package org.coldis.library.test.service.warmup;
 
+import java.time.LocalDateTime;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import org.coldis.library.exception.BusinessException;
+import org.coldis.library.helper.DateTimeHelper;
 import org.coldis.library.persistence.LockBehavior;
+import org.coldis.library.persistence.keyvalue.KeyValue;
 import org.coldis.library.persistence.keyvalue.KeyValueServiceComponent;
+import org.coldis.library.service.health.HealthCheckValue;
 import org.coldis.library.service.statistics.StatisticsEvent;
 import org.coldis.library.service.statistics.StatisticsEventServiceComponent;
+import org.coldis.library.service.statistics.StatisticsEventSummaryBufferServiceComponent;
+import org.coldis.library.service.statistics.StatisticsEventSummaryDelta;
+import org.coldis.library.service.statistics.StatisticsEventSummaryKey;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.cache.annotation.Cacheable;
 import org.springframework.jms.core.JmsTemplate;
 import org.springframework.stereotype.Component;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.TransactionDefinition;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.web.client.RestTemplate;
 
 /**
@@ -35,6 +45,16 @@ public class ServiceWarmUpTestServiceComponent {
 	 * Central cache.
 	 */
 	public static final String CENTRAL_CACHE = "serviceWarmUpTestCentralCache";
+
+	/**
+	 * Statistics context of the tests.
+	 */
+	public static final String STATISTICS_CONTEXT = "serviceWarmUpTest";
+
+	/**
+	 * Statistics dimension of the tests.
+	 */
+	public static final String STATISTICS_DIMENSION = "dimension";
 
 	/**
 	 * Number of runs of the cached methods.
@@ -64,6 +84,53 @@ public class ServiceWarmUpTestServiceComponent {
 	 */
 	@Autowired
 	private StatisticsEventServiceComponent statisticsEventServiceComponent;
+
+	/**
+	 * Statistics summary buffer service.
+	 */
+	@Autowired
+	private StatisticsEventSummaryBufferServiceComponent statisticsEventSummaryBufferServiceComponent;
+
+	/**
+	 * Transaction manager.
+	 */
+	@Autowired
+	private PlatformTransactionManager transactionManager;
+
+	/**
+	 * Saves a key through the repository, in a new transaction that a transaction template starts.
+	 *
+	 * @param key Key.
+	 */
+	public void saveInProgrammaticNewTransaction(
+			final String key) {
+		final TransactionTemplate transactionTemplate = new TransactionTemplate(this.transactionManager);
+		transactionTemplate.setPropagationBehavior(TransactionDefinition.PROPAGATION_REQUIRES_NEW);
+		transactionTemplate.executeWithoutResult(transactionStatus -> this.keyValueServiceComponent.getRepository().save(new KeyValue<>(key, new HealthCheckValue())));
+	}
+
+	/**
+	 * Saves a key through the repository with any surrounding transaction suspended, so that the transaction template
+	 * starts a new transaction even with the default propagation.
+	 *
+	 * @param key Key.
+	 */
+	@Transactional(propagation = Propagation.NOT_SUPPORTED)
+	public void saveWithTransactionSuspended(
+			final String key) {
+		final TransactionTemplate transactionTemplate = new TransactionTemplate(this.transactionManager);
+		transactionTemplate.executeWithoutResult(transactionStatus -> this.keyValueServiceComponent.getRepository().save(new KeyValue<>(key, new HealthCheckValue())));
+	}
+
+	/**
+	 * Buffers a statistics summary delta.
+	 */
+	public void bufferStatisticsSummaryDelta() {
+		final LocalDateTime dateTime = DateTimeHelper.getCurrentLocalDateTime();
+		this.statisticsEventSummaryBufferServiceComponent.bufferDelta(
+				new StatisticsEventSummaryKey(ServiceWarmUpTestServiceComponent.STATISTICS_CONTEXT, ServiceWarmUpTestServiceComponent.STATISTICS_DIMENSION, dateTime),
+				new StatisticsEventSummaryDelta(ServiceWarmUpTestServiceComponent.STATISTICS_CONTEXT, ServiceWarmUpTestServiceComponent.STATISTICS_DIMENSION, dateTime));
+	}
 
 	/**
 	 * Locks a key, creating it when it does not exist, in a new transaction.

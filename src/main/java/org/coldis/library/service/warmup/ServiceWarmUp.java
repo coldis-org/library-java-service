@@ -15,10 +15,12 @@ import java.util.List;
  * </p>
  *
  * <p>
- * The calls must only read. The library runs each one inside a read-only transaction that is rolled back, turns every
- * {@code @Transactional} method they reach read-only, refuses JMS connections, {@code RestTemplate} requests and
- * statistics, and drops cache writes (see {@link ServiceWarmUpContext}). A call that needs any of them fails and is
- * counted as an error. Work a call hands to another thread is not covered, so the calls must not start any.
+ * The calls must only read. The library runs each one inside a read-only transaction that is rolled back, runs the
+ * service's {@code @Transactional} methods read-only, refuses any other new read-write transaction, refuses pooled JMS
+ * connections, {@code RestTemplate} requests and statistics, and drops cache writes (see {@link ServiceWarmUpContext}).
+ * A call that needs any of them fails and is counted as an error. Not covered, so the calls must avoid them: writes
+ * made outside any transaction (auto-commit), work handed to another thread, other HTTP clients and native JMS
+ * connection factories.
  * </p>
  *
  * @param <InputType> Input type.

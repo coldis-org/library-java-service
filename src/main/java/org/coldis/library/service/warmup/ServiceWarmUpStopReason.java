@@ -11,7 +11,7 @@ public enum ServiceWarmUpStopReason {
 	INPUTS_EXHAUSTED,
 
 	/**
-	 * The JIT stopped compiling after every running warm-up made the minimum of calls.
+	 * The JIT stayed idle for the idle period after every running warm-up made the minimum of calls.
 	 */
 	COMPILATION_IDLE,
 
@@ -33,6 +33,11 @@ public enum ServiceWarmUpStopReason {
 	/**
 	 * The warm-up was interrupted, because the service is stopping.
 	 */
-	INTERRUPTED
+	INTERRUPTED,
+
+	/**
+	 * Every call thread ended on an error the JVM cannot recover from, before the warm-up stopped.
+	 */
+	CALL_THREADS_FAILED
 
 }
