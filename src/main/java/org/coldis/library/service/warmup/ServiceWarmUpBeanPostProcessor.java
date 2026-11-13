@@ -1,8 +1,5 @@
 package org.coldis.library.service.warmup;
 
-import java.util.ArrayList;
-import java.util.List;
-
 import org.springframework.beans.factory.config.BeanPostProcessor;
 import org.springframework.cache.CacheManager;
 import org.springframework.http.client.ClientHttpRequestInterceptor;
@@ -48,9 +45,9 @@ public class ServiceWarmUpBeanPostProcessor implements BeanPostProcessor {
 			}
 		}
 		else if (!restTemplate.getInterceptors().contains(ServiceWarmUpBeanPostProcessor.HTTP_GUARD)) {
-			final List<ClientHttpRequestInterceptor> interceptors = new ArrayList<>(restTemplate.getInterceptors());
-			interceptors.add(0, ServiceWarmUpBeanPostProcessor.HTTP_GUARD);
-			restTemplate.setInterceptors(interceptors);
+			// The live list keeps the guard first: setInterceptors would sort every interceptor by its declared order, putting
+			// the guard behind ordered ones and reordering the template's own interceptors on every thread.
+			restTemplate.getInterceptors().add(0, ServiceWarmUpBeanPostProcessor.HTTP_GUARD);
 		}
 	}
 

@@ -66,11 +66,6 @@ public class ServiceWarmUpServiceComponent implements ApplicationListener<Applic
 	private static final long NANOSECONDS_PER_MILLISECOND = 1_000_000L;
 
 	/**
-	 * Milliseconds per second.
-	 */
-	private static final long MILLISECONDS_PER_SECOND = 1_000L;
-
-	/**
 	 * Bean factory.
 	 */
 	private final ListableBeanFactory beanFactory;
@@ -250,10 +245,11 @@ public class ServiceWarmUpServiceComponent implements ApplicationListener<Applic
 			final CompilationMXBean compilation,
 			final boolean isCompilationTimeMonitored) {
 		final long deadlineNanos = startNanos + warmUpProperties.getTimeLimit().toNanos();
-		final long requiredIdleChecks = Math.max(1L, warmUpProperties.getIdleCompilationPeriod().toNanos() / ServiceWarmUpServiceComponent.CHECK_INTERVAL_NANOS);
-		long idleChecks = 0L;
-		long previousCheckNanos = startNanos;
-		long previousCompilationMillis = (isCompilationTimeMonitored ? compilation.getTotalCompilationTime() : 0L);
+		final ServiceWarmUpCompilationIdleness compilationIdleness = (isCompilationTimeMonitored
+				? new ServiceWarmUpCompilationIdleness(warmUpProperties.getIdleCompilationMillisPerSecond(),
+						Math.max(1L, warmUpProperties.getIdleCompilationPeriod().toNanos() / ServiceWarmUpServiceComponent.CHECK_INTERVAL_NANOS),
+						compilation.getTotalCompilationTime(), startNanos)
+				: null);
 		boolean haveCallsEnded = false;
 		ServiceWarmUpStopReason stopReason = null;
 		while (!haveCallsEnded && (stopReason == null)) {
@@ -266,22 +262,15 @@ public class ServiceWarmUpServiceComponent implements ApplicationListener<Applic
 				stopReason = ServiceWarmUpStopReason.INTERRUPTED;
 			}
 			final long checkNanos = System.nanoTime();
-			final boolean haveMadeMinimumCalls = ServiceWarmUpServiceComponent.haveMadeMinimumCalls(executions, warmUpProperties.getMinimumCalls());
-			if (isCompilationTimeMonitored) {
-				final long compilationMillis = compilation.getTotalCompilationTime();
-				final long elapsedMillis = Math.max(1L, (checkNanos - previousCheckNanos) / ServiceWarmUpServiceComponent.NANOSECONDS_PER_MILLISECOND);
-				final long compilationMillisPerSecond = ((compilationMillis - previousCompilationMillis) * ServiceWarmUpServiceComponent.MILLISECONDS_PER_SECOND)
-						/ elapsedMillis;
-				// The idle period counts only after every running warm-up made the minimum of calls.
-				idleChecks = (haveMadeMinimumCalls && (compilationMillisPerSecond < warmUpProperties.getIdleCompilationMillisPerSecond()) ? idleChecks + 1 : 0L);
-				previousCompilationMillis = compilationMillis;
+			if (compilationIdleness != null) {
+				compilationIdleness.recordCheck(compilation.getTotalCompilationTime(), checkNanos,
+						ServiceWarmUpServiceComponent.haveMadeMinimumCalls(executions, warmUpProperties.getMinimumCalls()));
 			}
-			previousCheckNanos = checkNanos;
 			if (!haveCallsEnded && (stopReason == null)) {
 				if (checkNanos >= deadlineNanos) {
 					stopReason = ServiceWarmUpStopReason.TIME_LIMIT;
 				}
-				else if (idleChecks >= requiredIdleChecks) {
+				else if ((compilationIdleness != null) && compilationIdleness.isIdleLongEnough()) {
 					stopReason = ServiceWarmUpStopReason.COMPILATION_IDLE;
 				}
 			}
@@ -302,7 +291,7 @@ public class ServiceWarmUpServiceComponent implements ApplicationListener<Applic
 	 * @param compilationMillis JIT compilation time during the warm-up, in milliseconds, or -1 when not available.
 	 * @param parallelism       Number of threads.
 	 */
-	private void report(
+	private void reportResults(
 			final List<ServiceWarmUpResult> results,
 			final ServiceWarmUpStopReason runStopReason,
 			final long durationMillis,
@@ -335,7 +324,7 @@ public class ServiceWarmUpServiceComponent implements ApplicationListener<Applic
 	 * @param  warmUpProperties Properties.
 	 * @return                  The results, in the order of the warm-ups.
 	 */
-	private List<ServiceWarmUpResult> run(
+	private List<ServiceWarmUpResult> runWarmUps(
 			final List<? extends ServiceWarmUp<?>> warmUps,
 			final ServiceWarmUpProperties warmUpProperties) {
 		final long startNanos = System.nanoTime();
@@ -368,27 +357,27 @@ public class ServiceWarmUpServiceComponent implements ApplicationListener<Applic
 			execution.stop(runStopReason);
 		}
 		final List<ServiceWarmUpResult> results = executions.stream().map(ServiceWarmUpExecution::toResult).toList();
-		this.report(results, runStopReason, (System.nanoTime() - startNanos) / ServiceWarmUpServiceComponent.NANOSECONDS_PER_MILLISECOND,
+		this.reportResults(results, runStopReason, (System.nanoTime() - startNanos) / ServiceWarmUpServiceComponent.NANOSECONDS_PER_MILLISECOND,
 				(isCompilationTimeMonitored ? compilation.getTotalCompilationTime() - compilationAtStartMillis : -1L), parallelism);
 		return results;
 	}
 
 	/**
-	 * Runs warm-ups now. While they run the health check answers 503, which takes the instance out of rotation for up to
-	 * the time limit: it is meant for the warm-up beans, which run when the application is ready, and for tests.
+	 * Runs warm-ups now and holds the health check (503) while they run, up to the time limit. Package-private: the
+	 * warm-up beans run through it when the application is ready, and tests reach it through a test seam.
 	 *
 	 * @param  warmUps          Warm-ups.
 	 * @param  warmUpProperties Properties.
 	 * @return                  The results, in the order of the warm-ups; empty when nothing ran or the warm-up failed.
 	 */
-	public List<ServiceWarmUpResult> warmUp(
+	List<ServiceWarmUpResult> warmUp(
 			final List<? extends ServiceWarmUp<?>> warmUps,
 			final ServiceWarmUpProperties warmUpProperties) {
 		List<ServiceWarmUpResult> results = List.of();
 		this.runningWarmUps.incrementAndGet();
 		try {
 			if (Boolean.TRUE.equals(warmUpProperties.getEnabled()) && !warmUps.isEmpty()) {
-				results = this.run(warmUps, warmUpProperties);
+				results = this.runWarmUps(warmUps, warmUpProperties);
 			}
 		}
 		// The warm-up fails open: the error is logged and the service takes traffic as it would without a warm-up.

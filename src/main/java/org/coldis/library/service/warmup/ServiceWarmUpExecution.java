@@ -305,7 +305,7 @@ final class ServiceWarmUpExecution<InputType> {
 	 * @param durationNanos Call duration, in nanoseconds.
 	 * @param error         Error thrown by the call, or null when it succeeded.
 	 */
-	private synchronized void record(
+	private synchronized void recordCall(
 			final long durationNanos,
 			final Throwable error) {
 		if (this.callCount < ServiceWarmUpExecution.DURATION_WINDOW) {
@@ -380,7 +380,7 @@ final class ServiceWarmUpExecution<InputType> {
 				}
 				error = callError;
 			}
-			this.record(System.nanoTime() - startNanos, error);
+			this.recordCall(System.nanoTime() - startNanos, error);
 		}
 	}
 

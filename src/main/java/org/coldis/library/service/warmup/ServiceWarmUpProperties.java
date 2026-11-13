@@ -61,22 +61,6 @@ public class ServiceWarmUpProperties {
 	}
 
 	/**
-	 * Copy constructor.
-	 *
-	 * @param properties Properties to copy.
-	 */
-	public ServiceWarmUpProperties(final ServiceWarmUpProperties properties) {
-		super();
-		this.enabled = properties.getEnabled();
-		this.timeLimit = properties.getTimeLimit();
-		this.minimumCalls = properties.getMinimumCalls();
-		this.parallelism = properties.getParallelism();
-		this.idleCompilationMillisPerSecond = properties.getIdleCompilationMillisPerSecond();
-		this.idleCompilationPeriod = properties.getIdleCompilationPeriod();
-		this.maximumConsecutiveErrors = properties.getMaximumConsecutiveErrors();
-	}
-
-	/**
 	 * Gets whether the service warm-up is on.
 	 *
 	 * @return Whether the service warm-up is on.

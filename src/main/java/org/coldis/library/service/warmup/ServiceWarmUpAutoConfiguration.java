@@ -33,7 +33,8 @@ public class ServiceWarmUpAutoConfiguration {
 	private static final Logger LOGGER = LoggerFactory.getLogger(ServiceWarmUpAutoConfiguration.class);
 
 	/**
-	 * Makes every transaction read-only on warm-up threads, by wrapping the attribute source of the transaction aspect.
+	 * Makes the service's {@code @Transactional} methods read-only on warm-up threads, by wrapping the attribute source
+	 * of the transaction aspect; other new read-write transactions are refused by the transaction managers' listener.
 	 * The aspect is a single instance for the whole JVM, so a source already wrapped is kept as is.
 	 */
 	@Configuration
@@ -133,7 +134,7 @@ public class ServiceWarmUpAutoConfiguration {
 	}
 
 	/**
-	 * Guards caches and {@code RestTemplate} requests during the warm-up.
+	 * Guards caches, {@code RestTemplate} requests and transaction managers during the warm-up.
 	 *
 	 * @return The bean post processor.
 	 */

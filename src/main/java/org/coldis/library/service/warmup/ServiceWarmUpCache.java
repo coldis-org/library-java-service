@@ -97,6 +97,9 @@ public class ServiceWarmUpCache implements Cache {
 	}
 
 	/**
+	 * Runs the loader without reading or writing the wrapped cache. Unlike {@link #get(Object, Callable)}, this
+	 * asynchronous path always runs the uncached code, which is what a warm-up call exercises; nothing is stored.
+	 *
 	 * @see org.springframework.cache.Cache#retrieve(java.lang.Object, java.util.function.Supplier)
 	 */
 	@Override

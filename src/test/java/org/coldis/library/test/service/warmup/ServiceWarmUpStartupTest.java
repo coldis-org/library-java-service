@@ -11,15 +11,19 @@ import org.coldis.library.service.warmup.ServiceWarmUp;
 import org.coldis.library.service.warmup.ServiceWarmUpAutoConfiguration;
 import org.coldis.library.service.warmup.ServiceWarmUpProperties;
 import org.coldis.library.service.warmup.ServiceWarmUpServiceComponent;
+import org.coldis.library.test.TestHelper;
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.AutoConfigurations;
 import org.springframework.boot.autoconfigure.context.ConfigurationPropertiesAutoConfiguration;
 import org.springframework.boot.context.event.ApplicationReadyEvent;
 import org.springframework.boot.test.context.assertj.AssertableApplicationContext;
 import org.springframework.boot.test.context.runner.ApplicationContextRunner;
+import org.springframework.boot.test.system.CapturedOutput;
+import org.springframework.boot.test.system.OutputCaptureExtension;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
@@ -28,17 +32,8 @@ import org.springframework.context.annotation.Configuration;
  * application is ready and open it when they stop. No containers, and no transaction or cache configuration, which the
  * shared test contexts configure.
  */
+@ExtendWith(OutputCaptureExtension.class)
 public class ServiceWarmUpStartupTest {
-
-	/**
-	 * Longest a test waits.
-	 */
-	private static final Duration TEST_TIMEOUT = Duration.ofSeconds(30);
-
-	/**
-	 * Interval between checks while waiting.
-	 */
-	private static final long WAIT_INTERVAL_MILLIS = 20L;
 
 	/**
 	 * What the warm-up beans did.
@@ -128,7 +123,7 @@ public class ServiceWarmUpStartupTest {
 				final StartupProbe startupProbe) {
 			return new ServiceWarmUpTestRoutine<>(() -> List.of(1), input -> {
 				startupProbe.getBlockingCallStarted().countDown();
-				startupProbe.getBlockingCallReleased().await(ServiceWarmUpStartupTest.TEST_TIMEOUT.toSeconds(), TimeUnit.SECONDS);
+				startupProbe.getBlockingCallReleased().await(TestHelper.VERY_LONG_WAIT, TimeUnit.MILLISECONDS);
 			});
 		}
 
@@ -152,24 +147,6 @@ public class ServiceWarmUpStartupTest {
 	}
 
 	/**
-	 * Waits until the health check may pass.
-	 *
-	 * @param  serviceWarmUpServiceComponent Warm-up service.
-	 * @return                               Whether the health check may pass before the timeout.
-	 * @throws InterruptedException          If the wait is interrupted.
-	 */
-	private static boolean awaitTrafficAllowed(
-			final ServiceWarmUpServiceComponent serviceWarmUpServiceComponent) throws InterruptedException {
-		final long deadlineNanos = System.nanoTime() + ServiceWarmUpStartupTest.TEST_TIMEOUT.toNanos();
-		boolean isTrafficAllowed = serviceWarmUpServiceComponent.isTrafficAllowed();
-		while (!isTrafficAllowed && (System.nanoTime() < deadlineNanos)) {
-			Thread.sleep(ServiceWarmUpStartupTest.WAIT_INTERVAL_MILLIS);
-			isTrafficAllowed = serviceWarmUpServiceComponent.isTrafficAllowed();
-		}
-		return isTrafficAllowed;
-	}
-
-	/**
 	 * Tests that, with the warm-up on, the warm-up beans hold the health check before the application is ready, all run
 	 * when it is ready, and open it when they stop.
 	 */
@@ -183,29 +160,33 @@ public class ServiceWarmUpStartupTest {
 			Assertions.assertFalse(serviceWarmUpServiceComponent.isTrafficAllowed());
 			ServiceWarmUpStartupTest.publishApplicationReady(context);
 			try {
-				Assertions.assertTrue(startupProbe.getBlockingCallStarted().await(ServiceWarmUpStartupTest.TEST_TIMEOUT.toSeconds(), TimeUnit.SECONDS));
+				Assertions.assertTrue(startupProbe.getBlockingCallStarted().await(TestHelper.VERY_LONG_WAIT, TimeUnit.MILLISECONDS));
 				Assertions.assertFalse(serviceWarmUpServiceComponent.isTrafficAllowed());
 			}
 			finally {
 				startupProbe.getBlockingCallReleased().countDown();
 			}
-			Assertions.assertTrue(ServiceWarmUpStartupTest.awaitTrafficAllowed(serviceWarmUpServiceComponent));
+			Assertions.assertTrue(TestHelper.waitUntilValid(serviceWarmUpServiceComponent::isTrafficAllowed, Boolean::booleanValue, TestHelper.VERY_LONG_WAIT,
+					TestHelper.SHORT_WAIT));
 			Assertions.assertEquals(3, startupProbe.getQuickCalls().get());
 		});
 	}
 
 	/**
 	 * Tests that, with the warm-up off, declared warm-up beans hold nothing, do not run, and get a warning.
+	 *
+	 * @param output Captured output.
 	 */
 	@Test
 	@DisplayName("With the warm-up off, declared warm-up beans hold nothing, do not run and get a warning")
-	public void testStartupWarmUpsOff() {
+	public void testStartupWarmUpsOff(
+			final CapturedOutput output) {
 		this.contextRunner.run(context -> {
 			Assertions.assertNull(context.getStartupFailure());
 			Assertions.assertEquals(0, context.getBeanNamesForType(ServiceWarmUpServiceComponent.class).length);
-			Assertions.assertEquals(1, context.getBeanNamesForType(ServiceWarmUpAutoConfiguration.ServiceWarmUpDisabledWarning.class).length);
 			ServiceWarmUpStartupTest.publishApplicationReady(context);
 			Assertions.assertEquals(0, context.getBean(StartupProbe.class).getQuickCalls().get());
+			Assertions.assertTrue(output.getAll().contains("which do not run"), output.getAll());
 		});
 	}
 

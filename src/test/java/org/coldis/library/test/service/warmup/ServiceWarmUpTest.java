@@ -3,11 +3,15 @@ package org.coldis.library.test.service.warmup;
 import java.sql.SQLException;
 import java.time.Duration;
 import java.util.List;
+import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
+import java.util.stream.Collectors;
 import java.util.stream.IntStream;
 
 import org.coldis.library.persistence.LockBehavior;
@@ -15,6 +19,7 @@ import org.coldis.library.persistence.keyvalue.KeyValueServiceComponent;
 import org.coldis.library.service.warmup.ServiceWarmUpProperties;
 import org.coldis.library.service.warmup.ServiceWarmUpResult;
 import org.coldis.library.service.warmup.ServiceWarmUpServiceComponent;
+import org.coldis.library.service.warmup.ServiceWarmUpServiceComponentTestSeam;
 import org.coldis.library.service.warmup.ServiceWarmUpSideEffectException;
 import org.coldis.library.service.warmup.ServiceWarmUpStopReason;
 import org.coldis.library.test.StartTestWithContainerExtension;
@@ -182,7 +187,7 @@ public class ServiceWarmUpTest extends ContainerTestHelper {
 	 * @return The properties.
 	 */
 	private ServiceWarmUpProperties createProperties() {
-		final ServiceWarmUpProperties properties = new ServiceWarmUpProperties(this.serviceWarmUpProperties);
+		final ServiceWarmUpProperties properties = ServiceWarmUpServiceComponentTestSeam.copy(this.serviceWarmUpProperties);
 		properties.setParallelism(1);
 		properties.setTimeLimit(ServiceWarmUpTest.LONG_TIME_LIMIT);
 		properties.setIdleCompilationMillisPerSecond(0L);
@@ -200,8 +205,7 @@ public class ServiceWarmUpTest extends ContainerTestHelper {
 	private <InputType> ServiceWarmUpResult warmUpOnce(
 			final InputType input,
 			final ServiceWarmUpTestRoutine.Call<InputType> call) {
-		final List<ServiceWarmUpResult> results = this.serviceWarmUpServiceComponent
-				.warmUp(List.of(new ServiceWarmUpTestRoutine<>(() -> List.of(input), call)), this.createProperties());
+		final List<ServiceWarmUpResult> results = ServiceWarmUpServiceComponentTestSeam.warmUp(this.serviceWarmUpServiceComponent, List.of(new ServiceWarmUpTestRoutine<>(() -> List.of(input), call)), this.createProperties());
 		Assertions.assertEquals(1, results.size());
 		Assertions.assertEquals(1L, results.get(0).getCallCount());
 		return results.get(0);
@@ -242,8 +246,7 @@ public class ServiceWarmUpTest extends ContainerTestHelper {
 		final AtomicInteger calls = new AtomicInteger();
 		final ServiceWarmUpProperties properties = this.createProperties();
 		properties.setEnabled(false);
-		final List<ServiceWarmUpResult> results = this.serviceWarmUpServiceComponent
-				.warmUp(List.of(new ServiceWarmUpTestRoutine<>(() -> List.of(1), input -> calls.incrementAndGet())), properties);
+		final List<ServiceWarmUpResult> results = ServiceWarmUpServiceComponentTestSeam.warmUp(this.serviceWarmUpServiceComponent, List.of(new ServiceWarmUpTestRoutine<>(() -> List.of(1), input -> calls.incrementAndGet())), properties);
 		Assertions.assertTrue(results.isEmpty());
 		Assertions.assertEquals(0, calls.get());
 	}
@@ -254,16 +257,21 @@ public class ServiceWarmUpTest extends ContainerTestHelper {
 	@Test
 	@DisplayName("A warm-up uses each input once and stops when they end")
 	public void testInputsExhausted() {
+		final Set<Integer> calledInputs = ConcurrentHashMap.newKeySet();
 		final AtomicInteger calls = new AtomicInteger();
 		final ServiceWarmUpProperties properties = this.createProperties();
 		properties.setParallelism(4);
-		final List<ServiceWarmUpResult> results = this.serviceWarmUpServiceComponent.warmUp(
-				List.of(new ServiceWarmUpTestRoutine<>(() -> IntStream.range(0, 50).boxed().toList(), input -> calls.incrementAndGet())), properties);
+		final List<ServiceWarmUpResult> results = ServiceWarmUpServiceComponentTestSeam.warmUp(this.serviceWarmUpServiceComponent,
+				List.of(new ServiceWarmUpTestRoutine<>(() -> IntStream.range(0, 50).boxed().toList(), input -> {
+					calledInputs.add(input);
+					calls.incrementAndGet();
+				})), properties);
 		Assertions.assertEquals(1, results.size());
 		Assertions.assertEquals(ServiceWarmUpStopReason.INPUTS_EXHAUSTED, results.get(0).getStopReason());
 		Assertions.assertEquals(50L, results.get(0).getCallCount());
 		Assertions.assertEquals(0L, results.get(0).getFailedCallCount());
 		Assertions.assertEquals(50, calls.get());
+		Assertions.assertEquals(IntStream.range(0, 50).boxed().collect(Collectors.toSet()), calledInputs);
 		Assertions.assertNotNull(results.get(0).getFirstCallsMedianMillis());
 		Assertions.assertNotNull(results.get(0).getLastCallsMedianMillis());
 		Assertions.assertTrue(this.serviceWarmUpServiceComponent.isTrafficAllowed());
@@ -282,8 +290,7 @@ public class ServiceWarmUpTest extends ContainerTestHelper {
 		properties.setIdleCompilationMillisPerSecond(Long.MAX_VALUE);
 		properties.setIdleCompilationPeriod(Duration.ofSeconds(1));
 		final long startNanos = System.nanoTime();
-		final List<ServiceWarmUpResult> results = this.serviceWarmUpServiceComponent
-				.warmUp(List.of(new ServiceWarmUpTestRoutine<>(() -> ServiceWarmUpTest.UNENDING_INPUTS, input -> Thread.sleep(1))), properties);
+		final List<ServiceWarmUpResult> results = ServiceWarmUpServiceComponentTestSeam.warmUp(this.serviceWarmUpServiceComponent, List.of(new ServiceWarmUpTestRoutine<>(() -> ServiceWarmUpTest.UNENDING_INPUTS, input -> Thread.sleep(1))), properties);
 		final Duration duration = Duration.ofNanos(System.nanoTime() - startNanos);
 		Assertions.assertEquals(ServiceWarmUpStopReason.COMPILATION_IDLE, results.get(0).getStopReason());
 		Assertions.assertTrue(results.get(0).getCallCount() >= 20L);
@@ -304,8 +311,7 @@ public class ServiceWarmUpTest extends ContainerTestHelper {
 		properties.setIdleCompilationPeriod(Duration.ofSeconds(1));
 		properties.setTimeLimit(Duration.ofSeconds(3));
 		final long startNanos = System.nanoTime();
-		final List<ServiceWarmUpResult> results = this.serviceWarmUpServiceComponent
-				.warmUp(List.of(new ServiceWarmUpTestRoutine<>(() -> ServiceWarmUpTest.UNENDING_INPUTS, input -> Thread.sleep(1))), properties);
+		final List<ServiceWarmUpResult> results = ServiceWarmUpServiceComponentTestSeam.warmUp(this.serviceWarmUpServiceComponent, List.of(new ServiceWarmUpTestRoutine<>(() -> ServiceWarmUpTest.UNENDING_INPUTS, input -> Thread.sleep(1))), properties);
 		final Duration duration = Duration.ofNanos(System.nanoTime() - startNanos);
 		Assertions.assertEquals(ServiceWarmUpStopReason.TIME_LIMIT, results.get(0).getStopReason());
 		Assertions.assertTrue(duration.compareTo(Duration.ofSeconds(3)) >= 0, duration.toString());
@@ -320,8 +326,7 @@ public class ServiceWarmUpTest extends ContainerTestHelper {
 		final ServiceWarmUpProperties properties = this.createProperties();
 		properties.setTimeLimit(Duration.ofSeconds(2));
 		final long startNanos = System.nanoTime();
-		final List<ServiceWarmUpResult> results = this.serviceWarmUpServiceComponent
-				.warmUp(List.of(new ServiceWarmUpTestRoutine<>(() -> ServiceWarmUpTest.UNENDING_INPUTS, input -> Thread.sleep(1))), properties);
+		final List<ServiceWarmUpResult> results = ServiceWarmUpServiceComponentTestSeam.warmUp(this.serviceWarmUpServiceComponent, List.of(new ServiceWarmUpTestRoutine<>(() -> ServiceWarmUpTest.UNENDING_INPUTS, input -> Thread.sleep(1))), properties);
 		final Duration duration = Duration.ofNanos(System.nanoTime() - startNanos);
 		Assertions.assertEquals(ServiceWarmUpStopReason.TIME_LIMIT, results.get(0).getStopReason());
 		Assertions.assertTrue(duration.compareTo(Duration.ofSeconds(2)) >= 0, duration.toString());
@@ -336,8 +341,7 @@ public class ServiceWarmUpTest extends ContainerTestHelper {
 	public void testConsecutiveErrors() {
 		final ServiceWarmUpProperties properties = this.createProperties();
 		properties.setMaximumConsecutiveErrors(3);
-		final List<ServiceWarmUpResult> results = this.serviceWarmUpServiceComponent
-				.warmUp(List.of(new ServiceWarmUpTestRoutine<>(() -> ServiceWarmUpTest.UNENDING_INPUTS, input -> {
+		final List<ServiceWarmUpResult> results = ServiceWarmUpServiceComponentTestSeam.warmUp(this.serviceWarmUpServiceComponent, List.of(new ServiceWarmUpTestRoutine<>(() -> ServiceWarmUpTest.UNENDING_INPUTS, input -> {
 					throw new IllegalArgumentException("Test error.");
 				})), properties);
 		Assertions.assertEquals(ServiceWarmUpStopReason.ERRORS, results.get(0).getStopReason());
@@ -356,8 +360,7 @@ public class ServiceWarmUpTest extends ContainerTestHelper {
 	public void testCallError() {
 		final ServiceWarmUpProperties properties = this.createProperties();
 		properties.setMaximumConsecutiveErrors(3);
-		final List<ServiceWarmUpResult> results = this.serviceWarmUpServiceComponent
-				.warmUp(List.of(new ServiceWarmUpTestRoutine<>(() -> ServiceWarmUpTest.UNENDING_INPUTS, input -> {
+		final List<ServiceWarmUpResult> results = ServiceWarmUpServiceComponentTestSeam.warmUp(this.serviceWarmUpServiceComponent, List.of(new ServiceWarmUpTestRoutine<>(() -> ServiceWarmUpTest.UNENDING_INPUTS, input -> {
 					throw new AssertionError("Test error.");
 				})), properties);
 		Assertions.assertEquals(ServiceWarmUpStopReason.ERRORS, results.get(0).getStopReason());
@@ -371,12 +374,65 @@ public class ServiceWarmUpTest extends ContainerTestHelper {
 	@Test
 	@DisplayName("A warm-up whose inputs cannot be read makes no calls")
 	public void testInputsFailure() {
-		final List<ServiceWarmUpResult> results = this.serviceWarmUpServiceComponent.warmUp(List.of(new ServiceWarmUpTestRoutine<Integer>(() -> {
+		final List<ServiceWarmUpResult> results = ServiceWarmUpServiceComponentTestSeam.warmUp(this.serviceWarmUpServiceComponent, List.of(new ServiceWarmUpTestRoutine<Integer>(() -> {
 			throw new IllegalStateException("Test inputs error.");
 		}, input -> {})), this.createProperties());
 		Assertions.assertEquals(ServiceWarmUpStopReason.INPUTS_FAILED, results.get(0).getStopReason());
 		Assertions.assertEquals(0L, results.get(0).getCallCount());
 		Assertions.assertTrue(ServiceWarmUpTest.hasCauseMessage(results.get(0).getFirstError(), "Test inputs error."));
+	}
+
+	/**
+	 * Tests that a run that fails opens the health check and returns no results.
+	 */
+	@Test
+	@DisplayName("A run that fails opens the health check and returns no results")
+	public void testRunFailureOpensHealthCheck() {
+		final ServiceWarmUpProperties properties = this.createProperties();
+		// The run needs a time limit, so it fails without one.
+		properties.setTimeLimit(null);
+		final List<ServiceWarmUpResult> results = ServiceWarmUpServiceComponentTestSeam.warmUp(this.serviceWarmUpServiceComponent,
+				List.of(new ServiceWarmUpTestRoutine<>(() -> List.of(1), input -> {})), properties);
+		Assertions.assertTrue(results.isEmpty());
+		Assertions.assertTrue(this.serviceWarmUpServiceComponent.isTrafficAllowed());
+	}
+
+	/**
+	 * Tests that call threads ended by an error the JVM cannot recover from stop the run as such, and open the health
+	 * check.
+	 */
+	@Test
+	@DisplayName("Call threads ended by a JVM error stop the run as such and open the health check")
+	public void testCallThreadsFailed() {
+		final List<ServiceWarmUpResult> results = ServiceWarmUpServiceComponentTestSeam.warmUp(this.serviceWarmUpServiceComponent,
+				List.of(new ServiceWarmUpTestRoutine<>(() -> ServiceWarmUpTest.UNENDING_INPUTS, input -> {
+					throw new StackOverflowError("Test error.");
+				})), this.createProperties());
+		Assertions.assertEquals(ServiceWarmUpStopReason.CALL_THREADS_FAILED, results.get(0).getStopReason());
+		Assertions.assertTrue(this.serviceWarmUpServiceComponent.isTrafficAllowed());
+	}
+
+	/**
+	 * Tests that interrupting the thread that waits for the calls stops the run as interrupted, and opens the health
+	 * check.
+	 *
+	 * @throws Exception If the test fails.
+	 */
+	@Test
+	@DisplayName("Interrupting the waiting thread stops the run as interrupted and opens the health check")
+	public void testInterrupted() throws Exception {
+		final CountDownLatch callStarted = new CountDownLatch(1);
+		final AtomicReference<List<ServiceWarmUpResult>> results = new AtomicReference<>();
+		final Thread caller = Thread.ofPlatform().start(() -> results.set(ServiceWarmUpServiceComponentTestSeam.warmUp(this.serviceWarmUpServiceComponent,
+				List.of(new ServiceWarmUpTestRoutine<>(() -> ServiceWarmUpTest.UNENDING_INPUTS, input -> {
+					callStarted.countDown();
+					Thread.sleep(1);
+				})), this.createProperties())));
+		Assertions.assertTrue(callStarted.await(ServiceWarmUpTest.TEST_TIMEOUT.toSeconds(), TimeUnit.SECONDS));
+		caller.interrupt();
+		caller.join(ServiceWarmUpTest.TEST_TIMEOUT.toMillis());
+		Assertions.assertEquals(ServiceWarmUpStopReason.INTERRUPTED, results.get().get(0).getStopReason());
+		Assertions.assertTrue(this.serviceWarmUpServiceComponent.isTrafficAllowed());
 	}
 
 	/**
@@ -389,8 +445,7 @@ public class ServiceWarmUpTest extends ContainerTestHelper {
 	public void testHealthCheckHeld() throws Exception {
 		final CountDownLatch callStarted = new CountDownLatch(1);
 		final CountDownLatch callReleased = new CountDownLatch(1);
-		final CompletableFuture<List<ServiceWarmUpResult>> warmUp = CompletableFuture.supplyAsync(() -> this.serviceWarmUpServiceComponent
-				.warmUp(List.of(new ServiceWarmUpTestRoutine<>(() -> List.of(1), input -> {
+		final CompletableFuture<List<ServiceWarmUpResult>> warmUp = CompletableFuture.supplyAsync(() -> ServiceWarmUpServiceComponentTestSeam.warmUp(this.serviceWarmUpServiceComponent, List.of(new ServiceWarmUpTestRoutine<>(() -> List.of(1), input -> {
 					callStarted.countDown();
 					callReleased.await(ServiceWarmUpTest.TEST_TIMEOUT.toSeconds(), TimeUnit.SECONDS);
 				})), this.createProperties()));

@@ -55,6 +55,10 @@ public class OrderWarmUp implements ServiceWarmUp<Long> {
 - It fails open: any error is logged and the health check opens, so the service takes traffic
   as it would without a warm-up. Keep the time limit well under the orchestrator's health
   check grace.
+- Only web traffic is held, through the servlet health check. JMS listener containers start
+  consuming when the context starts, before the warm-up, so queue work runs on code not yet
+  compiled and shares the processors with the warm-up threads. A service without a servlet
+  health check holds nothing.
 
 ## What a warm-up call cannot do
 
@@ -77,8 +81,21 @@ Not covered, so warm-up calls must not use them:
 - writes made outside any transaction (auto-commit), for instance a `JdbcTemplate` write in a
   `NOT_SUPPORTED` method;
 - work handed to another thread (`@Async`, executors);
-- HTTP clients other than `RestTemplate` beans;
+- HTTP clients other than `RestTemplate` beans (vendor client libraries, `WebClient`,
+  `RestClient`, the JDK client);
 - native JMS connection factories (`JmsConfigurationHelper.createNativeJmsConnectionFactory`).
+
+A warm-up call that reaches one of these channels reaches real customers or paid vendors (a
+bureau query, a text message, an e-mail), once per input on every instance start, and is
+counted as a successful call. Before turning the warm-up on, check the warm-up's call paths for
+outbound calls and notifications, for instance with a test that runs the warm-ups and asserts
+that no outbound client was called. On the first deploy, compare the service's outbound query
+and notification counts with an ordinary period of the same length.
+
+A request-logging aspect on the warmed code also runs on warm-up calls. Unless it skips its
+logging while `ServiceWarmUpContext.isWarmingUp()` is true, it either fails the calls (when its
+transport is one of the refused side effects) or ships an entry per call from another thread as
+if it were a real request. Make it skip before turning the warm-up on.
 
 ## Properties
 

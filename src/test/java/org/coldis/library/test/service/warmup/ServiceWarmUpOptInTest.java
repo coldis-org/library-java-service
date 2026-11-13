@@ -8,9 +8,11 @@ import org.coldis.library.service.warmup.ServiceWarmUpAutoConfiguration;
 import org.coldis.library.service.warmup.ServiceWarmUpBeanPostProcessor;
 import org.coldis.library.service.warmup.ServiceWarmUpCacheManager;
 import org.coldis.library.service.warmup.ServiceWarmUpClientHttpRequestFactory;
+import org.coldis.library.service.warmup.ServiceWarmUpHealthCheckFilter;
 import org.coldis.library.service.warmup.ServiceWarmUpProperties;
 import org.coldis.library.service.warmup.ServiceWarmUpResult;
 import org.coldis.library.service.warmup.ServiceWarmUpServiceComponent;
+import org.coldis.library.service.warmup.ServiceWarmUpServiceComponentTestSeam;
 import org.coldis.library.service.warmup.ServiceWarmUpSideEffectException;
 import org.coldis.library.service.warmup.ServiceWarmUpTransactionExecutionListener;
 import org.junit.jupiter.api.Assertions;
@@ -18,9 +20,11 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.boot.autoconfigure.AutoConfigurations;
 import org.springframework.boot.autoconfigure.context.ConfigurationPropertiesAutoConfiguration;
-import org.springframework.boot.test.context.runner.ApplicationContextRunner;
+import org.springframework.boot.test.context.runner.WebApplicationContextRunner;
+import org.springframework.boot.web.servlet.FilterRegistrationBean;
 import org.springframework.cache.CacheManager;
 import org.springframework.cache.concurrent.ConcurrentMapCacheManager;
+import org.springframework.context.ApplicationContext;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.core.io.ClassPathResource;
@@ -151,11 +155,23 @@ public class ServiceWarmUpOptInTest {
 	}
 
 	/**
-	 * Context with the warm-up configuration and a service's beans.
+	 * Servlet web context, without a server, with the warm-up configuration and a service's beans.
 	 */
-	private final ApplicationContextRunner contextRunner = new ApplicationContextRunner()
+	private final WebApplicationContextRunner contextRunner = new WebApplicationContextRunner()
 			.withConfiguration(AutoConfigurations.of(ConfigurationPropertiesAutoConfiguration.class)).withUserConfiguration(ServiceBeans.class,
 					ServiceWarmUpProperties.class, ServiceWarmUpServiceComponent.class, ServiceWarmUpAutoConfiguration.class);
+
+	/**
+	 * Gets whether the context registers the warm-up health check filter.
+	 *
+	 * @param  context Context.
+	 * @return         Whether the context registers the warm-up health check filter.
+	 */
+	private static boolean hasHealthCheckFilter(
+			final ApplicationContext context) {
+		return context.getBeansOfType(FilterRegistrationBean.class).values().stream()
+				.anyMatch(registration -> registration.getFilter() instanceof ServiceWarmUpHealthCheckFilter);
+	}
 
 	/**
 	 * Creates properties for a warm-up run in these contexts, which do not load the library defaults.
@@ -192,6 +208,8 @@ public class ServiceWarmUpOptInTest {
 			Assertions.assertInstanceOf(ConcurrentMapCacheManager.class, context.getBean(CacheManager.class));
 			Assertions.assertFalse(context.getBean(RestTemplate.class).getRequestFactory() instanceof ServiceWarmUpClientHttpRequestFactory);
 			Assertions.assertTrue(context.getBean(ConfigurableTransactionManager.class).getTransactionExecutionListeners().isEmpty());
+			Assertions.assertFalse(ServiceWarmUpOptInTest.hasHealthCheckFilter(context));
+			Assertions.assertEquals(0, context.getBeanNamesForType(ServiceWarmUpAutoConfiguration.ServiceWarmUpTransactionConfiguration.class).length);
 		});
 	}
 
@@ -209,6 +227,8 @@ public class ServiceWarmUpOptInTest {
 			Assertions.assertInstanceOf(ServiceWarmUpClientHttpRequestFactory.class, context.getBean(RestTemplate.class).getRequestFactory());
 			Assertions.assertTrue(context.getBean(ConfigurableTransactionManager.class).getTransactionExecutionListeners().stream()
 					.anyMatch(listener -> listener instanceof ServiceWarmUpTransactionExecutionListener));
+			Assertions.assertTrue(ServiceWarmUpOptInTest.hasHealthCheckFilter(context));
+			Assertions.assertEquals(1, context.getBeanNamesForType(ServiceWarmUpAutoConfiguration.ServiceWarmUpTransactionConfiguration.class).length);
 		});
 	}
 
@@ -225,7 +245,7 @@ public class ServiceWarmUpOptInTest {
 					final RestTemplate restTemplate = context.getBean("interceptedRestTemplate", RestTemplate.class);
 					Assertions.assertEquals(2, restTemplate.getInterceptors().size());
 					Assertions.assertSame(InterceptedTemplateBeans.PASS_THROUGH, restTemplate.getInterceptors().get(1));
-					final List<ServiceWarmUpResult> results = context.getBean(ServiceWarmUpServiceComponent.class).warmUp(List.of(
+					final List<ServiceWarmUpResult> results = ServiceWarmUpServiceComponentTestSeam.warmUp(context.getBean(ServiceWarmUpServiceComponent.class), List.of(
 							new ServiceWarmUpTestRoutine<>(() -> List.of("http://localhost:9/"), input -> restTemplate.getForObject(input, String.class))),
 							ServiceWarmUpOptInTest.createProperties());
 					Assertions.assertEquals(1L, results.get(0).getFailedCallCount());
