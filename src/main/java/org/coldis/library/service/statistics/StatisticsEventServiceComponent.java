@@ -19,6 +19,7 @@ import org.coldis.library.persistence.lock.LockServiceComponent;
 import org.coldis.library.persistence.lock.LockType;
 import org.coldis.library.service.jms.JmsMessage;
 import org.coldis.library.service.jms.JmsTemplateHelper;
+import org.coldis.library.service.warmup.ServiceWarmUpContext;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -255,6 +256,9 @@ public class StatisticsEventServiceComponent {
    */
   public void upsertStatisticsEvent(final StatisticsEvent statisticsEvent)
       throws BusinessException {
+    // The buffered event is written later on another thread, which the warm-up's read-only
+    // transaction does not cover.
+    ServiceWarmUpContext.rejectDuringWarmUp("statistics event");
     StatisticsEventServiceComponent.LOGGER.debug(
         "Buffering event: context={}, owner={}, dimension={}, value={}",
         statisticsEvent.getContext(), statisticsEvent.getOwnerKey(),
