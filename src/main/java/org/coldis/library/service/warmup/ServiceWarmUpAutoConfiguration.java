@@ -64,7 +64,10 @@ public class ServiceWarmUpAutoConfiguration {
 	}
 
 	/**
-	 * Health check filter, for servlet services whose health check is on.
+	 * Health check filter, for servlet services whose health check is on. A filter, rather than a change to
+	 * {@code HealthCheckService}, answers before the other filters and without touching the repository, and leaves the
+	 * health check's API as it is; so its path and switch mirror the health check's own properties, and must change with
+	 * them.
 	 */
 	@Configuration
 	@ConditionalOnWebApplication(type = ConditionalOnWebApplication.Type.SERVLET)

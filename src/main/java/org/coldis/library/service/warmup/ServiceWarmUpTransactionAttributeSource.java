@@ -10,10 +10,11 @@ import org.springframework.util.StringValueResolver;
 
 /**
  * Transaction attribute source of the AspectJ transaction aspect that makes, on warm-up threads, the transactions of
- * the service's {@code @Transactional} methods read-only, whatever their propagation, so that they still run and the
- * database refuses their writes. Transactions started elsewhere (repositories, transaction templates) are refused when
- * read-write (see {@link ServiceWarmUpTransactionExecutionListener}). Other threads get the wrapped source's attributes
- * unchanged.
+ * the service's {@code @Transactional} methods read-only, whatever their propagation, so that they still run. In them,
+ * statements sent to the database at once are refused by it, while changes to loaded entities are discarded without an
+ * error (a read-only transaction does not flush) and the call goes on: warm-up calls must follow read paths only.
+ * Transactions started elsewhere (repositories, transaction templates) are refused when read-write (see
+ * {@link ServiceWarmUpTransactionExecutionListener}). Other threads get the wrapped source's attributes unchanged.
  */
 public class ServiceWarmUpTransactionAttributeSource implements TransactionAttributeSource, EmbeddedValueResolverAware {
 

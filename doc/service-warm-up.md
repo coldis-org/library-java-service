@@ -66,7 +66,7 @@ With the warm-up on, on warm-up threads only (other threads are not affected):
 
 | Side effect | What happens |
 |---|---|
-| Transactions | Each call runs in a read-only transaction that is rolled back (on the single or primary transaction manager). The service's `@Transactional` methods run read-only, `REQUIRES_NEW` included, and the database refuses their writes (PostgreSQL SQL state 25006). Any other new read-write transaction, from a repository, a `TransactionTemplate` or another transaction manager, is refused before it begins. |
+| Transactions | Each call runs in a read-only transaction that is rolled back (on the single or primary transaction manager). The service's `@Transactional` methods run read-only, `REQUIRES_NEW` included: statements sent to the database at once (locks, native and bulk updates, inserts that need a generated key) are refused by it (PostgreSQL SQL state 25006) and fail the call, while changes to loaded entities, which would be written at commit, are discarded without an error and the call goes on. Any other new read-write transaction, from a repository, a `TransactionTemplate` or another transaction manager, is refused before it begins. |
 | JMS | Connections and contexts from `MeteredJmsPoolConnectionFactory` (the pooled factories of `JmsConfigurationHelper.createPooledJmsConnectionFactory`) are refused. |
 | HTTP | Requests through any `RestTemplate` bean are refused. |
 | Caches | Writes, evictions and clears are dropped; reads work. |
@@ -75,6 +75,11 @@ With the warm-up on, on warm-up threads only (other threads are not affected):
 A refused side effect throws `ServiceWarmUpSideEffectException`, which fails the call and is
 counted as an error. Code outside this library can skip its own side effects with
 `ServiceWarmUpContext.isWarmingUp()`, for instance a log interceptor.
+
+Warm-up calls must follow read paths only. A write path does not stop at its write: a discarded
+entity change lets the call go on to whatever follows it, and the call counts as a success. A
+warm-up that reports no failed calls on a path that writes is a sign that its writes are being
+discarded.
 
 Not covered, so warm-up calls must not use them:
 

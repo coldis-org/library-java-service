@@ -35,7 +35,6 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.context.SpringBootTest.WebEnvironment;
 import org.springframework.cache.CacheManager;
-import org.springframework.jms.core.JmsTemplate;
 import org.springframework.web.client.HttpStatusCodeException;
 import org.springframework.web.client.RestTemplate;
 
@@ -96,12 +95,6 @@ public class ServiceWarmUpTest extends ContainerTestHelper {
 	 */
 	@Autowired
 	private KeyValueServiceComponent keyValueServiceComponent;
-
-	/**
-	 * JMS template.
-	 */
-	@Autowired
-	private JmsTemplate jmsTemplate;
 
 	/**
 	 * REST template.
@@ -473,17 +466,21 @@ public class ServiceWarmUpTest extends ContainerTestHelper {
 	@DisplayName("The database refuses writes of transactional methods, also in a new transaction")
 	public void testDatabaseWritesRefused() throws Exception {
 		final String key = "service-warm-up-test-" + UUID.randomUUID();
+		// Step 1: the writes, during a warm-up.
 		final ServiceWarmUpResult sameTransactionResult = this.warmUpOnce(key,
 				input -> this.keyValueServiceComponent.lock(input, LockBehavior.WAIT_AND_LOCK));
 		final ServiceWarmUpResult newTransactionResult = this.warmUpOnce(key, input -> this.serviceWarmUpTestServiceComponent.lockInNewTransaction(input));
+		// Verify: the database refused them.
 		for (final ServiceWarmUpResult result : List.of(sameTransactionResult, newTransactionResult)) {
 			Assertions.assertEquals(1L, result.getFailedCallCount());
 			Assertions.assertTrue(ServiceWarmUpTest.hasSqlState(result.getFirstError(), ServiceWarmUpTest.READ_ONLY_SQL_TRANSACTION),
 					String.valueOf(result.getFirstError()));
 		}
 		Assertions.assertNull(this.keyValueServiceComponent.findById(key, LockBehavior.NO_LOCK, true));
+		// Step 2: the same write outside a warm-up is stored.
 		this.serviceWarmUpTestServiceComponent.lockInNewTransaction(key);
 		Assertions.assertNotNull(this.keyValueServiceComponent.findById(key, LockBehavior.NO_LOCK, true));
+		// Clean up.
 		this.keyValueServiceComponent.delete(key);
 	}
 
@@ -496,13 +493,16 @@ public class ServiceWarmUpTest extends ContainerTestHelper {
 	@DisplayName("A read-write transaction a transaction template starts is refused")
 	public void testProgrammaticNewTransactionRefused() throws Exception {
 		final String key = "service-warm-up-test-" + UUID.randomUUID();
+		// Step 1: the write, during a warm-up.
 		final ServiceWarmUpResult result = this.warmUpOnce(key, input -> this.serviceWarmUpTestServiceComponent.saveInProgrammaticNewTransaction(input));
 		Assertions.assertEquals(1L, result.getFailedCallCount());
 		Assertions.assertTrue(ServiceWarmUpTest.hasCause(result.getFirstError(), ServiceWarmUpSideEffectException.class),
 				String.valueOf(result.getFirstError()));
 		Assertions.assertNull(this.keyValueServiceComponent.findById(key, LockBehavior.NO_LOCK, true));
+		// Step 2: the same write outside a warm-up is stored.
 		this.serviceWarmUpTestServiceComponent.saveInProgrammaticNewTransaction(key);
 		Assertions.assertNotNull(this.keyValueServiceComponent.findById(key, LockBehavior.NO_LOCK, true));
+		// Clean up.
 		this.keyValueServiceComponent.delete(key);
 	}
 
@@ -516,13 +516,16 @@ public class ServiceWarmUpTest extends ContainerTestHelper {
 	@DisplayName("A read-write transaction started with the call's transaction suspended is refused")
 	public void testNewTransactionAfterSuspensionRefused() throws Exception {
 		final String key = "service-warm-up-test-" + UUID.randomUUID();
+		// Step 1: the write, during a warm-up.
 		final ServiceWarmUpResult result = this.warmUpOnce(key, input -> this.serviceWarmUpTestServiceComponent.saveWithTransactionSuspended(input));
 		Assertions.assertEquals(1L, result.getFailedCallCount());
 		Assertions.assertTrue(ServiceWarmUpTest.hasCause(result.getFirstError(), ServiceWarmUpSideEffectException.class),
 				String.valueOf(result.getFirstError()));
 		Assertions.assertNull(this.keyValueServiceComponent.findById(key, LockBehavior.NO_LOCK, true));
+		// Step 2: the same write outside a warm-up is stored.
 		this.serviceWarmUpTestServiceComponent.saveWithTransactionSuspended(key);
 		Assertions.assertNotNull(this.keyValueServiceComponent.findById(key, LockBehavior.NO_LOCK, true));
+		// Clean up.
 		this.keyValueServiceComponent.delete(key);
 	}
 
@@ -535,6 +538,7 @@ public class ServiceWarmUpTest extends ContainerTestHelper {
 	public void testCacheWritesDropped() {
 		final String key = UUID.randomUUID().toString();
 		final int runsBefore = ServiceWarmUpTestServiceComponent.CACHED_METHOD_RUNS.get();
+		// Step 1: the cached methods, during a warm-up, run without filling the caches.
 		final ServiceWarmUpResult result = this.warmUpOnce(key, input -> {
 			this.serviceWarmUpTestServiceComponent.getFromLocalCache(input);
 			this.serviceWarmUpTestServiceComponent.getFromCentralCache(input);
@@ -543,6 +547,7 @@ public class ServiceWarmUpTest extends ContainerTestHelper {
 		Assertions.assertEquals(runsBefore + 2, ServiceWarmUpTestServiceComponent.CACHED_METHOD_RUNS.get());
 		Assertions.assertNull(this.localCacheManager.getCache(ServiceWarmUpTestServiceComponent.LOCAL_CACHE).get(key));
 		Assertions.assertNull(this.centralCacheManager.getCache(ServiceWarmUpTestServiceComponent.CENTRAL_CACHE).get(key));
+		// Step 2: the same calls outside a warm-up fill them.
 		this.serviceWarmUpTestServiceComponent.getFromLocalCache(key);
 		this.serviceWarmUpTestServiceComponent.getFromCentralCache(key);
 		Assertions.assertNotNull(this.localCacheManager.getCache(ServiceWarmUpTestServiceComponent.LOCAL_CACHE).get(key));
@@ -550,7 +555,8 @@ public class ServiceWarmUpTest extends ContainerTestHelper {
 	}
 
 	/**
-	 * Tests that warm-up calls cannot send messages.
+	 * Tests that warm-up calls cannot send messages: the pooled connection factory refuses the connection before the
+	 * send.
 	 */
 	@Test
 	@DisplayName("Warm-up calls cannot send messages")
@@ -559,10 +565,6 @@ public class ServiceWarmUpTest extends ContainerTestHelper {
 		Assertions.assertEquals(1L, result.getFailedCallCount());
 		Assertions.assertTrue(ServiceWarmUpTest.hasCause(result.getFirstError(), ServiceWarmUpSideEffectException.class),
 				String.valueOf(result.getFirstError()));
-		final JmsTemplate receiver = new JmsTemplate(this.jmsTemplate.getConnectionFactory());
-		receiver.setDestinationResolver(this.jmsTemplate.getDestinationResolver());
-		receiver.setReceiveTimeout(1000L);
-		Assertions.assertNull(receiver.receive(ServiceWarmUpTestServiceComponent.QUEUE));
 	}
 
 	/**

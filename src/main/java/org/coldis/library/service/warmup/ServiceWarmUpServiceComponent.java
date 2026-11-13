@@ -267,7 +267,8 @@ public class ServiceWarmUpServiceComponent implements ApplicationListener<Applic
 						ServiceWarmUpServiceComponent.haveMadeMinimumCalls(executions, warmUpProperties.getMinimumCalls()));
 			}
 			if (!haveCallsEnded && (stopReason == null)) {
-				if (checkNanos >= deadlineNanos) {
+				// Clock readings compare by their difference, which stays right if they wrap.
+				if ((checkNanos - deadlineNanos) >= 0L) {
 					stopReason = ServiceWarmUpStopReason.TIME_LIMIT;
 				}
 				else if ((compilationIdleness != null) && compilationIdleness.isIdleLongEnough()) {
