@@ -1,9 +1,9 @@
 package org.coldis.library.service.transaction;
 
 import org.springframework.boot.autoconfigure.condition.ConditionalOnClass;
+import org.springframework.context.EmbeddedValueResolverAware;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.transaction.aspectj.AnnotationTransactionAspect;
-import org.springframework.transaction.interceptor.AbstractFallbackTransactionAttributeSource;
 import org.springframework.util.StringValueResolver;
 
 /**
@@ -14,16 +14,16 @@ import org.springframework.util.StringValueResolver;
 public class ExtendedTransactionAutoConfiguration {
 
 	/**
-	 * Embedded value resolver.
+	 * Sets the embedded value resolver of the transaction aspect's attribute source, when the source takes one: the
+	 * annotation source, or a source that wraps it and passes the resolver on.
 	 *
-	 * @param  beanFactory Bean factory.
-	 * @return             Embedded value resolver.
+	 * @param transactionAspectSupport Transaction aspect.
+	 * @param embeddedValueResolver    Embedded value resolver.
 	 */
 	public ExtendedTransactionAutoConfiguration(final AnnotationTransactionAspect transactionAspectSupport, final StringValueResolver embeddedValueResolver) {
 		super();
-		if (transactionAspectSupport.getTransactionAttributeSource() instanceof AbstractFallbackTransactionAttributeSource) {
-			((AbstractFallbackTransactionAttributeSource) transactionAspectSupport.getTransactionAttributeSource())
-					.setEmbeddedValueResolver(embeddedValueResolver);
+		if (transactionAspectSupport.getTransactionAttributeSource() instanceof final EmbeddedValueResolverAware resolverAwareSource) {
+			resolverAwareSource.setEmbeddedValueResolver(embeddedValueResolver);
 		}
 	}
 

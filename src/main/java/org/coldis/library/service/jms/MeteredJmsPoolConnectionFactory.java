@@ -4,6 +4,7 @@ import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.ToDoubleFunction;
 
+import org.coldis.library.service.warmup.ServiceWarmUpContext;
 import org.messaginghub.pooled.jms.JmsPoolConnectionFactory;
 import org.messaginghub.pooled.jms.pool.PooledConnection;
 import org.springframework.beans.factory.BeanNameAware;
@@ -15,6 +16,10 @@ import io.micrometer.core.instrument.Gauge;
 import io.micrometer.core.instrument.MeterRegistry;
 import jakarta.jms.Connection;
 import jakarta.jms.ConnectionFactory;
+import jakarta.jms.JMSContext;
+import jakarta.jms.JMSException;
+import jakarta.jms.QueueConnection;
+import jakarta.jms.TopicConnection;
 
 /**
  * Pooled JMS connection factory that exposes pool usage as Micrometer gauges.
@@ -63,6 +68,9 @@ public class MeteredJmsPoolConnectionFactory extends JmsPoolConnectionFactory im
 
 	/** Tag identifying which connection factory the gauge belongs to. */
 	public static final String FACTORY_TAG = "factory";
+
+	/** Name of the side effect refused to service warm-up calls. */
+	public static final String WARM_UP_SIDE_EFFECT = "JMS connection";
 
 	/**
 	 * Connections created by this factory. A service declares one factory per messaging domain it
@@ -191,6 +199,118 @@ public class MeteredJmsPoolConnectionFactory extends JmsPoolConnectionFactory im
 	public int getMaxActiveSessions() {
 		this.trackedConnections.removeIf(PooledConnection::isClosed);
 		return this.trackedConnections.stream().mapToInt(PooledConnection::getNumActiveSessions).max().orElse(0);
+	}
+
+	/**
+	 * Refuses connections and contexts to service warm-up calls, which must not send or receive messages. Listener
+	 * containers and every other thread are not affected.
+	 */
+	private static void rejectDuringWarmUp() {
+		ServiceWarmUpContext.rejectDuringWarmUp(MeteredJmsPoolConnectionFactory.WARM_UP_SIDE_EFFECT);
+	}
+
+	/**
+	 * @see org.messaginghub.pooled.jms.JmsPoolConnectionFactory#createConnection()
+	 */
+	@Override
+	public Connection createConnection() throws JMSException {
+		MeteredJmsPoolConnectionFactory.rejectDuringWarmUp();
+		return super.createConnection();
+	}
+
+	/**
+	 * @see org.messaginghub.pooled.jms.JmsPoolConnectionFactory#createConnection(java.lang.String, java.lang.String)
+	 */
+	@Override
+	public Connection createConnection(
+			final String userName,
+			final String password) throws JMSException {
+		MeteredJmsPoolConnectionFactory.rejectDuringWarmUp();
+		return super.createConnection(userName, password);
+	}
+
+	/**
+	 * @see org.messaginghub.pooled.jms.JmsPoolConnectionFactory#createQueueConnection()
+	 */
+	@Override
+	public QueueConnection createQueueConnection() throws JMSException {
+		MeteredJmsPoolConnectionFactory.rejectDuringWarmUp();
+		return super.createQueueConnection();
+	}
+
+	/**
+	 * @see org.messaginghub.pooled.jms.JmsPoolConnectionFactory#createQueueConnection(java.lang.String,
+	 *      java.lang.String)
+	 */
+	@Override
+	public QueueConnection createQueueConnection(
+			final String userName,
+			final String password) throws JMSException {
+		MeteredJmsPoolConnectionFactory.rejectDuringWarmUp();
+		return super.createQueueConnection(userName, password);
+	}
+
+	/**
+	 * @see org.messaginghub.pooled.jms.JmsPoolConnectionFactory#createTopicConnection()
+	 */
+	@Override
+	public TopicConnection createTopicConnection() throws JMSException {
+		MeteredJmsPoolConnectionFactory.rejectDuringWarmUp();
+		return super.createTopicConnection();
+	}
+
+	/**
+	 * @see org.messaginghub.pooled.jms.JmsPoolConnectionFactory#createTopicConnection(java.lang.String,
+	 *      java.lang.String)
+	 */
+	@Override
+	public TopicConnection createTopicConnection(
+			final String userName,
+			final String password) throws JMSException {
+		MeteredJmsPoolConnectionFactory.rejectDuringWarmUp();
+		return super.createTopicConnection(userName, password);
+	}
+
+	/**
+	 * @see org.messaginghub.pooled.jms.JmsPoolConnectionFactory#createContext()
+	 */
+	@Override
+	public JMSContext createContext() {
+		MeteredJmsPoolConnectionFactory.rejectDuringWarmUp();
+		return super.createContext();
+	}
+
+	/**
+	 * @see org.messaginghub.pooled.jms.JmsPoolConnectionFactory#createContext(int)
+	 */
+	@Override
+	public JMSContext createContext(
+			final int sessionMode) {
+		MeteredJmsPoolConnectionFactory.rejectDuringWarmUp();
+		return super.createContext(sessionMode);
+	}
+
+	/**
+	 * @see org.messaginghub.pooled.jms.JmsPoolConnectionFactory#createContext(java.lang.String, java.lang.String)
+	 */
+	@Override
+	public JMSContext createContext(
+			final String userName,
+			final String password) {
+		MeteredJmsPoolConnectionFactory.rejectDuringWarmUp();
+		return super.createContext(userName, password);
+	}
+
+	/**
+	 * @see org.messaginghub.pooled.jms.JmsPoolConnectionFactory#createContext(java.lang.String, java.lang.String, int)
+	 */
+	@Override
+	public JMSContext createContext(
+			final String userName,
+			final String password,
+			final int sessionMode) {
+		MeteredJmsPoolConnectionFactory.rejectDuringWarmUp();
+		return super.createContext(userName, password, sessionMode);
 	}
 
 }
