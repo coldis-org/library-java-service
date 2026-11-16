@@ -36,6 +36,12 @@ public class HealthCheckService {
 	private RepositoryHealthCheckServiceComponent repositoryHealthCheckService;
 
 	/**
+	 * Readiness health check service.
+	 */
+	@Autowired
+	private ReadinessHealthCheckServiceComponent readinessHealthCheckService;
+
+	/**
 	 * Health check service.
 	 *
 	 * @return           The health check value.
@@ -46,6 +52,8 @@ public class HealthCheckService {
 		HealthCheckService.LOGGER.debug("Health check starting.");
 		final long initMillis = System.currentTimeMillis();
 		try {
+			// Fails (503) while the application does not accept traffic.
+			this.readinessHealthCheckService.checkReady();
 			// The health check default value.
 			HealthCheckValue checkValue = new HealthCheckValue();
 			// If the repository is available.
