@@ -8,7 +8,7 @@ code they exercise first.
 ## Enabling
 
 The warm-up is off by default. Until a service turns it on, the library registers none of its
-beans, filters or guards, so a version bump changes nothing for services that do not use it.
+beans, filters or guards (only its properties and the warning below), so a version bump changes nothing for services that do not use it.
 To use it:
 
 1. Set `org.coldis.library.service.warm-up.enabled=true` in the service's own properties (or
@@ -99,8 +99,10 @@ threads only (other threads are not affected). No bean is replaced or proxied.
   are refused by it (PostgreSQL SQL state 25006) and fail the call; changes to loaded entities,
   which would be written at commit, are discarded without an error and the call goes on.
 - Any other new read-write transaction (a repository, a `TransactionTemplate`, another
-  transaction manager) is refused before it begins by a listener on every transaction manager,
-  with `ServiceWarmUpSideEffectException`, counted as a failed call.
+  transaction manager) is refused before it begins by a listener on every transaction manager
+  that accepts listeners (`ConfigurableTransactionManager`: all of Spring's standard ones; a
+  custom manager without it is not covered), with `ServiceWarmUpSideEffectException`, counted as
+  a failed call.
 
 With `read-only-transaction=false`, none of this is registered: calls run with no transaction of
 the warm-up's, so whatever they write is written. Turn it off only for warm-ups whose calls
@@ -144,7 +146,8 @@ All under `org.coldis.library.service.warm-up`, defaults in `service.properties`
 - Each warm-up's first failed call, and inputs that cannot be read, are logged at warn with the
   exception's class only (and the refused transaction, when it is one); every failure's full
   exception, message and stack trace, is logged at debug. Exception messages must therefore not
-  quote record contents, which a debug log would ship.
+  quote record contents, which a debug log would ship: turning debug on for
+  `org.coldis.library.service.warmup` can write them to the logs.
 - Stop reasons: `INPUTS_EXHAUSTED`, `COMPILATION_IDLE`, `TIME_LIMIT`,
   `CONSECUTIVE_ERRORS_LIMIT`, `INPUTS_FAILED`, `INTERRUPTED` (the service is stopping),
   `CALL_THREADS_FAILED`.

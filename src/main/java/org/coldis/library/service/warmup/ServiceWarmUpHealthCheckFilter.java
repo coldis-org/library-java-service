@@ -21,11 +21,6 @@ import jakarta.servlet.http.HttpServletResponse;
 public class ServiceWarmUpHealthCheckFilter extends OncePerRequestFilter {
 
 	/**
-	 * Parameter that selects the scope of the health check.
-	 */
-	private static final String SCOPE_PARAMETER = "scope";
-
-	/**
 	 * Warm-up service.
 	 */
 	private final ServiceWarmUpServiceComponent serviceWarmUpServiceComponent;
@@ -49,7 +44,7 @@ public class ServiceWarmUpHealthCheckFilter extends OncePerRequestFilter {
 			final HttpServletRequest request,
 			final HttpServletResponse response,
 			final FilterChain filterChain) throws ServletException, IOException {
-		if (HealthCheckService.LIVENESS_SCOPE.equals(request.getParameter(ServiceWarmUpHealthCheckFilter.SCOPE_PARAMETER))
+		if (HealthCheckService.LIVENESS_SCOPE.equals(request.getParameter(HealthCheckService.SCOPE_PARAMETER))
 				|| this.serviceWarmUpServiceComponent.isTrafficAllowed()) {
 			filterChain.doFilter(request, response);
 		}

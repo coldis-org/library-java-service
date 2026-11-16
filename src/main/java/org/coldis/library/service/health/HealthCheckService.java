@@ -49,6 +49,11 @@ public class HealthCheckService {
 	public static final String LIVENESS_SCOPE = "liveness";
 
 	/**
+	 * Parameter that selects the scope of the health check.
+	 */
+	public static final String SCOPE_PARAMETER = "scope";
+
+	/**
 	 * Health check service.
 	 *
 	 * @return           The health check value, or 503 (no body) while the
@@ -100,7 +105,7 @@ public class HealthCheckService {
 	 */
 	@RequestMapping(
 			method = RequestMethod.GET,
-			params = "scope=" + HealthCheckService.LIVENESS_SCOPE
+			params = HealthCheckService.SCOPE_PARAMETER + "=" + HealthCheckService.LIVENESS_SCOPE
 	)
 	public ResponseEntity<HealthCheckValue> checkLiveness() {
 		ResponseEntity<HealthCheckValue> response = null;
