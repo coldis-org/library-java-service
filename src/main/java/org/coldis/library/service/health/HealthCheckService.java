@@ -44,6 +44,17 @@ public class HealthCheckService {
 	private ReadinessHealthCheckServiceComponent readinessHealthCheckService;
 
 	/**
+	 * Liveness health check service.
+	 */
+	@Autowired
+	private LivenessHealthCheckServiceComponent livenessHealthCheckService;
+
+	/**
+	 * Liveness scope of the health check.
+	 */
+	public static final String LIVENESS_SCOPE = "liveness";
+
+	/**
 	 * Health check service.
 	 *
 	 * @return           The health check value, or 503 (no body) while the
@@ -68,8 +79,15 @@ public class HealthCheckService {
 				HealthCheckValue checkValue = new HealthCheckValue();
 				// If the repository is available.
 				if (this.repositoryHealthCheckService != null) {
-					// Touches the repository.
-					checkValue = this.repositoryHealthCheckService.touch();
+					// Touches the repository, recording the outcome for the liveness check.
+					try {
+						checkValue = this.repositoryHealthCheckService.touch();
+						this.livenessHealthCheckService.recordRepositorySuccess();
+					}
+					catch (final Throwable throwable) {
+						this.livenessHealthCheckService.recordRepositoryFailure();
+						throw throwable;
+					}
 				}
 				response = ResponseEntity.ok(checkValue);
 			}
@@ -83,9 +101,34 @@ public class HealthCheckService {
 		}
 		// At the end.
 		finally {
-			// Logs the successful health check.
+			// Logs the health check duration (whatever the outcome).
 			final long executionTime = System.currentTimeMillis() - initMillis;
-			HealthCheckService.LOGGER.debug("Health check successfully finished within '" + executionTime + "' milliseconds.");
+			HealthCheckService.LOGGER.debug("Health check finished within '" + executionTime + "' milliseconds.");
+		}
+		return response;
+	}
+
+	/**
+	 * Liveness health check: whether the application is alive and should keep
+	 * running (for restart checks). It does not depend on readiness or on any
+	 * dependency being reachable, so a slow dependency or a shutdown in progress
+	 * never restarts the instance.
+	 *
+	 * @return The health check value, or 503 (no body) when the application is
+	 *         not alive.
+	 */
+	@RequestMapping(
+			method = RequestMethod.GET,
+			params = "scope=" + HealthCheckService.LIVENESS_SCOPE
+	)
+	public ResponseEntity<HealthCheckValue> checkLiveness() {
+		ResponseEntity<HealthCheckValue> response = null;
+		if (this.livenessHealthCheckService.isLive()) {
+			response = ResponseEntity.ok(new HealthCheckValue());
+		}
+		else {
+			HealthCheckService.LOGGER.warn("Liveness health check failed: the application is not alive.");
+			response = ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE).build();
 		}
 		return response;
 	}
