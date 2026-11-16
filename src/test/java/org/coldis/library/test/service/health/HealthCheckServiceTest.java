@@ -6,6 +6,7 @@ import org.coldis.library.test.TestHelper;
 import org.coldis.library.test.TestWithContainer;
 import org.coldis.library.test.service.ContainerTestHelper;
 import org.junit.jupiter.api.Assertions;
+import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -55,6 +56,7 @@ public class HealthCheckServiceTest extends ContainerTestHelper {
 	 * @throws Exception If the test fails.
 	 */
 	@Test
+	@DisplayName("Health check answers 503 while the application refuses traffic and recovers once it accepts traffic again")
 	public void testCheckFollowsReadiness() throws Exception {
 		try {
 			AvailabilityChangeEvent.publish(this.applicationContext, ReadinessState.REFUSING_TRAFFIC);
