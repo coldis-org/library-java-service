@@ -2,15 +2,20 @@ package org.coldis.library.test.service.warmup;
 
 import java.time.Duration;
 import java.util.List;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.stream.IntStream;
 
 import org.coldis.library.service.ServiceConfiguration;
 import org.coldis.library.service.warmup.ServiceWarmUp;
 import org.coldis.library.service.warmup.ServiceWarmUpAutoConfiguration;
 import org.coldis.library.service.warmup.ServiceWarmUpProperties;
+import org.coldis.library.service.warmup.ServiceWarmUpResult;
 import org.coldis.library.service.warmup.ServiceWarmUpServiceComponent;
+import org.coldis.library.service.warmup.ServiceWarmUpServiceComponentTestSeam;
+import org.coldis.library.service.warmup.ServiceWarmUpStopReason;
 import org.coldis.library.test.TestHelper;
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.DisplayName;
@@ -130,11 +135,16 @@ public class ServiceWarmUpStartupTest {
 	}
 
 	/**
+	 * Context with the library defaults and the warm-up configuration, without warm-up beans.
+	 */
+	private final ApplicationContextRunner contextRunnerWithoutWarmUps = new ApplicationContextRunner()
+			.withConfiguration(AutoConfigurations.of(ConfigurationPropertiesAutoConfiguration.class))
+			.withUserConfiguration(ServiceConfiguration.class, ServiceWarmUpProperties.class, ServiceWarmUpServiceComponent.class, ServiceWarmUpAutoConfiguration.class);
+
+	/**
 	 * Context with the library defaults, the warm-up configuration and two warm-up beans.
 	 */
-	private final ApplicationContextRunner contextRunner = new ApplicationContextRunner()
-			.withConfiguration(AutoConfigurations.of(ConfigurationPropertiesAutoConfiguration.class)).withUserConfiguration(ServiceConfiguration.class,
-					ServiceWarmUpProperties.class, ServiceWarmUpServiceComponent.class, ServiceWarmUpAutoConfiguration.class, StartupWarmUps.class);
+	private final ApplicationContextRunner contextRunner = this.contextRunnerWithoutWarmUps.withUserConfiguration(StartupWarmUps.class);
 
 	/**
 	 * Publishes the event the application publishes when it is ready.
@@ -185,8 +195,76 @@ public class ServiceWarmUpStartupTest {
 			Assertions.assertNull(context.getStartupFailure());
 			Assertions.assertEquals(0, context.getBeanNamesForType(ServiceWarmUpServiceComponent.class).length);
 			ServiceWarmUpStartupTest.publishApplicationReady(context);
+			// The warm-ups would run on their own thread: had anything started them, the blocking one would start within
+			// the wait, and wait to be released.
+			Assertions.assertFalse(context.getBean(StartupProbe.class).getBlockingCallStarted().await(TestHelper.SHORT_WAIT, TimeUnit.MILLISECONDS));
 			Assertions.assertEquals(0, context.getBean(StartupProbe.class).getQuickCalls().get());
 			Assertions.assertTrue(output.getAll().contains("which do not run"), output.getAll());
+		});
+	}
+
+	/**
+	 * Tests that, with the warm-up on and no warm-up beans, the health check is held until the application is ready, and
+	 * opens then.
+	 */
+	@Test
+	@DisplayName("Without warm-up beans, the health check opens when the application is ready")
+	public void testNoWarmUpBeans() {
+		this.contextRunnerWithoutWarmUps.withPropertyValues(ServiceWarmUpProperties.ENABLED_PROPERTY + "=true").run(context -> {
+			Assertions.assertNull(context.getStartupFailure());
+			final ServiceWarmUpServiceComponent serviceWarmUpServiceComponent = context.getBean(ServiceWarmUpServiceComponent.class);
+			Assertions.assertFalse(serviceWarmUpServiceComponent.isTrafficAllowed());
+			ServiceWarmUpStartupTest.publishApplicationReady(context);
+			Assertions.assertTrue(serviceWarmUpServiceComponent.isTrafficAllowed());
+		});
+	}
+
+	/**
+	 * Tests that a warm-up thread that cannot start, even on an error the JVM cannot recover from, opens the health
+	 * check, and that the error is not swallowed.
+	 */
+	@Test
+	@DisplayName("A warm-up thread that cannot start opens the health check")
+	public void testThreadStartErrorOpensHealthCheck() {
+		this.contextRunner.withPropertyValues(ServiceWarmUpProperties.ENABLED_PROPERTY + "=true").run(context -> {
+			Assertions.assertNull(context.getStartupFailure());
+			final ServiceWarmUpServiceComponent serviceWarmUpServiceComponent = context.getBean(ServiceWarmUpServiceComponent.class);
+			Assertions.assertFalse(serviceWarmUpServiceComponent.isTrafficAllowed());
+			Assertions.assertThrows(OutOfMemoryError.class, () -> ServiceWarmUpServiceComponentTestSeam.startStartupWarmUps(serviceWarmUpServiceComponent, runnable -> {
+				throw new OutOfMemoryError("Test: unable to create native thread.");
+			}));
+			Assertions.assertTrue(serviceWarmUpServiceComponent.isTrafficAllowed());
+			Assertions.assertEquals(0, context.getBean(StartupProbe.class).getQuickCalls().get());
+		});
+	}
+
+	/**
+	 * Tests that a service stopping during a warm-up stops it as interrupted, even when its calls swallow the
+	 * interruption, and opens the health check.
+	 */
+	@Test
+	@DisplayName("A service stopping during a warm-up stops it as interrupted and opens the health check")
+	public void testStopDuringWarmUp() {
+		this.contextRunnerWithoutWarmUps.withPropertyValues(ServiceWarmUpProperties.ENABLED_PROPERTY + "=true").run(context -> {
+			Assertions.assertNull(context.getStartupFailure());
+			final ServiceWarmUpServiceComponent serviceWarmUpServiceComponent = context.getBean(ServiceWarmUpServiceComponent.class);
+			ServiceWarmUpStartupTest.publishApplicationReady(context);
+			final ServiceWarmUpProperties properties = ServiceWarmUpServiceComponentTestSeam.copy(context.getBean(ServiceWarmUpProperties.class));
+			properties.setParallelism(1);
+			properties.setTimeLimit(Duration.ofSeconds(60));
+			properties.setIdleCompilationMillisPerSecond(0L);
+			final CountDownLatch callStarted = new CountDownLatch(1);
+			final CompletableFuture<List<ServiceWarmUpResult>> warmUp = CompletableFuture.supplyAsync(() -> ServiceWarmUpServiceComponentTestSeam.warmUp(
+					serviceWarmUpServiceComponent, List.of(new ServiceWarmUpTestRoutine<>(() -> IntStream.range(0, 1_000_000).boxed().toList(), input -> {
+						callStarted.countDown();
+						Thread.sleep(1);
+					})), properties));
+			Assertions.assertTrue(callStarted.await(TestHelper.VERY_LONG_WAIT, TimeUnit.MILLISECONDS));
+			Assertions.assertFalse(serviceWarmUpServiceComponent.isTrafficAllowed());
+			serviceWarmUpServiceComponent.destroy();
+			final List<ServiceWarmUpResult> results = warmUp.get(TestHelper.VERY_LONG_WAIT, TimeUnit.MILLISECONDS);
+			Assertions.assertEquals(ServiceWarmUpStopReason.INTERRUPTED, results.get(0).getStopReason());
+			Assertions.assertTrue(serviceWarmUpServiceComponent.isTrafficAllowed());
 		});
 	}
 

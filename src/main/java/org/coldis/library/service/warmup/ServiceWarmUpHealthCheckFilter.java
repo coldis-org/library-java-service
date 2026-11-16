@@ -2,6 +2,7 @@ package org.coldis.library.service.warmup;
 
 import java.io.IOException;
 
+import org.coldis.library.service.health.HealthCheckService;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.web.filter.OncePerRequestFilter;
@@ -13,9 +14,16 @@ import jakarta.servlet.http.HttpServletResponse;
 
 /**
  * Answers the health check with 503 while the service warms up, so that the instance takes no traffic before the
- * warm-up stops. It answers without reaching the health check service, so it does not touch the repository.
+ * warm-up stops. It answers without reaching the health check service, so it does not touch the repository. The
+ * liveness scope ({@code scope=liveness}) passes through: a warming instance is alive, and a restart check on liveness
+ * must not restart it.
  */
 public class ServiceWarmUpHealthCheckFilter extends OncePerRequestFilter {
+
+	/**
+	 * Parameter that selects the scope of the health check.
+	 */
+	private static final String SCOPE_PARAMETER = "scope";
 
 	/**
 	 * Warm-up service.
@@ -41,7 +49,8 @@ public class ServiceWarmUpHealthCheckFilter extends OncePerRequestFilter {
 			final HttpServletRequest request,
 			final HttpServletResponse response,
 			final FilterChain filterChain) throws ServletException, IOException {
-		if (this.serviceWarmUpServiceComponent.isTrafficAllowed()) {
+		if (HealthCheckService.LIVENESS_SCOPE.equals(request.getParameter(ServiceWarmUpHealthCheckFilter.SCOPE_PARAMETER))
+				|| this.serviceWarmUpServiceComponent.isTrafficAllowed()) {
 			filterChain.doFilter(request, response);
 		}
 		else {

@@ -1,10 +1,11 @@
 package org.coldis.library.service.warmup;
 
 import java.util.List;
+import java.util.concurrent.ThreadFactory;
 
 /**
- * Test-only access to {@link ServiceWarmUpServiceComponent}'s package-private warm-up run, so tests can run warm-ups
- * with their own limits.
+ * Test-only access to {@link ServiceWarmUpServiceComponent}'s package-private warm-up run and start, so tests can run
+ * warm-ups with their own limits and start them with their own threads.
  */
 public final class ServiceWarmUpServiceComponentTestSeam {
 
@@ -28,6 +29,18 @@ public final class ServiceWarmUpServiceComponentTestSeam {
 			final List<? extends ServiceWarmUp<?>> warmUps,
 			final ServiceWarmUpProperties properties) {
 		return component.warmUp(warmUps, properties);
+	}
+
+	/**
+	 * Starts the warm-up beans as the application's ready event does, with a thread factory of the test's.
+	 *
+	 * @param component     Warm-up service.
+	 * @param threadFactory Factory of the thread that runs the warm-up beans.
+	 */
+	public static void startStartupWarmUps(
+			final ServiceWarmUpServiceComponent component,
+			final ThreadFactory threadFactory) {
+		component.startStartupWarmUps(threadFactory);
 	}
 
 	/**

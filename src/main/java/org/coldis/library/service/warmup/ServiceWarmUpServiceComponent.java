@@ -10,6 +10,7 @@ import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.ThreadFactory;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -18,7 +19,6 @@ import java.util.concurrent.atomic.AtomicLong;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.DisposableBean;
-import org.springframework.beans.factory.ListableBeanFactory;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.boot.context.event.ApplicationReadyEvent;
@@ -33,7 +33,8 @@ import io.micrometer.core.instrument.MeterRegistry;
 /**
  * Runs the {@link ServiceWarmUp} beans when the application is ready and holds the health check (503) until they
  * stop. It exists only when the service turns the warm-up on ({@value ServiceWarmUpProperties#ENABLED_PROPERTY}); even
- * then, without warm-up beans nothing runs and the health check is never held.
+ * then, without warm-up beans nothing runs and the health check is not held past the application's ready event (before
+ * it, the health check's readiness already holds traffic).
  *
  * <p>
  * The calls run on their own threads, apart from the request threads, taking the warm-ups in turns. They stop, for
@@ -66,9 +67,9 @@ public class ServiceWarmUpServiceComponent implements ApplicationListener<Applic
 	private static final long NANOSECONDS_PER_MILLISECOND = 1_000_000L;
 
 	/**
-	 * Bean factory.
+	 * Warm-up beans, read when the application is ready.
 	 */
-	private final ListableBeanFactory beanFactory;
+	private final ObjectProvider<ServiceWarmUp<?>> warmUpProvider;
 
 	/**
 	 * Properties.
@@ -86,9 +87,10 @@ public class ServiceWarmUpServiceComponent implements ApplicationListener<Applic
 	private final ObjectProvider<MeterRegistry> meterRegistryProvider;
 
 	/**
-	 * Whether the warm-up beans have yet to run, which holds the health check from the start.
+	 * Whether the warm-up beans have yet to run, which holds the health check from the start until the application is
+	 * ready, when they are read: without any, the health check opens then.
 	 */
-	private final AtomicBoolean isStartupWarmUpPending;
+	private final AtomicBoolean isStartupWarmUpPending = new AtomicBoolean(true);
 
 	/**
 	 * Whether the warm-up beans were started.
@@ -113,23 +115,21 @@ public class ServiceWarmUpServiceComponent implements ApplicationListener<Applic
 	/**
 	 * Constructor.
 	 *
-	 * @param beanFactory                Bean factory.
+	 * @param warmUpProvider             Warm-up beans, read when the application is ready.
 	 * @param properties                 Properties.
 	 * @param transactionManagerProvider Transaction manager provider.
 	 * @param meterRegistryProvider      Meter registry provider.
 	 */
 	public ServiceWarmUpServiceComponent(
-			final ListableBeanFactory beanFactory,
+			final ObjectProvider<ServiceWarmUp<?>> warmUpProvider,
 			final ServiceWarmUpProperties properties,
 			final ObjectProvider<PlatformTransactionManager> transactionManagerProvider,
 			final ObjectProvider<MeterRegistry> meterRegistryProvider) {
 		super();
-		this.beanFactory = beanFactory;
+		this.warmUpProvider = warmUpProvider;
 		this.properties = properties;
 		this.transactionManagerProvider = transactionManagerProvider;
 		this.meterRegistryProvider = meterRegistryProvider;
-		// The health check is held from the start, since the server answers it before the application is ready.
-		this.isStartupWarmUpPending = new AtomicBoolean(beanFactory.getBeanNamesForType(ServiceWarmUp.class, true, false).length > 0);
 	}
 
 	/**
@@ -268,7 +268,11 @@ public class ServiceWarmUpServiceComponent implements ApplicationListener<Applic
 			}
 			if (!haveCallsEnded && (stopReason == null)) {
 				// Clock readings compare by their difference, which stays right if they wrap.
-				if ((checkNanos - deadlineNanos) >= 0L) {
+				if (this.isDestroyed.get()) {
+					// A call that swallows the interruption would otherwise keep the warm-up running until the time limit.
+					stopReason = ServiceWarmUpStopReason.INTERRUPTED;
+				}
+				else if ((checkNanos - deadlineNanos) >= 0L) {
 					stopReason = ServiceWarmUpStopReason.TIME_LIMIT;
 				}
 				else if ((compilationIdleness != null) && compilationIdleness.isIdleLongEnough()) {
@@ -427,25 +431,43 @@ public class ServiceWarmUpServiceComponent implements ApplicationListener<Applic
 	}
 
 	/**
+	 * Starts the warm-up beans on their own thread, or opens the health check when there are none or they cannot start.
+	 * Package-private: the application's ready event starts them, and tests reach it through a test seam.
+	 *
+	 * @param threadFactory Factory of the thread that runs them.
+	 */
+	void startStartupWarmUps(
+			final ThreadFactory threadFactory) {
+		if (this.isStartupWarmUpPending.get() && this.hasStartupWarmUpStarted.compareAndSet(false, true)) {
+			boolean hasThreadStarted = false;
+			try {
+				final List<ServiceWarmUp<?>> warmUps = this.warmUpProvider.stream().toList();
+				if (!warmUps.isEmpty()) {
+					threadFactory.newThread(() -> this.runStartupWarmUps(warmUps)).start();
+					hasThreadStarted = true;
+				}
+			}
+			// The warm-up fails open: the error is logged and the service takes traffic as it would without a warm-up.
+			catch (final RuntimeException exception) {
+				ServiceWarmUpServiceComponent.LOGGER.error("Service warm-up could not start, so the service takes traffic without it.", exception);
+			}
+			// Without a running thread, nothing else would open the health check, whatever ended the start (an error
+			// such as a thread the JVM cannot create included).
+			finally {
+				if (!hasThreadStarted) {
+					this.isStartupWarmUpPending.set(false);
+				}
+			}
+		}
+	}
+
+	/**
 	 * @see org.springframework.context.ApplicationListener#onApplicationEvent(org.springframework.context.ApplicationEvent)
 	 */
 	@Override
 	public void onApplicationEvent(
 			final ApplicationReadyEvent event) {
-		if (this.isStartupWarmUpPending.get() && this.hasStartupWarmUpStarted.compareAndSet(false, true)) {
-			try {
-				final List<ServiceWarmUp<?>> warmUps = new ArrayList<>();
-				for (final ServiceWarmUp<?> warmUp : this.beanFactory.getBeansOfType(ServiceWarmUp.class).values()) {
-					warmUps.add(warmUp);
-				}
-				Thread.ofPlatform().daemon().name("service-warm-up").start(() -> this.runStartupWarmUps(warmUps));
-			}
-			// The warm-up fails open: the error is logged and the service takes traffic as it would without a warm-up.
-			catch (final RuntimeException exception) {
-				ServiceWarmUpServiceComponent.LOGGER.error("Service warm-up could not start, so the service takes traffic without it.", exception);
-				this.isStartupWarmUpPending.set(false);
-			}
-		}
+		this.startStartupWarmUps(Thread.ofPlatform().daemon().name("service-warm-up").factory());
 	}
 
 	/**
