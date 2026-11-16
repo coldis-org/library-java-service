@@ -74,11 +74,14 @@ public class LivenessHealthCheckServiceComponent {
 	}
 
 	/**
-	 * Records a failed repository read: the first failure in a row starts the count.
+	 * Records a failed repository read: the first failure in a row starts the count, and so does a
+	 * failure after a gap longer than the recency (the failures before the gap were not continuous).
 	 */
 	public synchronized void recordRepositoryFailure() {
 		final LocalDateTime now = DateTimeHelper.getCurrentLocalDateTime();
-		if (this.repositoryFailingSince == null) {
+		final Boolean previousFailureRecent = (this.repositoryLastFailure != null) && ((this.repositoryFailureRecency == null)
+				|| (Duration.between(this.repositoryLastFailure, now).compareTo(this.repositoryFailureRecency) <= 0));
+		if ((this.repositoryFailingSince == null) || !previousFailureRecent) {
 			this.repositoryFailingSince = now;
 		}
 		this.repositoryLastFailure = now;

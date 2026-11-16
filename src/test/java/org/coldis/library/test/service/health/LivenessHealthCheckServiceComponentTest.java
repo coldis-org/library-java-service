@@ -165,9 +165,16 @@ public class LivenessHealthCheckServiceComponentTest {
 		component.recordRepositoryFailure();
 		TestHelper.moveClockBy(LivenessHealthCheckServiceComponentTest.LIMIT.plus(LivenessHealthCheckServiceComponentTest.MARGIN));
 		Assertions.assertTrue(component.isLive(), "one failure, then no reads: no evidence of a continuous failure");
-		// A new failure after the limit, with the first one still the start of the count, does count.
+		// A new failure after the gap starts a new count: still alive.
 		component.recordRepositoryFailure();
-		Assertions.assertFalse(component.isLive());
+		Assertions.assertTrue(component.isLive(), "failure after a gap: new count, not the old one");
+		// That new count fails liveness only once it is itself past the limit, with recent failures.
+		for (int minute = 1; minute <= 15; minute++) {
+			TestHelper.moveClockBy(Duration.ofMinutes(1));
+			component.recordRepositoryFailure();
+		}
+		TestHelper.moveClockBy(LivenessHealthCheckServiceComponentTest.MARGIN);
+		Assertions.assertFalse(component.isLive(), "new count past the limit");
 	}
 
 	/**
@@ -196,9 +203,12 @@ public class LivenessHealthCheckServiceComponentTest {
 		final LivenessHealthCheckServiceComponent component = this.createComponent(LivenessHealthCheckServiceComponentTest.LIMIT,
 				this.createAvailability(LivenessState.CORRECT), repository);
 		repository.setFailing(true);
+		// The read fails every minute (as a polled routing check would) for longer than the limit.
 		Assertions.assertThrows(IllegalStateException.class, () -> component.touchRepository());
-		TestHelper.moveClockBy(LivenessHealthCheckServiceComponentTest.LIMIT.plus(LivenessHealthCheckServiceComponentTest.MARGIN));
-		Assertions.assertThrows(IllegalStateException.class, () -> component.touchRepository());
+		for (int minute = 1; minute <= 16; minute++) {
+			TestHelper.moveClockBy(Duration.ofMinutes(1));
+			Assertions.assertThrows(IllegalStateException.class, () -> component.touchRepository());
+		}
 		Assertions.assertFalse(component.isLive(), "failures recorded by the read");
 		repository.setFailing(false);
 		Assertions.assertEquals(HealthCheckValue.VALUE, component.touchRepository().getValue());

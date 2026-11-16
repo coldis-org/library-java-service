@@ -3,7 +3,6 @@ package org.coldis.library.test.service.health;
 import java.time.Duration;
 
 import org.coldis.library.exception.IntegrationException;
-import org.coldis.library.helper.DateTimeHelper;
 import org.coldis.library.service.health.LivenessHealthCheckServiceComponent;
 import org.coldis.library.test.StartTestWithContainerExtension;
 import org.coldis.library.test.TestHelper;
@@ -22,7 +21,6 @@ import org.springframework.boot.test.context.SpringBootTest.WebEnvironment;
 import org.springframework.context.ApplicationContext;
 import org.springframework.http.HttpStatus;
 import org.springframework.test.annotation.DirtiesContext;
-import org.springframework.test.util.ReflectionTestUtils;
 import org.testcontainers.containers.GenericContainer;
 
 /**
@@ -126,9 +124,12 @@ public class HealthCheckServiceTest extends ContainerTestHelper {
 	public void testRoutingCheckRecordsRepositoryOutcome() throws Exception {
 		final LivenessHealthCheckServiceComponent liveness = this.applicationContext.getBean(LivenessHealthCheckServiceComponent.class);
 		try {
-			// The repository has been failing for longer than the limit (15 minutes by default), the last failure just now.
-			ReflectionTestUtils.setField(liveness, "repositoryFailingSince", DateTimeHelper.getCurrentLocalDateTime().minus(Duration.ofMinutes(16)));
-			ReflectionTestUtils.setField(liveness, "repositoryLastFailure", DateTimeHelper.getCurrentLocalDateTime());
+			// The repository fails every minute for longer than the limit (15 minutes by default).
+			liveness.recordRepositoryFailure();
+			for (int minute = 1; minute <= 16; minute++) {
+				TestHelper.moveClockBy(Duration.ofMinutes(1));
+				liveness.recordRepositoryFailure();
+			}
 			final IntegrationException exception = Assertions.assertThrows(IntegrationException.class,
 					() -> this.checkEntityServiceClient.checkLiveness());
 			Assertions.assertEquals(HttpStatus.SERVICE_UNAVAILABLE.value(), exception.getStatusCode());
@@ -138,6 +139,7 @@ public class HealthCheckServiceTest extends ContainerTestHelper {
 		}
 		finally {
 			liveness.recordRepositorySuccess();
+			TestHelper.cleanClock();
 		}
 	}
 
