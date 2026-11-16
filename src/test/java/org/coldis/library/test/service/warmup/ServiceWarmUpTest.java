@@ -478,6 +478,7 @@ public class ServiceWarmUpTest extends ContainerTestHelper {
 		Assertions.assertTrue(callStarted.await(ServiceWarmUpTest.TEST_TIMEOUT.toSeconds(), TimeUnit.SECONDS));
 		caller.interrupt();
 		caller.join(ServiceWarmUpTest.TEST_TIMEOUT.toMillis());
+		Assertions.assertFalse(caller.isAlive(), "The warm-up did not stop when interrupted.");
 		Assertions.assertEquals(ServiceWarmUpStopReason.INTERRUPTED, results.get().get(0).getStopReason());
 		Assertions.assertTrue(this.serviceWarmUpServiceComponent.isTrafficAllowed());
 	}

@@ -2,6 +2,7 @@ package org.coldis.library.service.warmup;
 
 import java.lang.reflect.Method;
 import java.lang.reflect.Modifier;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Set;
@@ -129,8 +130,14 @@ public class ServiceWarmUpSideEffectAdvisor extends StaticMethodMatcherPointcutA
 	 */
 	public ServiceWarmUpSideEffectAdvisor() {
 		super();
-		this.presentGuards = ServiceWarmUpSideEffectAdvisor.GUARDS.stream().filter(guard -> guard.getType() != null)
-				.map(guard -> new PresentGuard(guard.getType(), guard.methodNames(), guard.sideEffect())).toList();
+		final List<PresentGuard> guards = new ArrayList<>();
+		for (final Guard guard : ServiceWarmUpSideEffectAdvisor.GUARDS) {
+			final Class<?> type = guard.getType();
+			if (type != null) {
+				guards.add(new PresentGuard(type, guard.methodNames(), guard.sideEffect()));
+			}
+		}
+		this.presentGuards = List.copyOf(guards);
 		this.setAdvice((MethodInterceptor) invocation -> {
 			if (ServiceWarmUpContext.isWarmingUp()) {
 				throw new ServiceWarmUpSideEffectException(

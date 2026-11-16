@@ -18,10 +18,13 @@ import org.coldis.library.service.warmup.ServiceWarmUpTransactionExecutionListen
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
 import org.springframework.aop.support.AopUtils;
 import org.springframework.boot.autoconfigure.AutoConfigurations;
 import org.springframework.boot.autoconfigure.context.ConfigurationPropertiesAutoConfiguration;
 import org.springframework.boot.test.context.runner.WebApplicationContextRunner;
+import org.springframework.boot.test.system.CapturedOutput;
+import org.springframework.boot.test.system.OutputCaptureExtension;
 import org.springframework.boot.web.servlet.FilterRegistrationBean;
 import org.springframework.cache.CacheManager;
 import org.springframework.cache.concurrent.ConcurrentMapCacheManager;
@@ -43,6 +46,7 @@ import org.springframework.web.client.RestTemplate;
  * Tests that the service warm-up registers nothing, and wraps no bean, until a service turns it on, and what it guards
  * when on. No containers: the contexts hold only the warm-up configuration and a few beans a service declares.
  */
+@ExtendWith(OutputCaptureExtension.class)
 public class ServiceWarmUpOptInTest {
 
 	/**
@@ -153,6 +157,38 @@ public class ServiceWarmUpOptInTest {
 			final RestTemplate restTemplate = new RestTemplate();
 			restTemplate.setInterceptors(List.of(InterceptedTemplateBeans.PASS_THROUGH));
 			return restTemplate;
+		}
+
+	}
+
+	/**
+	 * A REST template of a final class, which cannot be proxied.
+	 */
+	public static final class FinalRestTemplate extends RestTemplate {
+
+		/**
+		 * Constructor.
+		 */
+		public FinalRestTemplate() {
+			super();
+		}
+
+	}
+
+	/**
+	 * A REST template of a final class.
+	 */
+	@Configuration
+	public static class FinalTemplateBeans {
+
+		/**
+		 * REST template of a final class.
+		 *
+		 * @return The REST template.
+		 */
+		@Bean
+		public FinalRestTemplate finalRestTemplate() {
+			return new FinalRestTemplate();
 		}
 
 	}
@@ -297,6 +333,25 @@ public class ServiceWarmUpOptInTest {
 					Assertions.assertEquals(2L, results.get(0).getCallCount());
 					Assertions.assertEquals(2L, results.get(0).getFailedCallCount());
 					Assertions.assertInstanceOf(ServiceWarmUpSideEffectException.class, results.get(0).getFirstError());
+				});
+	}
+
+	/**
+	 * Tests that a bean of a final class with guarded methods does not stop the start: it is left unguarded, as it was,
+	 * with a warning.
+	 *
+	 * @param output Captured output.
+	 */
+	@Test
+	@DisplayName("A final class with guarded methods is left unguarded with a warning, and the context starts")
+	public void testFinalClassLeftUnguarded(
+			final CapturedOutput output) {
+		this.contextRunner.withUserConfiguration(FinalTemplateBeans.class).withPropertyValues(ServiceWarmUpProperties.ENABLED_PROPERTY + "=true")
+				.run(context -> {
+					Assertions.assertNull(context.getStartupFailure());
+					Assertions.assertFalse(AopUtils.isAopProxy(context.getBean("finalRestTemplate")));
+					Assertions.assertInstanceOf(FinalRestTemplate.class, context.getBean("finalRestTemplate"));
+					Assertions.assertTrue(output.getAll().contains("are not guarded during the service warm-up"), output.getAll());
 				});
 	}
 
