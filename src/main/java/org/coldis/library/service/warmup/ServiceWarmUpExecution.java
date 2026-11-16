@@ -170,22 +170,47 @@ final class ServiceWarmUpExecution<InputType> {
 	}
 
 	/**
-	 * Gets the median duration of calls, in milliseconds.
+	 * Gets the median duration of calls, in milliseconds: the middle duration, or the average of the two middle ones for
+	 * an even count.
 	 *
 	 * @param  durations Call durations, in nanoseconds.
 	 * @param  count     Number of durations to use, from the start of the array.
 	 * @return           The median duration, in milliseconds, or null without durations.
 	 */
-	private static Double getMedianMillis(
+	static Double getMedianMillis(
 			final long[] durations,
 			final int count) {
 		Double median = null;
 		if (count > 0) {
 			final long[] sortedDurations = Arrays.copyOf(durations, count);
 			Arrays.sort(sortedDurations);
-			median = sortedDurations[count / 2] / ServiceWarmUpExecution.NANOSECONDS_PER_MILLISECOND;
+			final double medianNanos = ((count % 2) == 1 ? sortedDurations[count / 2]
+					: (sortedDurations[(count / 2) - 1] / 2.0) + (sortedDurations[count / 2] / 2.0));
+			median = medianNanos / ServiceWarmUpExecution.NANOSECONDS_PER_MILLISECOND;
 		}
 		return median;
+	}
+
+	/**
+	 * Describes an error for a warn log: its class, and the refused side effect when it is one, without its message,
+	 * which may quote record contents.
+	 *
+	 * @param  error Error.
+	 * @return       The description.
+	 */
+	private static String describe(
+			final Throwable error) {
+		String description = error.getClass().getName();
+		Throwable cause = error;
+		ServiceWarmUpSideEffectException sideEffectError = null;
+		while ((sideEffectError == null) && (cause != null)) {
+			sideEffectError = (cause instanceof final ServiceWarmUpSideEffectException sideEffectException ? sideEffectException : null);
+			cause = cause.getCause();
+		}
+		if (sideEffectError != null) {
+			description += " (refused side effect: " + sideEffectError.getSideEffect() + ")";
+		}
+		return description;
 	}
 
 	/**
@@ -259,7 +284,9 @@ final class ServiceWarmUpExecution<InputType> {
 	 */
 	private synchronized void failInputs(
 			final Throwable error) {
-		ServiceWarmUpExecution.LOGGER.warn("Warm-up '" + this.name + "' could not read its inputs, so it makes no calls.", error);
+		ServiceWarmUpExecution.LOGGER.warn("Warm-up '{}' could not read its inputs, so it makes no calls: {}. The stack trace is logged at debug.", this.name,
+				ServiceWarmUpExecution.describe(error));
+		ServiceWarmUpExecution.LOGGER.debug("Warm-up '" + this.name + "' could not read its inputs.", error);
 		if (this.firstError == null) {
 			this.firstError = error;
 		}
@@ -321,13 +348,12 @@ final class ServiceWarmUpExecution<InputType> {
 			this.consecutiveFailedCallCount++;
 			if (this.firstError == null) {
 				this.firstError = error;
-				ServiceWarmUpExecution.LOGGER.warn("Warm-up '" + this.name + "' call failed. Later failures are only counted and logged at debug.", error);
+				ServiceWarmUpExecution.LOGGER.warn("Warm-up '{}' call failed: {}. Its stack trace and later failures are logged at debug.", this.name,
+						ServiceWarmUpExecution.describe(error));
 			}
-			else {
-				ServiceWarmUpExecution.LOGGER.debug("Warm-up '" + this.name + "' call failed.", error);
-			}
+			ServiceWarmUpExecution.LOGGER.debug("Warm-up '" + this.name + "' call failed.", error);
 			if (this.consecutiveFailedCallCount >= this.maximumConsecutiveErrors) {
-				this.stop(ServiceWarmUpStopReason.ERRORS);
+				this.stop(ServiceWarmUpStopReason.CONSECUTIVE_ERRORS_LIMIT);
 			}
 		}
 	}

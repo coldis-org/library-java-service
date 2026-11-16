@@ -21,9 +21,9 @@ public enum ServiceWarmUpStopReason {
 	TIME_LIMIT,
 
 	/**
-	 * Too many consecutive calls failed.
+	 * The limit of consecutive failed calls was reached.
 	 */
-	ERRORS,
+	CONSECUTIVE_ERRORS_LIMIT,
 
 	/**
 	 * The inputs could not be read.
