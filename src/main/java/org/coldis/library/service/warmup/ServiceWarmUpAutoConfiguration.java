@@ -5,6 +5,7 @@ import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnClass;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnExpression;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnWebApplication;
 import org.springframework.boot.context.event.ApplicationReadyEvent;
@@ -19,8 +20,9 @@ import org.springframework.transaction.interceptor.TransactionAttributeSource;
 /**
  * Service warm-up configuration. Everything here, apart from the warning about warm-ups that do not run, is registered
  * only when the service turns the warm-up on ({@value ServiceWarmUpProperties#ENABLED_PROPERTY}): the health check
- * filter, every guard ({@link ServiceWarmUpBeanPostProcessor}, with the cache resolver it uses) and the read-only
- * {@code @Transactional} methods. The features it guards carry no warm-up code.
+ * filter and, unless {@value ServiceWarmUpProperties#READ_ONLY_TRANSACTION_PROPERTY} is false, the database guard (the
+ * read-only {@code @Transactional} methods and the transaction managers' listener). Nothing else is guarded, and no
+ * bean is replaced or proxied.
  */
 @Configuration
 public class ServiceWarmUpAutoConfiguration {
@@ -31,16 +33,19 @@ public class ServiceWarmUpAutoConfiguration {
 	private static final Logger LOGGER = LoggerFactory.getLogger(ServiceWarmUpAutoConfiguration.class);
 
 	/**
+	 * Condition of the database guard: the warm-up is on, and so is its read-only transaction (the default).
+	 */
+	static final String READ_ONLY_TRANSACTION_CONDITION = "${" + ServiceWarmUpProperties.ENABLED_PROPERTY + ":false} and ${"
+			+ ServiceWarmUpProperties.READ_ONLY_TRANSACTION_PROPERTY + ":true}";
+
+	/**
 	 * Makes the service's {@code @Transactional} methods read-only on warm-up threads, by wrapping the attribute source
 	 * of the transaction aspect; other new read-write transactions are refused by the transaction managers' listener.
 	 * The aspect is a single instance for the whole JVM, so a source already wrapped is kept as is.
 	 */
 	@Configuration
 	@ConditionalOnClass(value = AnnotationTransactionAspect.class)
-	@ConditionalOnProperty(
-			name = ServiceWarmUpProperties.ENABLED_PROPERTY,
-			havingValue = "true"
-	)
+	@ConditionalOnExpression(ServiceWarmUpAutoConfiguration.READ_ONLY_TRANSACTION_CONDITION)
 	public static class ServiceWarmUpTransactionConfiguration {
 
 		/**
@@ -138,31 +143,14 @@ public class ServiceWarmUpAutoConfiguration {
 	}
 
 	/**
-	 * Attaches every warm-up guard.
+	 * Makes transaction managers refuse new read-write transactions on warm-up threads.
 	 *
 	 * @return The bean post processor.
 	 */
 	@Bean
-	@ConditionalOnProperty(
-			name = ServiceWarmUpProperties.ENABLED_PROPERTY,
-			havingValue = "true"
-	)
+	@ConditionalOnExpression(ServiceWarmUpAutoConfiguration.READ_ONLY_TRANSACTION_CONDITION)
 	public static ServiceWarmUpBeanPostProcessor serviceWarmUpBeanPostProcessor() {
 		return new ServiceWarmUpBeanPostProcessor();
-	}
-
-	/**
-	 * Cache resolver of the warm-up versions of cache operations.
-	 *
-	 * @return The cache resolver.
-	 */
-	@Bean(name = ServiceWarmUpCacheResolver.BEAN_NAME)
-	@ConditionalOnProperty(
-			name = ServiceWarmUpProperties.ENABLED_PROPERTY,
-			havingValue = "true"
-	)
-	public ServiceWarmUpCacheResolver serviceWarmUpCacheResolver() {
-		return new ServiceWarmUpCacheResolver();
 	}
 
 	/**

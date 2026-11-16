@@ -19,9 +19,21 @@ public class ServiceWarmUpProperties {
 	public static final String ENABLED_PROPERTY = "org.coldis.library.service.warm-up.enabled";
 
 	/**
+	 * Property that keeps the database guard on (the default): each call in a read-only transaction that is rolled back,
+	 * the service's {@code @Transactional} methods read-only and new read-write transactions refused. Off, the calls run
+	 * without any transaction of the warm-up's and nothing of it is registered, so they can write to the database.
+	 */
+	public static final String READ_ONLY_TRANSACTION_PROPERTY = "org.coldis.library.service.warm-up.read-only-transaction";
+
+	/**
 	 * Whether the service warm-up is on.
 	 */
 	private Boolean enabled;
+
+	/**
+	 * Whether each call runs in a read-only transaction, with the database guard on. On unless set to false.
+	 */
+	private Boolean readOnlyTransaction = Boolean.TRUE;
 
 	/**
 	 * Longest time the warm-ups run before the health check opens.
@@ -77,6 +89,25 @@ public class ServiceWarmUpProperties {
 	public void setEnabled(
 			final Boolean enabled) {
 		this.enabled = enabled;
+	}
+
+	/**
+	 * Gets whether each call runs in a read-only transaction, with the database guard on.
+	 *
+	 * @return Whether each call runs in a read-only transaction.
+	 */
+	public Boolean getReadOnlyTransaction() {
+		return this.readOnlyTransaction;
+	}
+
+	/**
+	 * Sets whether each call runs in a read-only transaction, with the database guard on.
+	 *
+	 * @param readOnlyTransaction Whether each call runs in a read-only transaction.
+	 */
+	public void setReadOnlyTransaction(
+			final Boolean readOnlyTransaction) {
+		this.readOnlyTransaction = readOnlyTransaction;
 	}
 
 	/**

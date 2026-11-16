@@ -16,7 +16,6 @@ import java.util.stream.IntStream;
 
 import org.coldis.library.persistence.LockBehavior;
 import org.coldis.library.persistence.keyvalue.KeyValueServiceComponent;
-import org.coldis.library.service.cache.CacheHelper;
 import org.coldis.library.service.health.HealthCheckService;
 import org.coldis.library.service.warmup.ServiceWarmUpProperties;
 import org.coldis.library.service.warmup.ServiceWarmUpResult;
@@ -32,11 +31,9 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.context.SpringBootTest.WebEnvironment;
-import org.springframework.cache.CacheManager;
 import org.springframework.web.client.HttpStatusCodeException;
 import org.springframework.web.client.RestTemplate;
 
@@ -109,30 +106,10 @@ public class ServiceWarmUpTest extends ContainerTestHelper {
 	private RestTemplate restTemplate;
 
 	/**
-	 * Cache helper.
-	 */
-	@Autowired
-	private CacheHelper cacheHelper;
-
-	/**
 	 * Meter registry.
 	 */
 	@Autowired
 	private MeterRegistry meterRegistry;
-
-	/**
-	 * Local cache manager.
-	 */
-	@Autowired
-	@Qualifier("minutesExpirationLocalCacheManager")
-	private CacheManager localCacheManager;
-
-	/**
-	 * Central cache manager.
-	 */
-	@Autowired
-	@Qualifier("minutesExpirationCentralCacheManager")
-	private CacheManager centralCacheManager;
 
 	/**
 	 * Gets whether an error, or one of its causes, is of a type.
@@ -609,115 +586,6 @@ public class ServiceWarmUpTest extends ContainerTestHelper {
 	}
 
 	/**
-	 * Tests that warm-up calls run cached methods without filling the caches, and that the same calls fill them outside
-	 * the warm-up.
-	 */
-	@Test
-	@DisplayName("Warm-up calls run cached methods without filling the caches")
-	public void testCacheWritesDropped() {
-		final String key = UUID.randomUUID().toString();
-		final int runsBefore = ServiceWarmUpTestServiceComponent.CACHED_METHOD_RUNS.get();
-		// Step 1: the cached methods, during a warm-up, run without filling the caches.
-		final ServiceWarmUpResult result = this.warmUpOnce(key, input -> {
-			this.serviceWarmUpTestServiceComponent.getFromLocalCache(input);
-			this.serviceWarmUpTestServiceComponent.getFromCentralCache(input);
-		});
-		Assertions.assertEquals(0L, result.getFailedCallCount());
-		Assertions.assertEquals(runsBefore + 2, ServiceWarmUpTestServiceComponent.CACHED_METHOD_RUNS.get());
-		Assertions.assertNull(this.localCacheManager.getCache(ServiceWarmUpTestServiceComponent.LOCAL_CACHE).get(key));
-		Assertions.assertNull(this.centralCacheManager.getCache(ServiceWarmUpTestServiceComponent.CENTRAL_CACHE).get(key));
-		// Step 2: the same calls outside a warm-up fill them.
-		this.serviceWarmUpTestServiceComponent.getFromLocalCache(key);
-		this.serviceWarmUpTestServiceComponent.getFromCentralCache(key);
-		Assertions.assertNotNull(this.localCacheManager.getCache(ServiceWarmUpTestServiceComponent.LOCAL_CACHE).get(key));
-		Assertions.assertNotNull(this.centralCacheManager.getCache(ServiceWarmUpTestServiceComponent.CENTRAL_CACHE).get(key));
-	}
-
-	/**
-	 * Tests that warm-up calls neither evict nor clear caches filled outside the warm-up, and that a synchronized cached
-	 * method loads its value without storing it; outside the warm-up, the same eviction and load work.
-	 */
-	@Test
-	@DisplayName("Warm-up calls neither evict nor clear caches, and synchronized cached methods store nothing")
-	public void testCacheEvictionsAndClearsDropped() {
-		final String filledKey = UUID.randomUUID().toString();
-		final String newKey = UUID.randomUUID().toString();
-		// Step 1: the caches are filled outside a warm-up.
-		this.serviceWarmUpTestServiceComponent.getFromLocalCache(filledKey);
-		this.serviceWarmUpTestServiceComponent.getFromCentralCache(filledKey);
-		Assertions.assertNotNull(this.localCacheManager.getCache(ServiceWarmUpTestServiceComponent.LOCAL_CACHE).get(filledKey));
-		Assertions.assertNotNull(this.centralCacheManager.getCache(ServiceWarmUpTestServiceComponent.CENTRAL_CACHE).get(filledKey));
-		// Step 2: evictions during a warm-up are dropped.
-		final ServiceWarmUpResult evictResult = this.warmUpOnce(filledKey, input -> {
-			this.serviceWarmUpTestServiceComponent.evictFromLocalCache(input);
-			this.serviceWarmUpTestServiceComponent.evictFromCentralCache(input);
-		});
-		Assertions.assertEquals(0L, evictResult.getFailedCallCount());
-		Assertions.assertNotNull(this.localCacheManager.getCache(ServiceWarmUpTestServiceComponent.LOCAL_CACHE).get(filledKey));
-		Assertions.assertNotNull(this.centralCacheManager.getCache(ServiceWarmUpTestServiceComponent.CENTRAL_CACHE).get(filledKey));
-		// Step 3: clearing every cache during a warm-up is refused.
-		final ServiceWarmUpResult clearResult = this.warmUpOnce(filledKey, input -> this.cacheHelper.clearCaches());
-		Assertions.assertEquals(1L, clearResult.getFailedCallCount());
-		Assertions.assertTrue(ServiceWarmUpTest.hasCause(clearResult.getFirstError(), ServiceWarmUpSideEffectException.class),
-				String.valueOf(clearResult.getFirstError()));
-		Assertions.assertNotNull(this.localCacheManager.getCache(ServiceWarmUpTestServiceComponent.LOCAL_CACHE).get(filledKey));
-		Assertions.assertNotNull(this.centralCacheManager.getCache(ServiceWarmUpTestServiceComponent.CENTRAL_CACHE).get(filledKey));
-		// Step 4: synchronized cached methods load a new key during a warm-up without storing it.
-		final int runsBefore = ServiceWarmUpTestServiceComponent.CACHED_METHOD_RUNS.get();
-		final ServiceWarmUpResult loadResult = this.warmUpOnce(newKey, input -> {
-			this.serviceWarmUpTestServiceComponent.getFromLocalCacheSynchronized(input);
-			this.serviceWarmUpTestServiceComponent.getFromCentralCacheSynchronized(input);
-		});
-		Assertions.assertEquals(0L, loadResult.getFailedCallCount());
-		Assertions.assertEquals(runsBefore + 2, ServiceWarmUpTestServiceComponent.CACHED_METHOD_RUNS.get());
-		Assertions.assertNull(this.localCacheManager.getCache(ServiceWarmUpTestServiceComponent.LOCAL_CACHE).get(newKey));
-		Assertions.assertNull(this.centralCacheManager.getCache(ServiceWarmUpTestServiceComponent.CENTRAL_CACHE).get(newKey));
-		// Step 5: outside a warm-up, the eviction and the load work.
-		this.serviceWarmUpTestServiceComponent.evictFromLocalCache(filledKey);
-		this.serviceWarmUpTestServiceComponent.evictFromCentralCache(filledKey);
-		this.serviceWarmUpTestServiceComponent.getFromLocalCacheSynchronized(newKey);
-		this.serviceWarmUpTestServiceComponent.getFromCentralCacheSynchronized(newKey);
-		Assertions.assertNull(this.localCacheManager.getCache(ServiceWarmUpTestServiceComponent.LOCAL_CACHE).get(filledKey));
-		Assertions.assertNull(this.centralCacheManager.getCache(ServiceWarmUpTestServiceComponent.CENTRAL_CACHE).get(filledKey));
-		Assertions.assertNotNull(this.localCacheManager.getCache(ServiceWarmUpTestServiceComponent.LOCAL_CACHE).get(newKey));
-		Assertions.assertNotNull(this.centralCacheManager.getCache(ServiceWarmUpTestServiceComponent.CENTRAL_CACHE).get(newKey));
-	}
-
-	/**
-	 * Tests the cache operations the other cache tests do not reach: a cached method on the cache aspect's default cache
-	 * manager, a cache put and an eviction of every entry. During a warm-up nothing is stored or evicted; outside it, the
-	 * same calls store and evict.
-	 */
-	@Test
-	@DisplayName("Warm-up calls store nothing through the default cache manager or a cache put, and evict no entry wholesale")
-	public void testCacheDefaultsPutsAndEvictAllDropped() {
-		final String filledKey = UUID.randomUUID().toString();
-		final String newKey = UUID.randomUUID().toString();
-		this.serviceWarmUpTestServiceComponent.getFromLocalCache(filledKey);
-		// Step 1: during a warm-up, the default cache manager and the cache put store nothing, and evicting every entry
-		// is dropped.
-		final int runsBefore = ServiceWarmUpTestServiceComponent.CACHED_METHOD_RUNS.get();
-		final ServiceWarmUpResult result = this.warmUpOnce(newKey, input -> {
-			this.serviceWarmUpTestServiceComponent.getFromDefaultCache(input);
-			this.serviceWarmUpTestServiceComponent.putInLocalCache(input);
-			this.serviceWarmUpTestServiceComponent.evictAllFromLocalCache();
-		});
-		Assertions.assertEquals(0L, result.getFailedCallCount());
-		Assertions.assertEquals(runsBefore + 2, ServiceWarmUpTestServiceComponent.CACHED_METHOD_RUNS.get());
-		Assertions.assertNull(this.localCacheManager.getCache(ServiceWarmUpTestServiceComponent.DEFAULT_CACHE).get(newKey));
-		Assertions.assertNull(this.localCacheManager.getCache(ServiceWarmUpTestServiceComponent.LOCAL_CACHE).get(newKey));
-		Assertions.assertNotNull(this.localCacheManager.getCache(ServiceWarmUpTestServiceComponent.LOCAL_CACHE).get(filledKey));
-		// Step 2: outside a warm-up, the same calls store, and evict every entry.
-		this.serviceWarmUpTestServiceComponent.getFromDefaultCache(newKey);
-		this.serviceWarmUpTestServiceComponent.putInLocalCache(newKey);
-		Assertions.assertNotNull(this.localCacheManager.getCache(ServiceWarmUpTestServiceComponent.DEFAULT_CACHE).get(newKey));
-		Assertions.assertNotNull(this.localCacheManager.getCache(ServiceWarmUpTestServiceComponent.LOCAL_CACHE).get(newKey));
-		this.serviceWarmUpTestServiceComponent.evictAllFromLocalCache();
-		Assertions.assertNull(this.localCacheManager.getCache(ServiceWarmUpTestServiceComponent.LOCAL_CACHE).get(filledKey));
-		Assertions.assertNull(this.localCacheManager.getCache(ServiceWarmUpTestServiceComponent.LOCAL_CACHE).get(newKey));
-	}
-
-	/**
 	 * Tests that a warm-up records its successful and failed calls, and its run, as metrics.
 	 */
 	@Test
@@ -737,56 +605,6 @@ public class ServiceWarmUpTest extends ContainerTestHelper {
 		Assertions.assertEquals(failedCallsBefore + 5, this.getCallCount("error"));
 		// Every warm-up ended on its own, so the run has no stop reason.
 		Assertions.assertEquals(runsBefore + 1, this.getRunCount("ENDED"));
-	}
-
-	/**
-	 * Tests that warm-up calls cannot send messages: the pooled connection factory refuses the connection before the
-	 * send.
-	 */
-	@Test
-	@DisplayName("Warm-up calls cannot send messages")
-	public void testMessagesRefused() {
-		final ServiceWarmUpResult result = this.warmUpOnce("message", input -> this.serviceWarmUpTestServiceComponent.send(input));
-		Assertions.assertEquals(1L, result.getFailedCallCount());
-		Assertions.assertTrue(ServiceWarmUpTest.hasCause(result.getFirstError(), ServiceWarmUpSideEffectException.class),
-				String.valueOf(result.getFirstError()));
-	}
-
-	/**
-	 * Tests that warm-up calls cannot make HTTP requests, and that the same request works outside the warm-up.
-	 */
-	@Test
-	@DisplayName("Warm-up calls cannot make HTTP requests")
-	public void testHttpRequestsRefused() {
-		final ServiceWarmUpResult result = this.warmUpOnce(this.port, input -> this.serviceWarmUpTestServiceComponent.getHealthCheck(input));
-		Assertions.assertEquals(1L, result.getFailedCallCount());
-		Assertions.assertTrue(ServiceWarmUpTest.hasCause(result.getFirstError(), ServiceWarmUpSideEffectException.class),
-				String.valueOf(result.getFirstError()));
-		Assertions.assertNotNull(this.serviceWarmUpTestServiceComponent.getHealthCheck(this.port));
-	}
-
-	/**
-	 * Tests that warm-up calls cannot record statistics events.
-	 */
-	@Test
-	@DisplayName("Warm-up calls cannot record statistics events")
-	public void testStatisticsRefused() {
-		final ServiceWarmUpResult result = this.warmUpOnce(1, input -> this.serviceWarmUpTestServiceComponent.recordStatisticsEvent());
-		Assertions.assertEquals(1L, result.getFailedCallCount());
-		Assertions.assertTrue(ServiceWarmUpTest.hasCause(result.getFirstError(), ServiceWarmUpSideEffectException.class),
-				String.valueOf(result.getFirstError()));
-	}
-
-	/**
-	 * Tests that warm-up calls cannot buffer statistics summary deltas, which the event guard does not cover.
-	 */
-	@Test
-	@DisplayName("Warm-up calls cannot buffer statistics summary deltas")
-	public void testStatisticsSummaryRefused() {
-		final ServiceWarmUpResult result = this.warmUpOnce(1, input -> this.serviceWarmUpTestServiceComponent.bufferStatisticsSummaryDelta());
-		Assertions.assertEquals(1L, result.getFailedCallCount());
-		Assertions.assertTrue(ServiceWarmUpTest.hasCause(result.getFirstError(), ServiceWarmUpSideEffectException.class),
-				String.valueOf(result.getFirstError()));
 	}
 
 }

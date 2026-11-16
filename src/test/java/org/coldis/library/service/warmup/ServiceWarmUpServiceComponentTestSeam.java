@@ -53,6 +53,7 @@ public final class ServiceWarmUpServiceComponentTestSeam {
 			final ServiceWarmUpProperties properties) {
 		final ServiceWarmUpProperties copy = new ServiceWarmUpProperties();
 		copy.setEnabled(properties.getEnabled());
+		copy.setReadOnlyTransaction(properties.getReadOnlyTransaction());
 		copy.setTimeLimit(properties.getTimeLimit());
 		copy.setMinimumCalls(properties.getMinimumCalls());
 		copy.setParallelism(properties.getParallelism());

@@ -3,8 +3,8 @@ package org.coldis.library.service.warmup;
 import java.util.concurrent.atomic.AtomicInteger;
 
 /**
- * Marks the threads that run warm-up calls, so that the library refuses or drops what those calls must not do. Code
- * outside this library can use {@link #isWarmingUp()} to skip its own side effects, such as sending logs. Checking a
+ * Marks the threads that run warm-up calls, so that the library's database guard refuses new read-write transactions
+ * on them. Code outside this library can use {@link #isWarmingUp()} to skip its own side effects, such as sending logs. Checking a
  * thread costs a single volatile read once no warm-up runs.
  */
 public final class ServiceWarmUpContext {

@@ -208,12 +208,20 @@ public class ServiceWarmUpServiceComponent implements ApplicationListener<Applic
 	/**
 	 * Creates the read-only transaction around each call, with the single (or primary) transaction manager.
 	 *
-	 * @return The transaction template, or null without a single transaction manager.
+	 * @param  warmUpProperties Properties.
+	 * @return                  The transaction template, or null when the read-only transaction is off or there is no
+	 *                          single transaction manager.
 	 */
-	private TransactionTemplate createReadOnlyTransactionTemplate() {
-		final PlatformTransactionManager transactionManager = this.transactionManagerProvider.getIfUnique();
+	private TransactionTemplate createReadOnlyTransactionTemplate(
+			final ServiceWarmUpProperties warmUpProperties) {
+		final boolean isReadOnlyTransactionOn = !Boolean.FALSE.equals(warmUpProperties.getReadOnlyTransaction());
+		final PlatformTransactionManager transactionManager = (isReadOnlyTransactionOn ? this.transactionManagerProvider.getIfUnique() : null);
 		TransactionTemplate transactionTemplate = null;
-		if (transactionManager == null) {
+		if (!isReadOnlyTransactionOn) {
+			ServiceWarmUpServiceComponent.LOGGER.warn("Service warm-up calls run without a read-only transaction, since '{}' is false: nothing keeps them "
+					+ "from writing to the database.", ServiceWarmUpProperties.READ_ONLY_TRANSACTION_PROPERTY);
+		}
+		else if (transactionManager == null) {
 			ServiceWarmUpServiceComponent.LOGGER.info("Service warm-up calls run without an outer read-only transaction, since there is no single "
 					+ "transaction manager: the service's @Transactional methods run read-only and every other new read-write transaction is "
 					+ "refused, but writes made outside any transaction are not.");
@@ -333,7 +341,7 @@ public class ServiceWarmUpServiceComponent implements ApplicationListener<Applic
 			final List<? extends ServiceWarmUp<?>> warmUps,
 			final ServiceWarmUpProperties warmUpProperties) {
 		final long startNanos = System.nanoTime();
-		final TransactionTemplate transactionTemplate = this.createReadOnlyTransactionTemplate();
+		final TransactionTemplate transactionTemplate = this.createReadOnlyTransactionTemplate(warmUpProperties);
 		final List<ServiceWarmUpExecution<?>> executions = new ArrayList<>();
 		for (final ServiceWarmUp<?> warmUp : warmUps) {
 			executions.add(ServiceWarmUpExecution.of(warmUp, transactionTemplate, warmUpProperties.getMaximumConsecutiveErrors()));

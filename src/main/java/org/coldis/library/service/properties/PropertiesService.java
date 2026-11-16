@@ -9,7 +9,6 @@ import org.coldis.library.model.SimpleMessage;
 import org.messaginghub.pooled.jms.JmsPoolConnectionFactory;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.aop.framework.AopProxyUtils;
 import org.springframework.beans.BeansException;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 import org.springframework.context.ApplicationContext;
@@ -48,24 +47,6 @@ public class PropertiesService implements ApplicationContextAware {
 	}
 
 	/**
-	 * Gets the object behind a bean's proxies, if any, so that a write reaches the bean's own fields: a class-based
-	 * proxy is a subclass of the bean's class with fields of its own, which the bean never reads.
-	 *
-	 * @param  proxiedBean Bean, as the context returns it.
-	 * @return             The bean, behind its proxies.
-	 */
-	private static Object getTargetBean(
-			final Object proxiedBean) {
-		Object bean = proxiedBean;
-		Object target = AopProxyUtils.getSingletonTarget(bean);
-		while (target != null) {
-			bean = target;
-			target = AopProxyUtils.getSingletonTarget(bean);
-		}
-		return bean;
-	}
-
-	/**
 	 * Sets a bean configuration property.
 	 *
 	 * @param name  Property name.
@@ -94,11 +75,7 @@ public class PropertiesService implements ApplicationContextAware {
 
 			// Sets the property.
 			PropertiesService.LOGGER.info("Setting property " + name + " to " + PropertiesLogHelper.getLoggedValue(name, value) + " in bean " + beanName + ".");
-			// Which beans are accepted is decided on the bean as the context returns it. A pooled JMS connection factory may
-			// be a class-based proxy (the service warm-up proxies them), so its write goes behind the proxy; other beans are
-			// written as before.
-			ReflectionHelper.setAttribute((bean instanceof JmsPoolConnectionFactory ? PropertiesService.getTargetBean(bean) : bean), fieldAccess, name,
-					value);
+			ReflectionHelper.setAttribute(bean, fieldAccess, name, value);
 		}
 
 	}
