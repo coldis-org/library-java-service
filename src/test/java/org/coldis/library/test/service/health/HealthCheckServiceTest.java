@@ -1,6 +1,10 @@
 package org.coldis.library.test.service.health;
 
+import java.time.Duration;
+
 import org.coldis.library.exception.IntegrationException;
+import org.coldis.library.helper.DateTimeHelper;
+import org.coldis.library.service.health.LivenessHealthCheckServiceComponent;
 import org.coldis.library.test.StartTestWithContainerExtension;
 import org.coldis.library.test.TestHelper;
 import org.coldis.library.test.TestWithContainer;
@@ -18,6 +22,7 @@ import org.springframework.boot.test.context.SpringBootTest.WebEnvironment;
 import org.springframework.context.ApplicationContext;
 import org.springframework.http.HttpStatus;
 import org.springframework.test.annotation.DirtiesContext;
+import org.springframework.test.util.ReflectionTestUtils;
 import org.testcontainers.containers.GenericContainer;
 
 /**
@@ -107,6 +112,33 @@ public class HealthCheckServiceTest extends ContainerTestHelper {
 			AvailabilityChangeEvent.publish(this.applicationContext, LivenessState.CORRECT);
 		}
 		Assertions.assertEquals(1, this.checkEntityServiceClient.checkLiveness().getValue().intValue());
+	}
+
+	/**
+	 * Tests that the routing check reports its repository read to the liveness check: with a
+	 * repository failing for longer than the limit, liveness answers 503 until a routing check
+	 * reads the (real) repository successfully.
+	 *
+	 * @throws Exception If the test fails.
+	 */
+	@Test
+	@DisplayName("A successful routing check clears a repository failure past the limit")
+	public void testRoutingCheckRecordsRepositoryOutcome() throws Exception {
+		final LivenessHealthCheckServiceComponent liveness = this.applicationContext.getBean(LivenessHealthCheckServiceComponent.class);
+		try {
+			// The repository has been failing for longer than the limit (15 minutes by default), the last failure just now.
+			ReflectionTestUtils.setField(liveness, "repositoryFailingSince", DateTimeHelper.getCurrentLocalDateTime().minus(Duration.ofMinutes(16)));
+			ReflectionTestUtils.setField(liveness, "repositoryLastFailure", DateTimeHelper.getCurrentLocalDateTime());
+			final IntegrationException exception = Assertions.assertThrows(IntegrationException.class,
+					() -> this.checkEntityServiceClient.checkLiveness());
+			Assertions.assertEquals(HttpStatus.SERVICE_UNAVAILABLE.value(), exception.getStatusCode());
+			// The routing check reads the repository successfully and records it.
+			Assertions.assertEquals(1, this.checkEntityServiceClient.check().getValue().intValue());
+			Assertions.assertEquals(1, this.checkEntityServiceClient.checkLiveness().getValue().intValue());
+		}
+		finally {
+			liveness.recordRepositorySuccess();
+		}
 	}
 
 }

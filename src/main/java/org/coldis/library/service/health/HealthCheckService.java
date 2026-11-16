@@ -32,12 +32,6 @@ public class HealthCheckService {
 	public static final String HEALTH_CHECK_KEY = "health-check";
 
 	/**
-	 * Repository health check service.
-	 */
-	@Autowired(required = false)
-	private RepositoryHealthCheckServiceComponent repositoryHealthCheckService;
-
-	/**
 	 * Readiness health check service.
 	 */
 	@Autowired
@@ -75,21 +69,8 @@ public class HealthCheckService {
 			}
 			// If the application accepts traffic.
 			else {
-				// The health check default value.
-				HealthCheckValue checkValue = new HealthCheckValue();
-				// If the repository is available.
-				if (this.repositoryHealthCheckService != null) {
-					// Touches the repository, recording the outcome for the liveness check.
-					try {
-						checkValue = this.repositoryHealthCheckService.touch();
-						this.livenessHealthCheckService.recordRepositorySuccess();
-					}
-					catch (final Throwable throwable) {
-						this.livenessHealthCheckService.recordRepositoryFailure();
-						throw throwable;
-					}
-				}
-				response = ResponseEntity.ok(checkValue);
+				// Reads the repository (when there is one), recording the outcome for the liveness check.
+				response = ResponseEntity.ok(this.livenessHealthCheckService.touchRepository());
 			}
 		}
 		// If the health check does not succeed.

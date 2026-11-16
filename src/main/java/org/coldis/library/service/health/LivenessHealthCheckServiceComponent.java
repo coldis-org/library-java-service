@@ -16,8 +16,12 @@ import org.springframework.stereotype.Service;
  * whether it accepts traffic (readiness). A slow or unreachable dependency does not make the
  * application dead: restarting it would not fix the dependency, and every instance would restart at
  * once. The only dependency this check looks at is the repository, and only as a last resort: it
- * fails when the repository touch of the routing check has been failing continuously for longer than
+ * fails when the repository read of the routing check has been failing continuously for longer than
  * the configured limit, for an instance stuck with connections that never recover.
+ *
+ * The repository evidence comes from the routing check (/health-check), so it only exists while that
+ * check is polled: a failure not followed by another one within the configured recency does not count
+ * as a continuous failure.
  */
 @Service
 @ConditionalOnProperty(
@@ -33,59 +37,107 @@ public class LivenessHealthCheckServiceComponent {
 	private ApplicationAvailability applicationAvailability;
 
 	/**
-	 * How long the repository touch may fail continuously before the application is taken as not
+	 * Repository health check service.
+	 */
+	@Autowired(required = false)
+	private RepositoryHealthCheckServiceComponent repositoryHealthCheckService;
+
+	/**
+	 * How long the repository read may fail continuously before the application is taken as not
 	 * alive. Zero (or negative) turns the repository off for liveness.
 	 */
 	@Value("${org.coldis.configuration.health-check-liveness-repository-failure-limit:15m}")
 	private Duration repositoryFailureLimit;
 
 	/**
-	 * When the repository touch started failing (null while it succeeds).
+	 * How recent the last failed repository read must be for the failure to count as continuing.
 	 */
-	private volatile LocalDateTime repositoryFailingSince;
+	@Value("${org.coldis.configuration.health-check-liveness-repository-failure-recency:2m}")
+	private Duration repositoryFailureRecency;
 
 	/**
-	 * Records a successful repository touch.
+	 * When the repository read started failing (null while it succeeds).
 	 */
-	public void recordRepositorySuccess() {
+	private LocalDateTime repositoryFailingSince;
+
+	/**
+	 * When the repository read last failed (null while it succeeds).
+	 */
+	private LocalDateTime repositoryLastFailure;
+
+	/**
+	 * Records a successful repository read.
+	 */
+	public synchronized void recordRepositorySuccess() {
 		this.repositoryFailingSince = null;
+		this.repositoryLastFailure = null;
 	}
 
 	/**
-	 * Records a failed repository touch: the first failure in a row starts the count.
+	 * Records a failed repository read: the first failure in a row starts the count.
 	 */
-	public void recordRepositoryFailure() {
+	public synchronized void recordRepositoryFailure() {
+		final LocalDateTime now = DateTimeHelper.getCurrentLocalDateTime();
 		if (this.repositoryFailingSince == null) {
-			this.repositoryFailingSince = DateTimeHelper.getCurrentLocalDateTime();
+			this.repositoryFailingSince = now;
 		}
+		this.repositoryLastFailure = now;
 	}
 
 	/**
-	 * Whether the repository has been failing continuously for longer than the limit.
+	 * Reads the repository (when there is one) and records the outcome for the liveness check. A
+	 * failure is recorded and re-thrown. The outcome is recorded outside the read's transaction, so a
+	 * failure on commit counts too.
+	 *
+	 * @return           The health check value.
+	 * @throws Throwable If the repository cannot be read.
+	 */
+	public HealthCheckValue touchRepository() throws Throwable {
+		HealthCheckValue checkValue = new HealthCheckValue();
+		if (this.repositoryHealthCheckService != null) {
+			try {
+				checkValue = this.repositoryHealthCheckService.touch();
+				this.recordRepositorySuccess();
+			}
+			catch (final Throwable throwable) {
+				this.recordRepositoryFailure();
+				throw throwable;
+			}
+		}
+		return checkValue;
+	}
+
+	/**
+	 * Whether the repository has been failing continuously for longer than the limit: the first
+	 * failure in a row is older than the limit, and the last one is recent.
 	 *
 	 * @return If the repository failure limit is exceeded.
 	 */
-	private Boolean isRepositoryFailureLimitExceeded() {
+	private synchronized Boolean isRepositoryFailureLimitExceeded() {
 		Boolean exceeded = false;
-		final LocalDateTime failingSince = this.repositoryFailingSince;
 		final Boolean limitEnabled = (this.repositoryFailureLimit != null) && !this.repositoryFailureLimit.isNegative()
 				&& !this.repositoryFailureLimit.isZero();
-		if (limitEnabled && (failingSince != null)) {
-			final Duration failingFor = Duration.between(failingSince, DateTimeHelper.getCurrentLocalDateTime());
-			exceeded = failingFor.compareTo(this.repositoryFailureLimit) > 0;
+		if (limitEnabled && (this.repositoryFailingSince != null) && (this.repositoryLastFailure != null)) {
+			final LocalDateTime now = DateTimeHelper.getCurrentLocalDateTime();
+			final Boolean failingLongerThanLimit = Duration.between(this.repositoryFailingSince, now).compareTo(this.repositoryFailureLimit) > 0;
+			final Boolean lastFailureRecent = (this.repositoryFailureRecency == null)
+					|| (Duration.between(this.repositoryLastFailure, now).compareTo(this.repositoryFailureRecency) <= 0);
+			exceeded = failingLongerThanLimit && lastFailureRecent;
 		}
 		return exceeded;
 	}
 
 	/**
-	 * Whether the application is alive: Spring's liveness state is correct (or not tracked), and the
-	 * repository has not been failing for longer than the limit.
+	 * Whether the application is alive: Spring's liveness state is correct (taken as correct before
+	 * Spring first publishes it, and when it is not tracked), and the repository has not been failing
+	 * continuously for longer than the limit.
 	 *
 	 * @return If the application is alive.
 	 */
 	public Boolean isLive() {
 		Boolean live = true;
-		if ((this.applicationAvailability != null) && !LivenessState.CORRECT.equals(this.applicationAvailability.getLivenessState())) {
+		if ((this.applicationAvailability != null)
+				&& !LivenessState.CORRECT.equals(this.applicationAvailability.getState(LivenessState.class, LivenessState.CORRECT))) {
 			live = false;
 		}
 		else if (this.isRepositoryFailureLimitExceeded()) {
