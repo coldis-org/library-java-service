@@ -4,6 +4,8 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
+import org.springframework.http.HttpStatus;
+import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestMethod;
 import org.springframework.web.bind.annotation.RestController;
@@ -36,25 +38,41 @@ public class HealthCheckService {
 	private RepositoryHealthCheckServiceComponent repositoryHealthCheckService;
 
 	/**
+	 * Readiness health check service.
+	 */
+	@Autowired
+	private ReadinessHealthCheckServiceComponent readinessHealthCheckService;
+
+	/**
 	 * Health check service.
 	 *
-	 * @return           The health check value.
+	 * @return           The health check value, or 503 (no body) while the
+	 *                   application does not accept traffic.
 	 * @throws Throwable If the health cannot be checked.
 	 */
 	@RequestMapping(method = RequestMethod.GET)
-	public HealthCheckValue check() throws Throwable {
+	public ResponseEntity<HealthCheckValue> check() throws Throwable {
 		HealthCheckService.LOGGER.debug("Health check starting.");
 		final long initMillis = System.currentTimeMillis();
+		ResponseEntity<HealthCheckValue> response = null;
 		try {
-			// The health check default value.
-			HealthCheckValue checkValue = new HealthCheckValue();
-			// If the repository is available.
-			if (this.repositoryHealthCheckService != null) {
-				// Touches the repository.
-				checkValue = this.repositoryHealthCheckService.touch();
+			// While the application does not accept traffic (starting or stopping),
+			// answers 503 without an error: it is an expected state, not a failure.
+			if (!this.readinessHealthCheckService.isReady()) {
+				HealthCheckService.LOGGER.debug("Health check refused: the application does not accept traffic.");
+				response = ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE).build();
 			}
-			// Returns the entity id.
-			return checkValue;
+			// If the application accepts traffic.
+			else {
+				// The health check default value.
+				HealthCheckValue checkValue = new HealthCheckValue();
+				// If the repository is available.
+				if (this.repositoryHealthCheckService != null) {
+					// Touches the repository.
+					checkValue = this.repositoryHealthCheckService.touch();
+				}
+				response = ResponseEntity.ok(checkValue);
+			}
 		}
 		// If the health check does not succeed.
 		catch (final Throwable throwable) {
@@ -69,6 +87,7 @@ public class HealthCheckService {
 			final long executionTime = System.currentTimeMillis() - initMillis;
 			HealthCheckService.LOGGER.debug("Health check successfully finished within '" + executionTime + "' milliseconds.");
 		}
+		return response;
 	}
 
 }
