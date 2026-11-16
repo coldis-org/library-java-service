@@ -6,18 +6,19 @@ import java.util.Properties;
 
 import org.coldis.library.service.warmup.ServiceWarmUpAutoConfiguration;
 import org.coldis.library.service.warmup.ServiceWarmUpBeanPostProcessor;
-import org.coldis.library.service.warmup.ServiceWarmUpCacheManager;
-import org.coldis.library.service.warmup.ServiceWarmUpClientHttpRequestFactory;
+import org.coldis.library.service.warmup.ServiceWarmUpCacheResolver;
 import org.coldis.library.service.warmup.ServiceWarmUpHealthCheckFilter;
 import org.coldis.library.service.warmup.ServiceWarmUpProperties;
 import org.coldis.library.service.warmup.ServiceWarmUpResult;
 import org.coldis.library.service.warmup.ServiceWarmUpServiceComponent;
 import org.coldis.library.service.warmup.ServiceWarmUpServiceComponentTestSeam;
 import org.coldis.library.service.warmup.ServiceWarmUpSideEffectException;
+import org.coldis.library.service.warmup.ServiceWarmUpStopReason;
 import org.coldis.library.service.warmup.ServiceWarmUpTransactionExecutionListener;
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.springframework.aop.support.AopUtils;
 import org.springframework.boot.autoconfigure.AutoConfigurations;
 import org.springframework.boot.autoconfigure.context.ConfigurationPropertiesAutoConfiguration;
 import org.springframework.boot.test.context.runner.WebApplicationContextRunner;
@@ -30,10 +31,12 @@ import org.springframework.context.annotation.Configuration;
 import org.springframework.core.io.ClassPathResource;
 import org.springframework.core.io.support.PropertiesLoaderUtils;
 import org.springframework.http.client.ClientHttpRequestInterceptor;
+import org.springframework.http.client.SimpleClientHttpRequestFactory;
 import org.springframework.transaction.ConfigurableTransactionManager;
 import org.springframework.transaction.TransactionDefinition;
 import org.springframework.transaction.support.AbstractPlatformTransactionManager;
 import org.springframework.transaction.support.DefaultTransactionStatus;
+import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.web.client.RestTemplate;
 
 /**
@@ -155,6 +158,24 @@ public class ServiceWarmUpOptInTest {
 	}
 
 	/**
+	 * A second transaction manager, so that none is the single one.
+	 */
+	@Configuration
+	public static class SecondTransactionManagerBeans {
+
+		/**
+		 * Second transaction manager.
+		 *
+		 * @return The transaction manager.
+		 */
+		@Bean
+		public NoResourceTransactionManager secondTransactionManager() {
+			return new NoResourceTransactionManager();
+		}
+
+	}
+
+	/**
 	 * Servlet web context, without a server, with the warm-up configuration and a service's beans.
 	 */
 	private final WebApplicationContextRunner contextRunner = new WebApplicationContextRunner()
@@ -205,8 +226,9 @@ public class ServiceWarmUpOptInTest {
 			Assertions.assertNull(context.getStartupFailure());
 			Assertions.assertEquals(0, context.getBeanNamesForType(ServiceWarmUpServiceComponent.class).length);
 			Assertions.assertEquals(0, context.getBeanNamesForType(ServiceWarmUpBeanPostProcessor.class).length);
+			Assertions.assertEquals(0, context.getBeanNamesForType(ServiceWarmUpCacheResolver.class).length);
 			Assertions.assertInstanceOf(ConcurrentMapCacheManager.class, context.getBean(CacheManager.class));
-			Assertions.assertFalse(context.getBean(RestTemplate.class).getRequestFactory() instanceof ServiceWarmUpClientHttpRequestFactory);
+			Assertions.assertFalse(AopUtils.isAopProxy(context.getBean(RestTemplate.class)));
 			Assertions.assertTrue(context.getBean(ConfigurableTransactionManager.class).getTransactionExecutionListeners().isEmpty());
 			Assertions.assertFalse(ServiceWarmUpOptInTest.hasHealthCheckFilter(context));
 			Assertions.assertEquals(0, context.getBeanNamesForType(ServiceWarmUpAutoConfiguration.ServiceWarmUpTransactionConfiguration.class).length);
@@ -214,17 +236,20 @@ public class ServiceWarmUpOptInTest {
 	}
 
 	/**
-	 * Tests that, with the warm-up on, the warm-up service exists and caches, templates and transaction managers are
-	 * guarded.
+	 * Tests that, with the warm-up on, the warm-up service exists, templates and transaction managers are guarded, and
+	 * cache managers and templates keep their types and request factories.
 	 */
 	@Test
-	@DisplayName("With the warm-up on, the warm-up service exists and caches, templates and transaction managers are guarded")
+	@DisplayName("With the warm-up on, the warm-up service exists, templates and transaction managers are guarded, and bean types are kept")
 	public void testOnRegistersServiceAndGuards() {
 		this.contextRunner.withPropertyValues(ServiceWarmUpProperties.ENABLED_PROPERTY + "=true").run(context -> {
 			Assertions.assertNull(context.getStartupFailure());
 			Assertions.assertEquals(1, context.getBeanNamesForType(ServiceWarmUpServiceComponent.class).length);
-			Assertions.assertInstanceOf(ServiceWarmUpCacheManager.class, context.getBean(CacheManager.class));
-			Assertions.assertInstanceOf(ServiceWarmUpClientHttpRequestFactory.class, context.getBean(RestTemplate.class).getRequestFactory());
+			Assertions.assertEquals(1, context.getBeanNamesForType(ServiceWarmUpCacheResolver.class).length);
+			Assertions.assertInstanceOf(ConcurrentMapCacheManager.class, context.getBean(CacheManager.class));
+			final RestTemplate restTemplate = context.getBean(RestTemplate.class);
+			Assertions.assertTrue(AopUtils.isCglibProxy(restTemplate));
+			Assertions.assertInstanceOf(SimpleClientHttpRequestFactory.class, restTemplate.getRequestFactory());
 			Assertions.assertTrue(context.getBean(ConfigurableTransactionManager.class).getTransactionExecutionListeners().stream()
 					.anyMatch(listener -> listener instanceof ServiceWarmUpTransactionExecutionListener));
 			Assertions.assertTrue(ServiceWarmUpOptInTest.hasHealthCheckFilter(context));
@@ -233,22 +258,44 @@ public class ServiceWarmUpOptInTest {
 	}
 
 	/**
-	 * Tests that a template that already intercepts requests gets the guard as its first interceptor, which refuses a
-	 * request from a warm-up call before it is made.
+	 * Tests that a template that already intercepts requests keeps its interceptors as they were, and refuses a request
+	 * from a warm-up call before it is made.
 	 */
 	@Test
-	@DisplayName("A template that already intercepts requests refuses warm-up requests through a first interceptor")
+	@DisplayName("A template that already intercepts requests keeps its interceptors and refuses warm-up requests")
 	public void testInterceptedTemplateGuarded() {
 		this.contextRunner.withUserConfiguration(InterceptedTemplateBeans.class).withPropertyValues(ServiceWarmUpProperties.ENABLED_PROPERTY + "=true")
 				.run(context -> {
 					Assertions.assertNull(context.getStartupFailure());
 					final RestTemplate restTemplate = context.getBean("interceptedRestTemplate", RestTemplate.class);
-					Assertions.assertEquals(2, restTemplate.getInterceptors().size());
-					Assertions.assertSame(InterceptedTemplateBeans.PASS_THROUGH, restTemplate.getInterceptors().get(1));
+					Assertions.assertEquals(List.of(InterceptedTemplateBeans.PASS_THROUGH), restTemplate.getInterceptors());
 					final List<ServiceWarmUpResult> results = ServiceWarmUpServiceComponentTestSeam.warmUp(context.getBean(ServiceWarmUpServiceComponent.class), List.of(
 							new ServiceWarmUpTestRoutine<>(() -> List.of("http://localhost:9/"), input -> restTemplate.getForObject(input, String.class))),
 							ServiceWarmUpOptInTest.createProperties());
 					Assertions.assertEquals(1L, results.get(0).getFailedCallCount());
+					Assertions.assertInstanceOf(ServiceWarmUpSideEffectException.class, results.get(0).getFirstError());
+				});
+	}
+
+	/**
+	 * Tests that, with two transaction managers and none primary, the warm-up runs its calls without an outer
+	 * transaction, and that a new read-write transaction is still refused on each manager.
+	 */
+	@Test
+	@DisplayName("With two transaction managers, the warm-up runs and new read-write transactions are still refused")
+	public void testTwoTransactionManagers() {
+		this.contextRunner.withUserConfiguration(SecondTransactionManagerBeans.class).withPropertyValues(ServiceWarmUpProperties.ENABLED_PROPERTY + "=true")
+				.run(context -> {
+					Assertions.assertNull(context.getStartupFailure());
+					final List<NoResourceTransactionManager> transactionManagers = List.copyOf(context.getBeansOfType(NoResourceTransactionManager.class).values());
+					Assertions.assertEquals(2, transactionManagers.size());
+					final List<ServiceWarmUpResult> results = ServiceWarmUpServiceComponentTestSeam.warmUp(context.getBean(ServiceWarmUpServiceComponent.class),
+							List.of(new ServiceWarmUpTestRoutine<>(() -> transactionManagers,
+									transactionManager -> new TransactionTemplate(transactionManager).executeWithoutResult(transactionStatus -> {}))),
+							ServiceWarmUpOptInTest.createProperties());
+					Assertions.assertEquals(ServiceWarmUpStopReason.INPUTS_EXHAUSTED, results.get(0).getStopReason());
+					Assertions.assertEquals(2L, results.get(0).getCallCount());
+					Assertions.assertEquals(2L, results.get(0).getFailedCallCount());
 					Assertions.assertInstanceOf(ServiceWarmUpSideEffectException.class, results.get(0).getFirstError());
 				});
 	}

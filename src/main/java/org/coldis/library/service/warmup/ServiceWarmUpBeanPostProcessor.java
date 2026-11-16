@@ -1,30 +1,41 @@
 package org.coldis.library.service.warmup;
 
-import org.springframework.beans.factory.config.BeanPostProcessor;
-import org.springframework.cache.CacheManager;
-import org.springframework.http.client.ClientHttpRequestInterceptor;
+import java.lang.reflect.Modifier;
+import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
+
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.aop.framework.AbstractAdvisingBeanPostProcessor;
+import org.springframework.cache.interceptor.CacheAspectSupport;
+import org.springframework.cache.interceptor.CacheOperationSource;
 import org.springframework.transaction.ConfigurableTransactionManager;
-import org.springframework.web.client.RestTemplate;
 
 /**
- * Guards the beans whose side effects warm-up calls must not have, on warm-up threads only: cache managers drop
- * writes, every {@link RestTemplate} refuses requests, and every transaction manager refuses new read-write
- * transactions. Other threads see the same caches, requests and transactions as before.
+ * Attaches every warm-up guard, on warm-up threads only; other threads see the same beans, caches and transactions as
+ * before:
+ * <ul>
+ * <li>the beans with methods in {@link ServiceWarmUpSideEffectAdvisor#GUARDS} ({@code RestTemplate}s, pooled JMS
+ * connection factories, statistics, cache clears) get a class-based proxy, a subclass of their own class, that refuses
+ * those methods;</li>
+ * <li>cache aspects and interceptors send their operations through {@link ServiceWarmUpCacheResolver}, which drops
+ * writes, evictions and clears, through a {@link ServiceWarmUpCacheOperationSource}; cache manager beans are not
+ * touched;</li>
+ * <li>transaction managers get a listener that refuses new read-write transactions.</li>
+ * </ul>
+ * Registered only when the warm-up is on.
  */
-public class ServiceWarmUpBeanPostProcessor implements BeanPostProcessor {
+public class ServiceWarmUpBeanPostProcessor extends AbstractAdvisingBeanPostProcessor {
 
 	/**
-	 * Name of the side effect refused for HTTP requests.
+	 * Serial.
 	 */
-	static final String HTTP_REQUEST = "HTTP request";
+	private static final long serialVersionUID = 2803622176390186251L;
 
 	/**
-	 * Interceptor that refuses requests from warm-up calls, for templates that already intercept requests.
+	 * Logger.
 	 */
-	private static final ClientHttpRequestInterceptor HTTP_GUARD = (request, body, execution) -> {
-		ServiceWarmUpContext.rejectDuringWarmUp(ServiceWarmUpBeanPostProcessor.HTTP_REQUEST);
-		return execution.execute(request, body);
-	};
+	private static final Logger LOGGER = LoggerFactory.getLogger(ServiceWarmUpBeanPostProcessor.class);
 
 	/**
 	 * Listener that refuses new read-write transactions on warm-up threads.
@@ -32,23 +43,19 @@ public class ServiceWarmUpBeanPostProcessor implements BeanPostProcessor {
 	private static final ServiceWarmUpTransactionExecutionListener TRANSACTION_GUARD = new ServiceWarmUpTransactionExecutionListener();
 
 	/**
-	 * Makes a template refuse requests from warm-up calls. A template without interceptors gets a guarded request
-	 * factory, since adding an interceptor would make it buffer every request body.
-	 *
-	 * @param restTemplate Template.
+	 * Final classes with guarded methods, already reported.
 	 */
-	private static void guard(
-			final RestTemplate restTemplate) {
-		if (restTemplate.getInterceptors().isEmpty()) {
-			if (!(restTemplate.getRequestFactory() instanceof ServiceWarmUpClientHttpRequestFactory)) {
-				restTemplate.setRequestFactory(new ServiceWarmUpClientHttpRequestFactory(restTemplate.getRequestFactory()));
-			}
-		}
-		else if (!restTemplate.getInterceptors().contains(ServiceWarmUpBeanPostProcessor.HTTP_GUARD)) {
-			// The live list keeps the guard first: setInterceptors would sort every interceptor by its declared order, putting
-			// the guard behind ordered ones and reordering the template's own interceptors on every thread.
-			restTemplate.getInterceptors().add(0, ServiceWarmUpBeanPostProcessor.HTTP_GUARD);
-		}
+	private final transient Set<Class<?>> reportedFinalClasses = ConcurrentHashMap.newKeySet();
+
+	/**
+	 * Constructor.
+	 */
+	public ServiceWarmUpBeanPostProcessor() {
+		super();
+		this.advisor = new ServiceWarmUpSideEffectAdvisor();
+		// Refuses before any other advice runs, and keeps the proxied beans of their own class.
+		this.setBeforeExistingAdvisors(true);
+		this.setProxyTargetClass(true);
 	}
 
 	/**
@@ -64,24 +71,54 @@ public class ServiceWarmUpBeanPostProcessor implements BeanPostProcessor {
 	}
 
 	/**
-	 * @see org.springframework.beans.factory.config.BeanPostProcessor#postProcessAfterInitialization(java.lang.Object,
+	 * Makes a cache aspect or interceptor send its operations, on warm-up threads, through the warm-up cache resolver.
+	 * The cache aspect is a single instance for the whole JVM, so a source already wrapped is kept as is.
+	 *
+	 * @param cacheAspect Cache aspect or interceptor.
+	 */
+	private static void guard(
+			final CacheAspectSupport cacheAspect) {
+		final CacheOperationSource currentSource = cacheAspect.getCacheOperationSource();
+		if ((currentSource != null) && !(currentSource instanceof ServiceWarmUpCacheOperationSource)) {
+			cacheAspect.setCacheOperationSource(new ServiceWarmUpCacheOperationSource(currentSource, cacheAspect::getCacheResolver));
+		}
+	}
+
+	/**
+	 * Proxies only classes that can be subclassed: a final class with guarded methods is left unguarded, with a warning,
+	 * rather than failing the start.
+	 *
+	 * @see org.springframework.aop.framework.AbstractAdvisingBeanPostProcessor#isEligible(java.lang.Class)
+	 */
+	@Override
+	protected boolean isEligible(
+			final Class<?> targetClass) {
+		boolean isEligible = super.isEligible(targetClass);
+		if (isEligible && Modifier.isFinal(targetClass.getModifiers())) {
+			isEligible = false;
+			if (this.reportedFinalClasses.add(targetClass)) {
+				ServiceWarmUpBeanPostProcessor.LOGGER.warn("Beans of the final class '{}' are not guarded during the service warm-up: warm-up calls must not use them.",
+						targetClass.getName());
+			}
+		}
+		return isEligible;
+	}
+
+	/**
+	 * @see org.springframework.aop.framework.AbstractAdvisingBeanPostProcessor#postProcessAfterInitialization(java.lang.Object,
 	 *      java.lang.String)
 	 */
 	@Override
 	public Object postProcessAfterInitialization(
 			final Object bean,
 			final String beanName) {
-		Object processedBean = bean;
-		if ((bean instanceof final CacheManager cacheManager) && !(bean instanceof ServiceWarmUpCacheManager)) {
-			processedBean = new ServiceWarmUpCacheManager(cacheManager);
-		}
-		else if (bean instanceof final RestTemplate restTemplate) {
-			ServiceWarmUpBeanPostProcessor.guard(restTemplate);
-		}
-		else if (bean instanceof final ConfigurableTransactionManager transactionManager) {
+		if (bean instanceof final ConfigurableTransactionManager transactionManager) {
 			ServiceWarmUpBeanPostProcessor.guard(transactionManager);
 		}
-		return processedBean;
+		else if (bean instanceof final CacheAspectSupport cacheAspect) {
+			ServiceWarmUpBeanPostProcessor.guard(cacheAspect);
+		}
+		return super.postProcessAfterInitialization(bean, beanName);
 	}
 
 }

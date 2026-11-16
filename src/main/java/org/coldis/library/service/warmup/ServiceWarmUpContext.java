@@ -41,7 +41,7 @@ public final class ServiceWarmUpContext {
 	 * @param  sideEffect                       Name of the side effect, used in the error message.
 	 * @throws ServiceWarmUpSideEffectException If the current thread runs warm-up calls.
 	 */
-	public static void rejectDuringWarmUp(
+	static void rejectDuringWarmUp(
 			final String sideEffect) {
 		if (ServiceWarmUpContext.isWarmingUp()) {
 			throw new ServiceWarmUpSideEffectException(sideEffect);

@@ -10,7 +10,6 @@ import java.util.Map;
 import org.coldis.library.exception.BusinessException;
 import org.coldis.library.helper.BufferedReducer;
 import org.coldis.library.model.SimpleMessage;
-import org.coldis.library.service.warmup.ServiceWarmUpContext;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -83,9 +82,6 @@ public class StatisticsEventSummaryBufferServiceComponent {
 	public void bufferDelta(
 			final StatisticsEventSummaryKey key,
 			final StatisticsEventSummaryDelta delta) {
-		// The buffered delta is written later on another thread, which the warm-up's read-only
-		// transaction does not cover.
-		ServiceWarmUpContext.rejectDuringWarmUp("statistics summary");
 		this.summaryDeltaBuffer.reduce(key, delta);
 	}
 

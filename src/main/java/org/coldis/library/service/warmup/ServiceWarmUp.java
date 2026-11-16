@@ -18,7 +18,8 @@ import java.util.List;
  * The calls must follow read paths only: a change to a loaded entity is discarded without an error, so a write path
  * does not stop the call. The library runs each one inside a read-only transaction that is rolled back, runs the
  * service's {@code @Transactional} methods read-only, refuses any other new read-write transaction, refuses pooled JMS
- * connections, {@code RestTemplate} requests and statistics, and drops cache writes (see {@link ServiceWarmUpContext}).
+ * connections, {@code RestTemplate} requests, statistics and cache clears, and drops cache writes and evictions (see
+ * {@link ServiceWarmUpBeanPostProcessor}).
  * A call that needs any of them fails and is counted as an error. Not covered, so the calls must avoid them: writes
  * made outside any transaction (auto-commit), work handed to another thread, other HTTP clients and native JMS
  * connection factories.

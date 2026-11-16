@@ -9,6 +9,7 @@ import org.coldis.library.model.SimpleMessage;
 import org.messaginghub.pooled.jms.JmsPoolConnectionFactory;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.aop.framework.AopProxyUtils;
 import org.springframework.beans.BeansException;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 import org.springframework.context.ApplicationContext;
@@ -47,6 +48,24 @@ public class PropertiesService implements ApplicationContextAware {
 	}
 
 	/**
+	 * Gets a bean behind its proxies, if any, so that its fields and class annotations are its own: a class-based proxy
+	 * is a subclass of the bean's class with fields of its own, which the bean never reads.
+	 *
+	 * @param  beanName Bean name.
+	 * @return          The bean, behind its proxies.
+	 */
+	private Object getTargetBean(
+			final String beanName) {
+		Object bean = this.applicationContext.getBean(beanName);
+		Object target = AopProxyUtils.getSingletonTarget(bean);
+		while (target != null) {
+			bean = target;
+			target = AopProxyUtils.getSingletonTarget(bean);
+		}
+		return bean;
+	}
+
+	/**
 	 * Sets a bean configuration property.
 	 *
 	 * @param name  Property name.
@@ -64,7 +83,7 @@ public class PropertiesService implements ApplicationContextAware {
 		}
 		else {
 			// Tries getting the bean.
-			final Object bean = this.applicationContext.getBean(beanName);
+			final Object bean = this.getTargetBean(beanName);
 
 			// Validates it has @ConfigurationProperties annotation.
 			final ConfigurationProperties annotation = bean.getClass().getAnnotation(ConfigurationProperties.class);

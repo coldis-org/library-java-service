@@ -15,6 +15,7 @@ import org.coldis.library.service.statistics.StatisticsEventSummaryBufferService
 import org.coldis.library.service.statistics.StatisticsEventSummaryDelta;
 import org.coldis.library.service.statistics.StatisticsEventSummaryKey;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.cache.annotation.CacheEvict;
 import org.springframework.cache.annotation.Cacheable;
 import org.springframework.jms.core.JmsTemplate;
 import org.springframework.stereotype.Component;
@@ -172,6 +173,66 @@ public class ServiceWarmUpTestServiceComponent {
 	public Integer getFromCentralCache(
 			final String key) {
 		return ServiceWarmUpTestServiceComponent.CACHED_METHOD_RUNS.incrementAndGet();
+	}
+
+	/**
+	 * Counts a run, cached locally, loading the value under the cache's lock.
+	 *
+	 * @param  key Cache key.
+	 * @return     The number of runs of the cached methods.
+	 */
+	@Cacheable(
+			cacheManager = "minutesExpirationLocalCacheManager",
+			value = ServiceWarmUpTestServiceComponent.LOCAL_CACHE,
+			sync = true
+	)
+	public Integer getFromLocalCacheSynchronized(
+			final String key) {
+		return ServiceWarmUpTestServiceComponent.CACHED_METHOD_RUNS.incrementAndGet();
+	}
+
+	/**
+	 * Counts a run, cached centrally, loading the value under the cache's lock.
+	 *
+	 * @param  key Cache key.
+	 * @return     The number of runs of the cached methods.
+	 */
+	@Cacheable(
+			cacheManager = "minutesExpirationCentralCacheManager",
+			value = ServiceWarmUpTestServiceComponent.CENTRAL_CACHE,
+			sync = true
+	)
+	public Integer getFromCentralCacheSynchronized(
+			final String key) {
+		return ServiceWarmUpTestServiceComponent.CACHED_METHOD_RUNS.incrementAndGet();
+	}
+
+	/**
+	 * Evicts a key from the local cache.
+	 *
+	 * @param key Cache key.
+	 */
+	@CacheEvict(
+			cacheManager = "minutesExpirationLocalCacheManager",
+			value = ServiceWarmUpTestServiceComponent.LOCAL_CACHE
+	)
+	public void evictFromLocalCache(
+			final String key) {
+		// The aspect evicts.
+	}
+
+	/**
+	 * Evicts a key from the central cache.
+	 *
+	 * @param key Cache key.
+	 */
+	@CacheEvict(
+			cacheManager = "minutesExpirationCentralCacheManager",
+			value = ServiceWarmUpTestServiceComponent.CENTRAL_CACHE
+	)
+	public void evictFromCentralCache(
+			final String key) {
+		// The aspect evicts.
 	}
 
 	/**

@@ -2,7 +2,6 @@ package org.coldis.library.service.warmup;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.beans.factory.ListableBeanFactory;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnClass;
@@ -20,9 +19,8 @@ import org.springframework.transaction.interceptor.TransactionAttributeSource;
 /**
  * Service warm-up configuration. Everything here, apart from the warning about warm-ups that do not run, is registered
  * only when the service turns the warm-up on ({@value ServiceWarmUpProperties#ENABLED_PROPERTY}): the health check
- * filter, the guards on caches, {@code RestTemplate} requests and transaction managers, and the read-only
- * {@code @Transactional} methods. The JMS connection and statistics guards live where those side effects happen, and
- * do nothing while no warm-up runs.
+ * filter, every guard ({@link ServiceWarmUpBeanPostProcessor}, with the cache resolver it uses) and the read-only
+ * {@code @Transactional} methods. The features it guards carry no warm-up code.
  */
 @Configuration
 public class ServiceWarmUpAutoConfiguration {
@@ -67,7 +65,10 @@ public class ServiceWarmUpAutoConfiguration {
 	 * Health check filter, for servlet services whose health check is on. A filter, rather than a change to
 	 * {@code HealthCheckService}, answers before the other filters and without touching the repository, and leaves the
 	 * health check's API as it is; so its path and switch mirror the health check's own properties, and must change with
-	 * them.
+	 * them. The liveness scope passes through: a warming instance is alive. Publishing the readiness state instead was
+	 * not chosen: Spring Boot publishes accepting traffic right after the ready event, which would race with the
+	 * warm-up, readiness can be turned off in the health check, and opening it after the warm-up could reopen an
+	 * instance that started shutting down.
 	 */
 	@Configuration
 	@ConditionalOnWebApplication(type = ConditionalOnWebApplication.Type.SERVLET)
@@ -107,18 +108,18 @@ public class ServiceWarmUpAutoConfiguration {
 	public static class ServiceWarmUpDisabledWarning implements ApplicationListener<ApplicationReadyEvent> {
 
 		/**
-		 * Bean factory.
+		 * Warm-up beans, read when the application is ready.
 		 */
-		private final ListableBeanFactory beanFactory;
+		private final ObjectProvider<ServiceWarmUp<?>> warmUpProvider;
 
 		/**
 		 * Constructor.
 		 *
-		 * @param beanFactory Bean factory.
+		 * @param warmUpProvider Warm-up beans, read when the application is ready.
 		 */
-		public ServiceWarmUpDisabledWarning(final ListableBeanFactory beanFactory) {
+		public ServiceWarmUpDisabledWarning(final ObjectProvider<ServiceWarmUp<?>> warmUpProvider) {
 			super();
-			this.beanFactory = beanFactory;
+			this.warmUpProvider = warmUpProvider;
 		}
 
 		/**
@@ -127,9 +128,9 @@ public class ServiceWarmUpAutoConfiguration {
 		@Override
 		public void onApplicationEvent(
 				final ApplicationReadyEvent event) {
-			final String[] warmUpNames = this.beanFactory.getBeanNamesForType(ServiceWarmUp.class, true, false);
-			if (warmUpNames.length > 0) {
-				ServiceWarmUpAutoConfiguration.LOGGER.warn("The service declares {} warm-up(s), which do not run because '{}' is not true.", warmUpNames.length,
+			final long warmUpCount = this.warmUpProvider.stream().count();
+			if (warmUpCount > 0) {
+				ServiceWarmUpAutoConfiguration.LOGGER.warn("The service declares {} warm-up(s), which do not run because '{}' is not true.", warmUpCount,
 						ServiceWarmUpProperties.ENABLED_PROPERTY);
 			}
 		}
@@ -137,7 +138,7 @@ public class ServiceWarmUpAutoConfiguration {
 	}
 
 	/**
-	 * Guards caches, {@code RestTemplate} requests and transaction managers during the warm-up.
+	 * Attaches every warm-up guard.
 	 *
 	 * @return The bean post processor.
 	 */
@@ -151,10 +152,24 @@ public class ServiceWarmUpAutoConfiguration {
 	}
 
 	/**
+	 * Cache resolver of the warm-up versions of cache operations.
+	 *
+	 * @return The cache resolver.
+	 */
+	@Bean(name = ServiceWarmUpCacheResolver.BEAN_NAME)
+	@ConditionalOnProperty(
+			name = ServiceWarmUpProperties.ENABLED_PROPERTY,
+			havingValue = "true"
+	)
+	public ServiceWarmUpCacheResolver serviceWarmUpCacheResolver() {
+		return new ServiceWarmUpCacheResolver();
+	}
+
+	/**
 	 * Warns when the service declares warm-ups but the warm-up is off.
 	 *
-	 * @param  beanFactory Bean factory.
-	 * @return             The warning listener.
+	 * @param  warmUpProvider Warm-up beans, read when the application is ready.
+	 * @return                The warning listener.
 	 */
 	@Bean
 	@ConditionalOnProperty(
@@ -163,8 +178,8 @@ public class ServiceWarmUpAutoConfiguration {
 			matchIfMissing = true
 	)
 	public ServiceWarmUpDisabledWarning serviceWarmUpDisabledWarning(
-			final ListableBeanFactory beanFactory) {
-		return new ServiceWarmUpDisabledWarning(beanFactory);
+			final ObjectProvider<ServiceWarmUp<?>> warmUpProvider) {
+		return new ServiceWarmUpDisabledWarning(warmUpProvider);
 	}
 
 }
