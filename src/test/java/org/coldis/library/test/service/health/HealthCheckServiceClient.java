@@ -37,4 +37,21 @@ public class HealthCheckServiceClient extends GenericRestServiceClient {
 						+ this.valueResolver.resolveStringValue("${org.coldis.configuration.health-check:/health-check}"),
 				HttpMethod.GET, null, null, null, new ParameterizedTypeReference<HealthCheckValue>() {}).getBody();
 	}
+
+	/**
+	 * Liveness health check service.
+	 *
+	 * @return                      The check value.
+	 * @throws IntegrationException If the service call did not end successfully
+	 *                                  (other than bad request).
+	 * @throws BusinessException    If the service call did not end successfully
+	 *                                  (bad request).
+	 */
+	public HealthCheckValue checkLiveness() throws IntegrationException, BusinessException {
+		return this.executeOperation(
+				this.valueResolver.resolveStringValue("http://localhost:${local.server.port:9090}")
+						+ this.valueResolver.resolveStringValue("${org.coldis.configuration.health-check:/health-check}") + "?scope=liveness",
+				HttpMethod.GET, null, null, null, new ParameterizedTypeReference<HealthCheckValue>() {}).getBody();
+	}
+
 }
