@@ -111,6 +111,20 @@ public class ServiceWarmUpSideEffectAdvisor extends StaticMethodMatcherPointcutA
 	}
 
 	/**
+	 * Gets the side effect of a guarded method.
+	 *
+	 * @param  method      Method.
+	 * @param  targetClass Class.
+	 * @return             The side effect.
+	 */
+	private String getSideEffect(
+			final Method method,
+			final Class<?> targetClass) {
+		return this.presentGuards.stream().filter(guard -> guard.appliesTo(method, targetClass)).map(PresentGuard::sideEffect).findFirst()
+				.orElse(method.getName());
+	}
+
+	/**
 	 * Constructor.
 	 */
 	public ServiceWarmUpSideEffectAdvisor() {
@@ -124,20 +138,6 @@ public class ServiceWarmUpSideEffectAdvisor extends StaticMethodMatcherPointcutA
 			}
 			return invocation.proceed();
 		});
-	}
-
-	/**
-	 * Gets the side effect of a guarded method.
-	 *
-	 * @param  method      Method.
-	 * @param  targetClass Class.
-	 * @return             The side effect.
-	 */
-	private String getSideEffect(
-			final Method method,
-			final Class<?> targetClass) {
-		return this.presentGuards.stream().filter(guard -> guard.appliesTo(method, targetClass)).map(PresentGuard::sideEffect).findFirst()
-				.orElse(method.getName());
 	}
 
 	/**

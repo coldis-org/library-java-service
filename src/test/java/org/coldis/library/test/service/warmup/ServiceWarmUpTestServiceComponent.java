@@ -140,6 +140,18 @@ public class ServiceWarmUpTestServiceComponent {
 	}
 
 	/**
+	 * Loads a key and removes it through the repository in the caller's transaction, leaving the removal for the commit
+	 * to write, as a change to a loaded entity is.
+	 *
+	 * @param key Key.
+	 */
+	@Transactional
+	public void removeLoaded(
+			final String key) {
+		this.keyValueServiceComponent.getRepository().findById(key).ifPresent(keyValue -> this.keyValueServiceComponent.getRepository().delete(keyValue));
+	}
+
+	/**
 	 * Locks a key, creating it when it does not exist, in a new transaction.
 	 *
 	 * @param  key               Key.

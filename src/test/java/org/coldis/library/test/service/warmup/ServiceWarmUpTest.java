@@ -541,6 +541,28 @@ public class ServiceWarmUpTest extends ContainerTestHelper {
 	}
 
 	/**
+	 * Tests that a change to a loaded entity, which the commit would write, is discarded during a warm-up without failing
+	 * the call, and is written outside the warm-up.
+	 *
+	 * @throws Exception If the test fails.
+	 */
+	@Test
+	@DisplayName("A change to a loaded entity is discarded without an error during a warm-up")
+	public void testLoadedEntityChangeDiscarded() throws Exception {
+		final String key = "service-warm-up-test-" + UUID.randomUUID();
+		// Step 1: the record exists, written outside a warm-up.
+		this.serviceWarmUpTestServiceComponent.saveInProgrammaticNewTransaction(key);
+		Assertions.assertNotNull(this.keyValueServiceComponent.findById(key, LockBehavior.NO_LOCK, true));
+		// Step 2: during a warm-up, the removal of the loaded record is discarded and the call succeeds.
+		final ServiceWarmUpResult result = this.warmUpOnce(key, input -> this.serviceWarmUpTestServiceComponent.removeLoaded(input));
+		Assertions.assertEquals(0L, result.getFailedCallCount(), String.valueOf(result.getFirstError()));
+		Assertions.assertNotNull(this.keyValueServiceComponent.findById(key, LockBehavior.NO_LOCK, true));
+		// Step 3: the same call outside a warm-up writes the removal.
+		this.serviceWarmUpTestServiceComponent.removeLoaded(key);
+		Assertions.assertNull(this.keyValueServiceComponent.findById(key, LockBehavior.NO_LOCK, true));
+	}
+
+	/**
 	 * Tests that a read-write transaction a transaction template starts is refused, and works outside the warm-up.
 	 *
 	 * @throws Exception If the test fails.

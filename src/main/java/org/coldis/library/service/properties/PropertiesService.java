@@ -94,8 +94,11 @@ public class PropertiesService implements ApplicationContextAware {
 
 			// Sets the property.
 			PropertiesService.LOGGER.info("Setting property " + name + " to " + PropertiesLogHelper.getLoggedValue(name, value) + " in bean " + beanName + ".");
-			// Which beans are accepted is decided on the bean as the context returns it; the write goes behind its proxies.
-			ReflectionHelper.setAttribute(PropertiesService.getTargetBean(bean), fieldAccess, name, value);
+			// Which beans are accepted is decided on the bean as the context returns it. A pooled JMS connection factory may
+			// be a class-based proxy (the service warm-up proxies them), so its write goes behind the proxy; other beans are
+			// written as before.
+			ReflectionHelper.setAttribute((bean instanceof JmsPoolConnectionFactory ? PropertiesService.getTargetBean(bean) : bean), fieldAccess, name,
+					value);
 		}
 
 	}
