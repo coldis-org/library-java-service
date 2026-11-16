@@ -86,8 +86,11 @@ public class OrderWarmUp implements ServiceWarmUp<Long> {
 ## What a warm-up call cannot do
 
 With the warm-up on, on warm-up threads only (other threads are not affected). Every guard is
-attached from the `warmup` package (`ServiceWarmUpBeanPostProcessor`), so the guarded features
-carry no warm-up code, and nothing is attached while the warm-up is off. Every guarded point:
+attached from the `warmup` package, so the guarded features carry no warm-up code, and nothing
+is attached while the warm-up is off: `ServiceWarmUpBeanPostProcessor` attaches all of them but
+the read-only `@Transactional` methods, whose transaction aspect (a single instance for the whole
+JVM) gets its attribute source wrapped by `ServiceWarmUpTransactionConfiguration` and keeps it for
+the life of the process (it acts on warm-up threads only). Every guarded point:
 
 | Side effect | Guarded point | What happens |
 |---|---|---|
@@ -104,7 +107,8 @@ injection and casts by type keep working, and their request factories, intercept
 state stay as they were. Cache manager beans are not touched. A proxy has fields of its own,
 which the bean never reads: code that reads or writes those beans' fields by reflection must
 unwrap the proxy first (`AopProxyUtils.getSingletonTarget`), as the library's properties
-endpoint (`/properties/...?fieldAccess=true`) does. A guarded method is refused when
+endpoint (`/properties/...?fieldAccess=true`) does for its writes (which beans it accepts is
+still decided on the bean as the context returns it). A guarded method is refused when
 called on the bean; a call from inside the bean itself (a subclass's own method calling
 `this.upsertStatisticsEvent`, for instance) does not pass through the proxy. A bean of a final
 class cannot be proxied: it is left unguarded, with a warning at start.

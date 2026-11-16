@@ -303,8 +303,8 @@ public class ServiceWarmUpServiceComponent implements ApplicationListener<Applic
 			final long compilationMillis,
 			final int parallelism) {
 		final String runOutcome = (runStopReason == null ? "ENDED" : runStopReason.name());
-		ServiceWarmUpServiceComponent.LOGGER.info("Service warm-up finished in {} ms ({}), with {} threads and {} ms of JIT compilation.", durationMillis,
-				runOutcome, parallelism, compilationMillis);
+		ServiceWarmUpServiceComponent.LOGGER.info("Service warm-up finished in {} ms ({}), with {} threads and {} of JIT compilation.", durationMillis,
+				runOutcome, parallelism, (compilationMillis < 0L ? "an unmeasured time (this JVM does not measure it)" : compilationMillis + " ms"));
 		for (final ServiceWarmUpResult result : results) {
 			ServiceWarmUpServiceComponent.LOGGER.info("Warm-up '{}' stopped by {} after {} calls, {} failed. Median call: {} ms in the first calls, {} ms in the last.",
 					result.getName(), result.getStopReason(), result.getCallCount(), result.getFailedCallCount(),
@@ -357,6 +357,7 @@ public class ServiceWarmUpServiceComponent implements ApplicationListener<Applic
 		finally {
 			// Calls in progress end on their own; the health check does not wait for them.
 			isStopped.set(true);
+			this.executors.remove(executor);
 		}
 		for (final ServiceWarmUpExecution<?> execution : executions) {
 			execution.stop(runStopReason);

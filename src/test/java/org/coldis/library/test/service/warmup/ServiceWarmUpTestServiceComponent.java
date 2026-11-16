@@ -16,6 +16,7 @@ import org.coldis.library.service.statistics.StatisticsEventSummaryDelta;
 import org.coldis.library.service.statistics.StatisticsEventSummaryKey;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.cache.annotation.CacheEvict;
+import org.springframework.cache.annotation.CachePut;
 import org.springframework.cache.annotation.Cacheable;
 import org.springframework.jms.core.JmsTemplate;
 import org.springframework.stereotype.Component;
@@ -46,6 +47,11 @@ public class ServiceWarmUpTestServiceComponent {
 	 * Central cache.
 	 */
 	public static final String CENTRAL_CACHE = "serviceWarmUpTestCentralCache";
+
+	/**
+	 * Cache of the cache aspect's default cache manager (the primary local one).
+	 */
+	public static final String DEFAULT_CACHE = "serviceWarmUpTestDefaultCache";
 
 	/**
 	 * Statistics context of the tests.
@@ -205,6 +211,45 @@ public class ServiceWarmUpTestServiceComponent {
 	public Integer getFromCentralCacheSynchronized(
 			final String key) {
 		return ServiceWarmUpTestServiceComponent.CACHED_METHOD_RUNS.incrementAndGet();
+	}
+
+	/**
+	 * Counts a run, cached by the cache aspect's default cache manager.
+	 *
+	 * @param  key Cache key.
+	 * @return     The number of runs of the cached methods.
+	 */
+	@Cacheable(value = ServiceWarmUpTestServiceComponent.DEFAULT_CACHE)
+	public Integer getFromDefaultCache(
+			final String key) {
+		return ServiceWarmUpTestServiceComponent.CACHED_METHOD_RUNS.incrementAndGet();
+	}
+
+	/**
+	 * Counts a run, always putting it in the local cache.
+	 *
+	 * @param  key Cache key.
+	 * @return     The number of runs of the cached methods.
+	 */
+	@CachePut(
+			cacheManager = "minutesExpirationLocalCacheManager",
+			value = ServiceWarmUpTestServiceComponent.LOCAL_CACHE
+	)
+	public Integer putInLocalCache(
+			final String key) {
+		return ServiceWarmUpTestServiceComponent.CACHED_METHOD_RUNS.incrementAndGet();
+	}
+
+	/**
+	 * Evicts every entry of the local cache.
+	 */
+	@CacheEvict(
+			cacheManager = "minutesExpirationLocalCacheManager",
+			value = ServiceWarmUpTestServiceComponent.LOCAL_CACHE,
+			allEntries = true
+	)
+	public void evictAllFromLocalCache() {
+		// The aspect evicts.
 	}
 
 	/**

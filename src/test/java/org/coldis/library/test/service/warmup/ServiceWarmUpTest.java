@@ -661,6 +661,40 @@ public class ServiceWarmUpTest extends ContainerTestHelper {
 	}
 
 	/**
+	 * Tests the cache operations the other cache tests do not reach: a cached method on the cache aspect's default cache
+	 * manager, a cache put and an eviction of every entry. During a warm-up nothing is stored or evicted; outside it, the
+	 * same calls store and evict.
+	 */
+	@Test
+	@DisplayName("Warm-up calls store nothing through the default cache manager or a cache put, and evict no entry wholesale")
+	public void testCacheDefaultsPutsAndEvictAllDropped() {
+		final String filledKey = UUID.randomUUID().toString();
+		final String newKey = UUID.randomUUID().toString();
+		this.serviceWarmUpTestServiceComponent.getFromLocalCache(filledKey);
+		// Step 1: during a warm-up, the default cache manager and the cache put store nothing, and evicting every entry
+		// is dropped.
+		final int runsBefore = ServiceWarmUpTestServiceComponent.CACHED_METHOD_RUNS.get();
+		final ServiceWarmUpResult result = this.warmUpOnce(newKey, input -> {
+			this.serviceWarmUpTestServiceComponent.getFromDefaultCache(input);
+			this.serviceWarmUpTestServiceComponent.putInLocalCache(input);
+			this.serviceWarmUpTestServiceComponent.evictAllFromLocalCache();
+		});
+		Assertions.assertEquals(0L, result.getFailedCallCount());
+		Assertions.assertEquals(runsBefore + 2, ServiceWarmUpTestServiceComponent.CACHED_METHOD_RUNS.get());
+		Assertions.assertNull(this.localCacheManager.getCache(ServiceWarmUpTestServiceComponent.DEFAULT_CACHE).get(newKey));
+		Assertions.assertNull(this.localCacheManager.getCache(ServiceWarmUpTestServiceComponent.LOCAL_CACHE).get(newKey));
+		Assertions.assertNotNull(this.localCacheManager.getCache(ServiceWarmUpTestServiceComponent.LOCAL_CACHE).get(filledKey));
+		// Step 2: outside a warm-up, the same calls store, and evict every entry.
+		this.serviceWarmUpTestServiceComponent.getFromDefaultCache(newKey);
+		this.serviceWarmUpTestServiceComponent.putInLocalCache(newKey);
+		Assertions.assertNotNull(this.localCacheManager.getCache(ServiceWarmUpTestServiceComponent.DEFAULT_CACHE).get(newKey));
+		Assertions.assertNotNull(this.localCacheManager.getCache(ServiceWarmUpTestServiceComponent.LOCAL_CACHE).get(newKey));
+		this.serviceWarmUpTestServiceComponent.evictAllFromLocalCache();
+		Assertions.assertNull(this.localCacheManager.getCache(ServiceWarmUpTestServiceComponent.LOCAL_CACHE).get(filledKey));
+		Assertions.assertNull(this.localCacheManager.getCache(ServiceWarmUpTestServiceComponent.LOCAL_CACHE).get(newKey));
+	}
+
+	/**
 	 * Tests that a warm-up records its successful and failed calls, and its run, as metrics.
 	 */
 	@Test

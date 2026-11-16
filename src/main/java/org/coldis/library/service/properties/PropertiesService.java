@@ -48,15 +48,15 @@ public class PropertiesService implements ApplicationContextAware {
 	}
 
 	/**
-	 * Gets a bean behind its proxies, if any, so that its fields and class annotations are its own: a class-based proxy
-	 * is a subclass of the bean's class with fields of its own, which the bean never reads.
+	 * Gets the object behind a bean's proxies, if any, so that a write reaches the bean's own fields: a class-based
+	 * proxy is a subclass of the bean's class with fields of its own, which the bean never reads.
 	 *
-	 * @param  beanName Bean name.
-	 * @return          The bean, behind its proxies.
+	 * @param  proxiedBean Bean, as the context returns it.
+	 * @return             The bean, behind its proxies.
 	 */
-	private Object getTargetBean(
-			final String beanName) {
-		Object bean = this.applicationContext.getBean(beanName);
+	private static Object getTargetBean(
+			final Object proxiedBean) {
+		Object bean = proxiedBean;
 		Object target = AopProxyUtils.getSingletonTarget(bean);
 		while (target != null) {
 			bean = target;
@@ -83,7 +83,7 @@ public class PropertiesService implements ApplicationContextAware {
 		}
 		else {
 			// Tries getting the bean.
-			final Object bean = this.getTargetBean(beanName);
+			final Object bean = this.applicationContext.getBean(beanName);
 
 			// Validates it has @ConfigurationProperties annotation.
 			final ConfigurationProperties annotation = bean.getClass().getAnnotation(ConfigurationProperties.class);
@@ -94,7 +94,8 @@ public class PropertiesService implements ApplicationContextAware {
 
 			// Sets the property.
 			PropertiesService.LOGGER.info("Setting property " + name + " to " + PropertiesLogHelper.getLoggedValue(name, value) + " in bean " + beanName + ".");
-			ReflectionHelper.setAttribute(bean, fieldAccess, name, value);
+			// Which beans are accepted is decided on the bean as the context returns it; the write goes behind its proxies.
+			ReflectionHelper.setAttribute(PropertiesService.getTargetBean(bean), fieldAccess, name, value);
 		}
 
 	}
