@@ -1,14 +1,27 @@
 package org.coldis.library.test.service.properties;
 
+import java.net.URI;
+import java.net.http.HttpClient;
+import java.net.http.HttpRequest;
+import java.net.http.HttpRequest.BodyPublishers;
+import java.net.http.HttpResponse;
+import java.net.http.HttpResponse.BodyHandlers;
 import java.sql.Connection;
+import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 
 import javax.sql.DataSource;
 
+import org.apache.catalina.connector.Connector;
+import org.apache.coyote.AbstractProtocol;
 import org.coldis.library.test.StartTestWithContainerExtension;
 import org.coldis.library.test.TestHelper;
 import org.coldis.library.test.TestWithContainer;
 import org.coldis.library.test.service.ContainerTestHelper;
+import org.coldis.library.service.properties.PropertiesConnectorCustomizer;
 import org.coldis.library.service.properties.PropertiesService;
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.DisplayName;
@@ -21,6 +34,8 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.context.SpringBootTest.WebEnvironment;
+import org.springframework.boot.web.embedded.tomcat.TomcatWebServer;
+import org.springframework.boot.web.servlet.context.ServletWebServerApplicationContext;
 import org.springframework.jms.core.JmsTemplate;
 import org.springframework.test.annotation.DirtiesContext;
 import org.springframework.web.client.RestTemplate;
@@ -66,6 +81,24 @@ public class PropertiesServiceTest extends ContainerTestHelper {
 	/** Datasource. */
 	@Autowired
 	private DataSource dataSource;
+
+	/**
+	 * Properties connector.
+	 */
+	@Autowired
+	private PropertiesConnectorCustomizer propertiesConnectorCustomizer;
+
+	/**
+	 * Endpoint that holds request threads.
+	 */
+	@Autowired
+	private PropertiesConnectorTestService propertiesConnectorTestService;
+
+	/**
+	 * Web server application context.
+	 */
+	@Autowired
+	private ServletWebServerApplicationContext webServerApplicationContext;
 
 	/**
 	 * JMS connection factory.
@@ -318,6 +351,51 @@ public class PropertiesServiceTest extends ContainerTestHelper {
 			}
 		}, valid -> valid, TestHelper.VERY_LONG_WAIT, TestHelper.VERY_SHORT_WAIT));
 
+	}
+
+	/**
+	 * With every request thread of the main connector taken, an update on the
+	 * main connector waits, and the same update on the properties connector runs.
+	 * A few more requests than threads are held, so a thread another test frees
+	 * goes to one of them, not to the waiting update.
+	 *
+	 * @throws Exception If the test fails.
+	 */
+	@Test
+	@DisplayName("The properties connector takes an update while the main connector has no thread left")
+	public void testPropertiesConnectorWithMainThreadsTaken() throws Exception {
+		final Connector mainConnector = ((TomcatWebServer) this.webServerApplicationContext.getWebServer()).getTomcat().getConnector();
+		final AbstractProtocol<?> mainProtocol = (AbstractProtocol<?>) mainConnector.getProtocolHandler();
+		final Integer mainMaxThreads = mainProtocol.getMaxThreads();
+		final HttpClient httpClient = HttpClient.newBuilder().version(HttpClient.Version.HTTP_1_1).build();
+		final List<CompletableFuture<HttpResponse<Void>>> heldRequests = new ArrayList<>();
+		final List<CompletableFuture<HttpResponse<Void>>> mainUpdates = new ArrayList<>();
+		this.propertiesConnectorTestService.hold();
+		try {
+			// Takes every request thread of the main connector.
+			for (int requestIndex = 0; requestIndex < (mainMaxThreads + 5); requestIndex++) {
+				heldRequests.add(httpClient.sendAsync(
+						HttpRequest.newBuilder(URI.create("http://localhost:" + this.port + "/properties-connector-test/wait")).GET().build(),
+						BodyHandlers.discarding()));
+			}
+			Assertions.assertTrue(TestHelper.waitUntilValid(
+					() -> ((org.apache.tomcat.util.threads.ThreadPoolExecutor) mainProtocol.getExecutor()).getActiveCount(),
+					activeThreads -> activeThreads >= mainMaxThreads, TestHelper.LONG_WAIT, TestHelper.VERY_SHORT_WAIT));
+			// An update on the main connector waits for a thread.
+			mainUpdates.add(httpClient.sendAsync(HttpRequest.newBuilder(URI.create("http://localhost:" + this.port + "/properties/string/testProperties1/property1"))
+					.PUT(BodyPublishers.ofString("3")).build(), BodyHandlers.discarding()));
+			Assertions.assertThrows(TimeoutException.class, () -> mainUpdates.get(0).get(1, TimeUnit.SECONDS));
+			Assertions.assertEquals("1", this.testProperties1.getProperty1());
+			// The same update on the properties connector runs.
+			this.restTemplate.put("http://127.0.0.1:" + this.propertiesConnectorCustomizer.getLocalPort() + "/properties/string/testProperties1/property1", 4,
+					Void.class);
+			Assertions.assertEquals("4", this.testProperties1.getProperty1());
+		}
+		finally {
+			this.propertiesConnectorTestService.release();
+			heldRequests.addAll(mainUpdates);
+			CompletableFuture.allOf(heldRequests.toArray(CompletableFuture[]::new)).get(1, TimeUnit.MINUTES);
+		}
 	}
 
 }
