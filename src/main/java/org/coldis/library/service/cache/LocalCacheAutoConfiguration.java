@@ -7,6 +7,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnClass;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.cache.CacheManager;
 import org.springframework.cache.annotation.EnableCaching;
 import org.springframework.cache.caffeine.CaffeineCacheManager;
@@ -32,13 +33,24 @@ import com.github.benmanes.caffeine.cache.Caffeine;
 import org.springframework.http.converter.json.Jackson2ObjectMapperBuilder;
 
 /**
- * Cache configuration.
+ * Local (Caffeine) cache configuration. On by default; {@value #ENABLED_PROPERTY}=false turns it off, and the local
+ * cache manager names then do not cache (see {@link CacheManagerFallbackRegistrar}).
  */
 @Configuration
 @EnableCaching(mode = AdviceMode.ASPECTJ)
 @DependsOn(value = { "jsonMapperAutoConfiguration" })
 @ConditionalOnClass(value = { CacheManager.class, CaffeineCacheManager.class })
+@ConditionalOnProperty(
+		name = LocalCacheAutoConfiguration.ENABLED_PROPERTY,
+		havingValue = "true",
+		matchIfMissing = true
+)
 public class LocalCacheAutoConfiguration {
+
+	/**
+	 * Property that turns local caching on or off.
+	 */
+	public static final String ENABLED_PROPERTY = "org.coldis.configuration.cache.local.enabled";
 
 	/**
 	 * Logger.
@@ -94,8 +106,18 @@ public class LocalCacheAutoConfiguration {
 		this.keyConverter = new HashCacheKeyConverter(objectMapper, "SHA-256");
 	}
 
-	/** Maximum cache size. */
-	@Value(value = "${org.coldis.configuration.cache.local.maximum-size:}")
+	/**
+	 * Default maximum entries of each local cache (each cache name of each local cache manager).
+	 */
+	public static final long DEFAULT_MAXIMUM_SIZE = 10000L;
+
+	/**
+	 * Maximum entries of each local cache property.
+	 */
+	public static final String MAXIMUM_SIZE_PROPERTY = "org.coldis.configuration.cache.local.maximum-size";
+
+	/** Maximum entries of each local cache. */
+	@Value(value = "${" + LocalCacheAutoConfiguration.MAXIMUM_SIZE_PROPERTY + ":" + LocalCacheAutoConfiguration.DEFAULT_MAXIMUM_SIZE + "}")
 	private Long maximumSize;
 
 	/** If stats should be recoreded. */
@@ -133,23 +155,38 @@ public class LocalCacheAutoConfiguration {
 	CaffeineCacheManager daysExpirationLocalCacheManager;
 
 	/**
-	 * Creates a cache manager with the given expiration.
+	 * Creates a local cache manager.
 	 *
-	 * @param  expiration Expiration in milliseconds.
-	 * @return            Cache manager.
+	 * @param  expiration  Expiration after write.
+	 * @param  maximumSize Maximum entries per cache (none if null).
+	 * @param  stats       If stats should be recorded.
+	 * @return             Cache manager.
 	 */
-	private CaffeineCacheManager getCacheManager(
-			final Duration expiration) {
+	static CaffeineCacheManager createCacheManager(
+			final Duration expiration,
+			final Long maximumSize,
+			final Boolean stats) {
 		final CaffeineCacheManager cacheManager = new CaffeineCacheManager();
 		Caffeine<Object, Object> caffeine = Caffeine.newBuilder().expireAfterWrite(expiration);
-		if (this.maximumSize != null) {
-			caffeine.maximumSize(this.maximumSize);
+		if (maximumSize != null) {
+			caffeine.maximumSize(maximumSize);
 		}
-		if (this.stats) {
+		if (Boolean.TRUE.equals(stats)) {
 			caffeine = caffeine.recordStats();
 		}
 		cacheManager.setCaffeine(caffeine);
 		return cacheManager;
+	}
+
+	/**
+	 * Creates a cache manager with the given expiration.
+	 *
+	 * @param  expiration Expiration.
+	 * @return            Cache manager.
+	 */
+	private CaffeineCacheManager getCacheManager(
+			final Duration expiration) {
+		return LocalCacheAutoConfiguration.createCacheManager(expiration, this.maximumSize, this.stats);
 	}
 
 	/**

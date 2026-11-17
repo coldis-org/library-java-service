@@ -14,6 +14,11 @@ import org.springframework.scheduling.annotation.Scheduled;
 		havingValue = "true",
 		matchIfMissing = false
 )
+@ConditionalOnProperty(
+		name = LocalCacheAutoConfiguration.ENABLED_PROPERTY,
+		havingValue = "true",
+		matchIfMissing = true
+)
 class LocalCacheStatsConfiguration {
 
 	/**

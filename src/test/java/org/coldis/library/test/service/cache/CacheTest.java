@@ -2,6 +2,7 @@ package org.coldis.library.test.service.cache;
 
 import java.io.Serializable;
 
+import org.coldis.library.service.cache.CacheManagerExpiration;
 import org.coldis.library.test.StartTestWithContainerExtension;
 import org.coldis.library.test.TestHelper;
 import org.coldis.library.test.TestWithContainer;
@@ -13,6 +14,11 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.context.SpringBootTest.WebEnvironment;
+import org.springframework.cache.CacheManager;
+import org.springframework.cache.caffeine.CaffeineCacheManager;
+import org.springframework.cache.support.NoOpCacheManager;
+import org.springframework.context.ApplicationContext;
+import org.springframework.data.redis.cache.RedisCacheManager;
 import org.springframework.test.annotation.DirtiesContext;
 import org.testcontainers.containers.GenericContainer;
 
@@ -35,6 +41,12 @@ public class CacheTest extends ContainerTestHelper {
 	 */
 	@Autowired
 	private CachedService cachedService;
+
+	/**
+	 * Application context.
+	 */
+	@Autowired
+	private ApplicationContext applicationContext;
 
 	public class TestData implements Serializable {
 
@@ -165,6 +177,20 @@ public class CacheTest extends ContainerTestHelper {
 		Assertions.assertEquals(attr4 + 1, this.cachedService.getFromLocalCache4().getAttribute().intValue());
 		Assertions.assertEquals(attr4 + 1, this.cachedService.getFromLocalCache4().getAttribute().intValue());
 
+	}
+
+	/**
+	 * Tests that, with Redis and local caching on, the central cache managers are the Redis ones, the local ones are
+	 * Caffeine, and no fallback cache manager is registered.
+	 */
+	@Test
+	public void testCacheManagersWithRedis() {
+		for (final CacheManagerExpiration expiration : CacheManagerExpiration.values()) {
+			Assertions.assertInstanceOf(RedisCacheManager.class, this.applicationContext.getBean(expiration.getCentralCacheManagerName()));
+			Assertions.assertInstanceOf(CaffeineCacheManager.class, this.applicationContext.getBean(expiration.getLocalCacheManagerName()));
+		}
+		Assertions.assertTrue(this.applicationContext.getBeansOfType(CacheManager.class).values().stream()
+				.noneMatch(cacheManager -> cacheManager instanceof NoOpCacheManager));
 	}
 
 }
