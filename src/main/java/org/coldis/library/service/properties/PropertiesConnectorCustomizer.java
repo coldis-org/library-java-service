@@ -21,10 +21,14 @@ import org.springframework.stereotype.Component;
  * address changed, every thread stays taken, the update never runs and the
  * service never recovers. This connector listens on the loopback address only,
  * so only processes of the service's own host or container (the endpoint
- * update scripts) reach it, and its threads are not taken by the service's
- * traffic. The main connector keeps serving the endpoint as before, and the
- * health check stays there, so it still reports when the service's own threads
- * run out.
+ * update scripts) reach it, and {@link PropertiesConnectorFilter} answers any
+ * other path on it with 404, so nothing else takes its threads. The main
+ * connector keeps serving the endpoint as before, and the health check stays
+ * there, so it still reports when the service's own threads run out.
+ * <p>
+ * Off by default: the deployment that ships the scripts calling it turns it on,
+ * so test runs and developer machines, where several services or test processes
+ * share one network namespace, never open the port.
  */
 @Component
 public class PropertiesConnectorCustomizer implements WebServerFactoryCustomizer<TomcatServletWebServerFactory> {
@@ -42,7 +46,7 @@ public class PropertiesConnectorCustomizer implements WebServerFactoryCustomizer
 	/**
 	 * Whether the connector is added.
 	 */
-	private final Boolean enabled;
+	private final Boolean isEnabled;
 
 	/**
 	 * Address the connector listens on.
@@ -67,17 +71,17 @@ public class PropertiesConnectorCustomizer implements WebServerFactoryCustomizer
 	/**
 	 * Constructor.
 	 *
-	 * @param enabled    Whether the connector is added.
+	 * @param isEnabled  Whether the connector is added.
 	 * @param address    Address the connector listens on.
 	 * @param port       Port the connector listens on (0 picks a free one).
 	 * @param maxThreads Request threads of the connector.
 	 */
 	public PropertiesConnectorCustomizer(
-			@Value("${" + PropertiesConnectorCustomizer.PROPERTY_PREFIX + ".enabled:true}") final Boolean enabled,
+			@Value("${" + PropertiesConnectorCustomizer.PROPERTY_PREFIX + ".enabled:false}") final Boolean isEnabled,
 			@Value("${" + PropertiesConnectorCustomizer.PROPERTY_PREFIX + ".address:127.0.0.1}") final String address,
 			@Value("${" + PropertiesConnectorCustomizer.PROPERTY_PREFIX + ".port:9091}") final Integer port,
 			@Value("${" + PropertiesConnectorCustomizer.PROPERTY_PREFIX + ".max-threads:2}") final Integer maxThreads) {
-		this.enabled = enabled;
+		this.isEnabled = isEnabled;
 		this.address = address;
 		this.port = port;
 		this.maxThreads = maxThreads;
@@ -126,11 +130,11 @@ public class PropertiesConnectorCustomizer implements WebServerFactoryCustomizer
 	@Override
 	public void customize(
 			final TomcatServletWebServerFactory factory) {
-		if (Boolean.TRUE.equals(this.enabled) && (this.connector == null)) {
+		if (Boolean.TRUE.equals(this.isEnabled) && (this.connector == null)) {
 			this.connector = PropertiesConnectorCustomizer.createConnector(this.address, this.port, this.maxThreads);
 			factory.addAdditionalTomcatConnectors(this.connector);
-			PropertiesConnectorCustomizer.LOGGER.info("Serving the properties endpoint also on " + this.address + ":" + this.port + ", with " + this.maxThreads
-					+ " request threads of its own (" + PropertiesConnectorCustomizer.PROPERTY_PREFIX + ".enabled=false turns it off).");
+			PropertiesConnectorCustomizer.LOGGER.info("Adding a connector for the properties endpoint only, on " + this.address + ":" + this.port
+					+ " (0 picks a free port), with " + this.maxThreads + " request threads of its own.");
 		}
 	}
 

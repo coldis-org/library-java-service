@@ -8,6 +8,7 @@ import java.net.http.HttpResponse;
 import java.net.http.HttpResponse.BodyHandlers;
 import java.sql.Connection;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
@@ -386,16 +387,56 @@ public class PropertiesServiceTest extends ContainerTestHelper {
 					.PUT(BodyPublishers.ofString("3")).build(), BodyHandlers.discarding()));
 			Assertions.assertThrows(TimeoutException.class, () -> mainUpdates.get(0).get(1, TimeUnit.SECONDS));
 			Assertions.assertEquals("1", this.testProperties1.getProperty1());
-			// The same update on the properties connector runs.
-			this.restTemplate.put("http://127.0.0.1:" + this.propertiesConnectorCustomizer.getLocalPort() + "/properties/string/testProperties1/property1", 4,
-					Void.class);
+			// The same update on the properties connector runs, well before the held requests give up, and while they still hold every
+			// main thread.
+			final HttpResponse<Void> propertiesConnectorUpdate = httpClient
+					.sendAsync(HttpRequest.newBuilder(URI.create(this.getPropertiesConnectorUrl() + "/properties/string/testProperties1/property1"))
+							.PUT(BodyPublishers.ofString("4")).build(), BodyHandlers.discarding())
+					.get(5, TimeUnit.SECONDS);
+			Assertions.assertEquals(200, propertiesConnectorUpdate.statusCode());
 			Assertions.assertEquals("4", this.testProperties1.getProperty1());
+			Assertions.assertTrue(((org.apache.tomcat.util.threads.ThreadPoolExecutor) mainProtocol.getExecutor()).getActiveCount() >= mainMaxThreads);
 		}
 		finally {
 			this.propertiesConnectorTestService.release();
 			heldRequests.addAll(mainUpdates);
 			CompletableFuture.allOf(heldRequests.toArray(CompletableFuture[]::new)).get(1, TimeUnit.MINUTES);
 		}
+	}
+
+	/**
+	 * Gets the base URL of the properties connector.
+	 *
+	 * @return The base URL of the properties connector.
+	 */
+	private String getPropertiesConnectorUrl() {
+		return "http://127.0.0.1:" + this.propertiesConnectorCustomizer.getLocalPort();
+	}
+
+	/**
+	 * The properties connector listens on the loopback address the library
+	 * ships, and serves no path but the properties endpoint.
+	 *
+	 * @throws Exception If the test fails.
+	 */
+	@Test
+	@DisplayName("The properties connector listens on loopback and serves the properties endpoint only")
+	public void testPropertiesConnectorLoopbackAndPropertiesOnly() throws Exception {
+		final Connector propertiesConnector = Arrays
+				.stream(((TomcatWebServer) this.webServerApplicationContext.getWebServer()).getTomcat().getService().findConnectors())
+				.filter(connector -> connector.getLocalPort() == this.propertiesConnectorCustomizer.getLocalPort()).findFirst().orElseThrow();
+		Assertions.assertTrue(((AbstractProtocol<?>) propertiesConnector.getProtocolHandler()).getAddress().isLoopbackAddress());
+		final HttpClient httpClient = HttpClient.newBuilder().version(HttpClient.Version.HTTP_1_1).build();
+		final HttpResponse<Void> healthCheckOnPropertiesConnector = httpClient.send(
+				HttpRequest.newBuilder(URI.create(this.getPropertiesConnectorUrl() + "/health-check")).GET().build(), BodyHandlers.discarding());
+		Assertions.assertEquals(404, healthCheckOnPropertiesConnector.statusCode());
+		final HttpResponse<Void> healthCheckOnMainConnector = httpClient
+				.send(HttpRequest.newBuilder(URI.create("http://localhost:" + this.port + "/health-check")).GET().build(), BodyHandlers.discarding());
+		Assertions.assertNotEquals(404, healthCheckOnMainConnector.statusCode());
+		// A path that only starts like the endpoint is outside it too.
+		final HttpResponse<Void> pathOutsideTheEndpoint = httpClient.send(
+				HttpRequest.newBuilder(URI.create(this.getPropertiesConnectorUrl() + "/properties-connector-test/wait")).GET().build(), BodyHandlers.discarding());
+		Assertions.assertEquals(404, pathOutsideTheEndpoint.statusCode());
 	}
 
 }

@@ -1,5 +1,9 @@
 package org.coldis.library.test.service.properties;
 
+import java.io.IOException;
+import java.net.InetAddress;
+import java.util.Properties;
+
 import org.apache.catalina.connector.Connector;
 import org.apache.coyote.AbstractProtocol;
 import org.coldis.library.service.properties.PropertiesConnectorCustomizer;
@@ -7,6 +11,8 @@ import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.boot.web.embedded.tomcat.TomcatServletWebServerFactory;
+import org.springframework.core.io.ClassPathResource;
+import org.springframework.core.io.support.PropertiesLoaderUtils;
 
 /**
  * Covers the connector the properties endpoint gets on its own: what it adds to
@@ -60,6 +66,20 @@ public class PropertiesConnectorCustomizerUnitTest {
 		final IllegalStateException exception = Assertions.assertThrows(IllegalStateException.class,
 				() -> PropertiesConnectorCustomizer.createConnector("[invalid", 9091, 2));
 		Assertions.assertTrue(exception.getMessage().contains(PropertiesConnectorCustomizer.PROPERTY_PREFIX + ".address"));
+	}
+
+	/**
+	 * The library ships the connector off, on the loopback address: only a
+	 * deployment that calls it turns it on.
+	 *
+	 * @throws IOException If the library defaults cannot be read.
+	 */
+	@Test
+	@DisplayName("Ships the connector off, on the loopback address")
+	public void testShippedDefaults() throws IOException {
+		final Properties libraryDefaults = PropertiesLoaderUtils.loadProperties(new ClassPathResource("service.properties"));
+		Assertions.assertEquals("false", libraryDefaults.getProperty(PropertiesConnectorCustomizer.PROPERTY_PREFIX + ".enabled"));
+		Assertions.assertTrue(InetAddress.getByName(libraryDefaults.getProperty(PropertiesConnectorCustomizer.PROPERTY_PREFIX + ".address")).isLoopbackAddress());
 	}
 
 }
