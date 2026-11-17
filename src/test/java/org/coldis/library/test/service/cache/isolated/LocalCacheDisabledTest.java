@@ -2,6 +2,7 @@ package org.coldis.library.test.service.cache.isolated;
 
 import org.coldis.library.service.cache.LocalCacheAutoConfiguration;
 import org.junit.jupiter.api.Assertions;
+import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
 /**
@@ -13,6 +14,7 @@ public class LocalCacheDisabledTest {
 	 * Tests that the switch removes the local cache configuration and the cached methods are called through.
 	 */
 	@Test
+	@DisplayName("With local caching off and no Redis, cached methods are called through")
 	public void testLocalCacheDisabled() {
 		IsolatedCacheContext.withoutRedis().withPropertyValues(LocalCacheAutoConfiguration.ENABLED_PROPERTY + "=false").run(context -> {
 			Assertions.assertNull(context.getStartupFailure());

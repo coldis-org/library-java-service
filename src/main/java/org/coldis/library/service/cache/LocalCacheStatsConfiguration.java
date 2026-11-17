@@ -10,7 +10,7 @@ import org.springframework.scheduling.annotation.Scheduled;
  */
 @Configuration
 @ConditionalOnProperty(
-		value = "org.coldis.configuration.cache.local.record-stats",
+		value = LocalCacheAutoConfiguration.RECORD_STATS_PROPERTY,
 		havingValue = "true",
 		matchIfMissing = false
 )

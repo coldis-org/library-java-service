@@ -14,6 +14,10 @@ public class CacheHelper {
 	@Autowired(required = false)
 	private RedisCacheAutoConfiguration redisCacheAutoConfiguration;
 
+	/** Cache manager fallback (the local caches it creates for central names). */
+	@Autowired(required = false)
+	private CacheManagerFallbackRegistrar cacheManagerFallbackRegistrar;
+
 	/**
 	 * Clears caches.
 	 */
@@ -26,6 +30,11 @@ public class CacheHelper {
 		}
 		try {
 			this.redisCacheAutoConfiguration.evictAll();
+		}
+		catch (final Exception exception) {
+		}
+		try {
+			this.cacheManagerFallbackRegistrar.evictAll();
 		}
 		catch (final Exception exception) {
 		}

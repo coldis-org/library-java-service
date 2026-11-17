@@ -217,7 +217,9 @@
 				<executions>
 					<!-- The cache tests that build their own contexts run apart: the AspectJ cache aspect is one per JVM and
 					     keeps the last context's cache managers, so they get a JVM per test class, and the shared context
-					     never meets them. -->
+					     never meets them. A -Dtest filter overrides both executions' includes
+					     and excludes: to run one isolated class alone, use
+					     "mvn surefire:test@isolated-cache-test -Dtest=<class>" after test-compile. -->
 					<execution>
 						<id>default-test</id>
 						<configuration>

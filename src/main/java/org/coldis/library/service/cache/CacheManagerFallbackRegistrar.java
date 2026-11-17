@@ -1,8 +1,10 @@
 package org.coldis.library.service.cache;
 
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 import java.util.Locale;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.function.Supplier;
 
 import org.slf4j.Logger;
@@ -13,6 +15,7 @@ import org.springframework.beans.factory.support.BeanDefinitionRegistry;
 import org.springframework.beans.factory.support.BeanDefinitionRegistryPostProcessor;
 import org.springframework.beans.factory.support.RootBeanDefinition;
 import org.springframework.cache.CacheManager;
+import org.springframework.cache.caffeine.CaffeineCacheManager;
 import org.springframework.cache.support.NoOpCacheManager;
 import org.springframework.core.Ordered;
 import org.springframework.core.env.Environment;
@@ -38,14 +41,14 @@ public class CacheManagerFallbackRegistrar implements BeanDefinitionRegistryPost
 	public static final String CENTRAL_FALLBACK_PROPERTY = "org.coldis.configuration.cache.central.fallback";
 
 	/**
-	 * Local cache stats property.
-	 */
-	private static final String LOCAL_RECORD_STATS_PROPERTY = "org.coldis.configuration.cache.local.record-stats";
-
-	/**
 	 * Environment.
 	 */
 	private final Environment environment;
+
+	/**
+	 * The local cache managers created for central names, kept so they can be cleared (they belong to no configuration).
+	 */
+	private final List<CaffeineCacheManager> centralLocalCacheManagers = new CopyOnWriteArrayList<>();
 
 	/**
 	 * Constructor.
@@ -62,8 +65,14 @@ public class CacheManagerFallbackRegistrar implements BeanDefinitionRegistryPost
 	 * @return What the central cache manager names fall back to.
 	 */
 	private CentralCacheFallback getCentralFallback() {
-		return CentralCacheFallback.valueOf(this.environment.getProperty(CacheManagerFallbackRegistrar.CENTRAL_FALLBACK_PROPERTY, CentralCacheFallback.NONE.name())
-				.trim().toUpperCase(Locale.ROOT));
+		final String centralFallback = this.environment.getProperty(CacheManagerFallbackRegistrar.CENTRAL_FALLBACK_PROPERTY, CentralCacheFallback.NONE.name());
+		try {
+			return CentralCacheFallback.valueOf(centralFallback.trim().toUpperCase(Locale.ROOT));
+		}
+		catch (final IllegalArgumentException exception) {
+			throw new IllegalArgumentException("'" + CacheManagerFallbackRegistrar.CENTRAL_FALLBACK_PROPERTY + "' is '" + centralFallback + "', expected one of "
+					+ Arrays.toString(CentralCacheFallback.values()).toLowerCase(Locale.ROOT) + ".", exception);
+		}
 	}
 
 	/**
@@ -74,32 +83,42 @@ public class CacheManagerFallbackRegistrar implements BeanDefinitionRegistryPost
 	 */
 	private CacheManager createLocalCacheManager(
 			final CacheManagerExpiration expiration) {
-		return LocalCacheAutoConfiguration.createCacheManager(expiration.getExpiration(this.environment),
+		final CaffeineCacheManager cacheManager = LocalCacheAutoConfiguration.createCacheManager(expiration.getExpiration(this.environment),
 				this.environment.getProperty(LocalCacheAutoConfiguration.MAXIMUM_SIZE_PROPERTY, Long.class, LocalCacheAutoConfiguration.DEFAULT_MAXIMUM_SIZE),
-				this.environment.getProperty(CacheManagerFallbackRegistrar.LOCAL_RECORD_STATS_PROPERTY, Boolean.class, false));
+				this.environment.getProperty(LocalCacheAutoConfiguration.RECORD_STATS_PROPERTY, Boolean.class, false));
+		this.centralLocalCacheManagers.add(cacheManager);
+		return cacheManager;
+	}
+
+	/**
+	 * Evicts all entries of the local cache managers created for central names (none unless the central fallback is
+	 * local). Their statistics are not logged by the local cache stats configuration.
+	 */
+	public void evictAll() {
+		this.centralLocalCacheManagers.forEach(cacheManager -> cacheManager.getCacheNames().forEach(name -> cacheManager.getCache(name).clear()));
 	}
 
 	/**
 	 * Registers a cache manager under a name, if the name has no bean.
 	 *
-	 * @param  registry   Registry.
-	 * @param  name       Cache manager name.
-	 * @param  primary    If the cache manager is the default one.
-	 * @param  supplier   Cache manager supplier.
-	 * @return            If the cache manager was registered.
+	 * @param  registry             Registry.
+	 * @param  name                 Cache manager name.
+	 * @param  isPrimary            If the cache manager is the default one.
+	 * @param  cacheManagerSupplier Cache manager supplier.
+	 * @return                      If the cache manager was registered.
 	 */
 	private boolean registerIfMissing(
 			final BeanDefinitionRegistry registry,
 			final String name,
-			final boolean primary,
-			final Supplier<CacheManager> supplier) {
-		final boolean missing = !registry.containsBeanDefinition(name) && !registry.isAlias(name);
-		if (missing) {
-			final RootBeanDefinition beanDefinition = new RootBeanDefinition(CacheManager.class, supplier);
-			beanDefinition.setPrimary(primary);
+			final boolean isPrimary,
+			final Supplier<CacheManager> cacheManagerSupplier) {
+		final boolean isMissing = !registry.containsBeanDefinition(name) && !registry.isAlias(name);
+		if (isMissing) {
+			final RootBeanDefinition beanDefinition = new RootBeanDefinition(CacheManager.class, cacheManagerSupplier);
+			beanDefinition.setPrimary(isPrimary);
 			registry.registerBeanDefinition(name, beanDefinition);
 		}
-		return missing;
+		return isMissing;
 	}
 
 	/**

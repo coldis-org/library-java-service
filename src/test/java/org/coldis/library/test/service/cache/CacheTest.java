@@ -3,11 +3,13 @@ package org.coldis.library.test.service.cache;
 import java.io.Serializable;
 
 import org.coldis.library.service.cache.CacheManagerExpiration;
+import org.coldis.library.service.cache.CacheManagerFallbackRegistrar;
 import org.coldis.library.test.StartTestWithContainerExtension;
 import org.coldis.library.test.TestHelper;
 import org.coldis.library.test.TestWithContainer;
 import org.coldis.library.test.service.ContainerTestHelper;
 import org.junit.jupiter.api.Assertions;
+import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -181,10 +183,14 @@ public class CacheTest extends ContainerTestHelper {
 
 	/**
 	 * Tests that, with Redis and local caching on, the central cache managers are the Redis ones, the local ones are
-	 * Caffeine, and no fallback cache manager is registered.
+	 * Caffeine, and the scanned fallback registrar registered no cache manager: the library declares exactly the twelve
+	 * names the fallback knows.
 	 */
 	@Test
+	@DisplayName("With Redis and local caching on, the cache managers are the Redis and Caffeine ones, no fallback")
 	public void testCacheManagersWithRedis() {
+		Assertions.assertEquals(1, this.applicationContext.getBeansOfType(CacheManagerFallbackRegistrar.class).size());
+		Assertions.assertEquals(CacheManagerExpiration.values().length * 2, this.applicationContext.getBeansOfType(CacheManager.class).size());
 		for (final CacheManagerExpiration expiration : CacheManagerExpiration.values()) {
 			Assertions.assertInstanceOf(RedisCacheManager.class, this.applicationContext.getBean(expiration.getCentralCacheManagerName()));
 			Assertions.assertInstanceOf(CaffeineCacheManager.class, this.applicationContext.getBean(expiration.getLocalCacheManagerName()));

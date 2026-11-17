@@ -120,8 +120,13 @@ public class LocalCacheAutoConfiguration {
 	@Value(value = "${" + LocalCacheAutoConfiguration.MAXIMUM_SIZE_PROPERTY + ":" + LocalCacheAutoConfiguration.DEFAULT_MAXIMUM_SIZE + "}")
 	private Long maximumSize;
 
+	/**
+	 * Property that turns local cache stats recording on.
+	 */
+	public static final String RECORD_STATS_PROPERTY = "org.coldis.configuration.cache.local.record-stats";
+
 	/** If stats should be recoreded. */
-	@Value(value = "${org.coldis.configuration.cache.local.record-stats:false}")
+	@Value(value = "${" + LocalCacheAutoConfiguration.RECORD_STATS_PROPERTY + ":false}")
 	private Boolean stats;
 
 	/**
@@ -157,21 +162,21 @@ public class LocalCacheAutoConfiguration {
 	/**
 	 * Creates a local cache manager.
 	 *
-	 * @param  expiration  Expiration after write.
-	 * @param  maximumSize Maximum entries per cache (none if null).
-	 * @param  stats       If stats should be recorded.
-	 * @return             Cache manager.
+	 * @param  expiration        Expiration after write.
+	 * @param  maximumSize       Maximum entries per cache (none if null).
+	 * @param  shouldRecordStats If stats should be recorded.
+	 * @return                   Cache manager.
 	 */
 	static CaffeineCacheManager createCacheManager(
 			final Duration expiration,
 			final Long maximumSize,
-			final Boolean stats) {
+			final Boolean shouldRecordStats) {
 		final CaffeineCacheManager cacheManager = new CaffeineCacheManager();
 		Caffeine<Object, Object> caffeine = Caffeine.newBuilder().expireAfterWrite(expiration);
 		if (maximumSize != null) {
 			caffeine.maximumSize(maximumSize);
 		}
-		if (Boolean.TRUE.equals(stats)) {
+		if (Boolean.TRUE.equals(shouldRecordStats)) {
 			caffeine = caffeine.recordStats();
 		}
 		cacheManager.setCaffeine(caffeine);

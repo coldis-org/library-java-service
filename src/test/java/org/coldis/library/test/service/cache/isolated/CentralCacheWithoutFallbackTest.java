@@ -1,6 +1,7 @@
 package org.coldis.library.test.service.cache.isolated;
 
 import org.junit.jupiter.api.Assertions;
+import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.NoSuchBeanDefinitionException;
 
@@ -15,6 +16,7 @@ public class CentralCacheWithoutFallbackTest {
 	 * Tests that a central cached method fails on every call without the fallback.
 	 */
 	@Test
+	@DisplayName("Without Redis and without the fallback, a central cached method fails on every call")
 	public void testCentralCacheWithoutFallback() {
 		IsolatedCacheContext.withoutRedisNorFallback().run(context -> {
 			Assertions.assertNull(context.getStartupFailure());

@@ -1,5 +1,7 @@
 package org.coldis.library.test.service.cache.isolated;
 
+import java.time.Duration;
+
 import org.coldis.library.service.cache.CacheManagerFallbackAutoConfiguration;
 import org.coldis.library.service.cache.LocalCacheAutoConfiguration;
 import org.coldis.library.service.cache.RedisCacheAutoConfiguration;
@@ -77,6 +79,18 @@ public final class IsolatedCacheContext {
 	public static long getMaximumSize(
 			final Object cacheManager) {
 		return ((CaffeineCache) ((CaffeineCacheManager) cacheManager).getCache("maximum-size")).getNativeCache().policy().eviction().orElseThrow().getMaximum();
+	}
+
+	/**
+	 * Gets the expiration after write of a cache of a Caffeine cache manager.
+	 *
+	 * @param  cacheManager Cache manager.
+	 * @return              The expiration after write of the cache.
+	 */
+	public static Duration getExpiration(
+			final Object cacheManager) {
+		return ((CaffeineCache) ((CaffeineCacheManager) cacheManager).getCache("expiration")).getNativeCache().policy().expireAfterWrite().orElseThrow()
+				.getExpiresAfter();
 	}
 
 	/**

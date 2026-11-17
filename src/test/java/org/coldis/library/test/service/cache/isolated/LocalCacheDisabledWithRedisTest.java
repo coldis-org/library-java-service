@@ -1,8 +1,10 @@
 package org.coldis.library.test.service.cache.isolated;
 
 import org.coldis.library.service.cache.CacheManagerExpiration;
+import org.coldis.library.service.cache.CacheManagerFallbackRegistrar;
 import org.coldis.library.service.cache.LocalCacheAutoConfiguration;
 import org.junit.jupiter.api.Assertions;
+import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.cache.CacheManager;
 import org.springframework.cache.support.NoOpCacheManager;
@@ -16,11 +18,14 @@ import org.springframework.data.redis.cache.RedisCacheManager;
 public class LocalCacheDisabledWithRedisTest {
 
 	/**
-	 * Tests that the service starts, keeps its Redis cache managers and calls a local cached method through.
+	 * Tests that the service starts, keeps its Redis cache managers (even with the local central fallback chosen) and
+	 * calls a local cached method through.
 	 */
 	@Test
+	@DisplayName("With local caching off and Redis, the service starts, keeps Redis and calls local cached methods through")
 	public void testLocalCacheDisabledWithRedis() {
-		IsolatedCacheContext.withRedis().withPropertyValues(LocalCacheAutoConfiguration.ENABLED_PROPERTY + "=false").run(context -> {
+		IsolatedCacheContext.withRedis().withPropertyValues(LocalCacheAutoConfiguration.ENABLED_PROPERTY + "=false",
+				CacheManagerFallbackRegistrar.CENTRAL_FALLBACK_PROPERTY + "=local").run(context -> {
 			Assertions.assertNull(context.getStartupFailure());
 			for (final CacheManagerExpiration expiration : CacheManagerExpiration.values()) {
 				Assertions.assertInstanceOf(RedisCacheManager.class, context.getBean(expiration.getCentralCacheManagerName()));

@@ -3,6 +3,7 @@ package org.coldis.library.test.service.cache.isolated;
 import org.coldis.library.service.cache.CacheManagerExpiration;
 import org.coldis.library.service.cache.LocalCacheAutoConfiguration;
 import org.junit.jupiter.api.Assertions;
+import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.cache.caffeine.CaffeineCacheManager;
 import org.springframework.cache.support.NoOpCacheManager;
@@ -19,6 +20,7 @@ public class LocalCacheByDefaultTest {
 	 * Tests that local caching works out of the box and a central cached method is called through.
 	 */
 	@Test
+	@DisplayName("Without Redis or cache properties, local caching works, bounded, and central cached methods are called through")
 	public void testLocalCacheByDefault() {
 		IsolatedCacheContext.withoutRedis().run(context -> {
 			Assertions.assertNull(context.getStartupFailure());
