@@ -87,7 +87,7 @@ public class JmsRequestThreadsLimit implements ApplicationListener<WebServerInit
 	 *                        finish.
 	 */
 	public JmsRequestThreadsLimit(
-			@Value("${" + JmsRequestThreadsLimit.PROPERTY_PREFIX + ".enabled:false}") final Boolean isEnabled,
+			@Value("${" + JmsRequestThreadsLimit.PROPERTY_PREFIX + ".enabled:true}") final Boolean isEnabled,
 			@Value("${" + JmsRequestThreadsLimit.PROPERTY_PREFIX + ".max-share:0.5}") final Double maxShare,
 			@Value("${" + JmsRequestThreadsLimit.PROPERTY_PREFIX + ".maximum-wait:2s}") final Duration maximumWait) {
 		this.isEnabled = isEnabled;

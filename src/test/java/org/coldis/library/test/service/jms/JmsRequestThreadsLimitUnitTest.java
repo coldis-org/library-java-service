@@ -56,16 +56,16 @@ public class JmsRequestThreadsLimitUnitTest {
 	}
 
 	/**
-	 * The library ships the limit off, at half of the request threads, with a
+	 * The library ships the limit on, at half of the request threads, with a
 	 * short wait.
 	 *
 	 * @throws IOException If the library defaults cannot be read.
 	 */
 	@Test
-	@DisplayName("Ships the limit off, at half of the request threads")
+	@DisplayName("Ships the limit on, at half of the request threads")
 	public void testShippedDefaults() throws IOException {
 		final Properties libraryDefaults = PropertiesLoaderUtils.loadProperties(new ClassPathResource("service.properties"));
-		Assertions.assertEquals("false", libraryDefaults.getProperty(JmsRequestThreadsLimit.PROPERTY_PREFIX + ".enabled"));
+		Assertions.assertEquals("true", libraryDefaults.getProperty(JmsRequestThreadsLimit.PROPERTY_PREFIX + ".enabled"));
 		Assertions.assertEquals("0.5", libraryDefaults.getProperty(JmsRequestThreadsLimit.PROPERTY_PREFIX + ".max-share"));
 		Assertions.assertEquals("2s", libraryDefaults.getProperty(JmsRequestThreadsLimit.PROPERTY_PREFIX + ".maximum-wait"));
 	}
