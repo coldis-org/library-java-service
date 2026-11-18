@@ -11,6 +11,7 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
 
 import org.apache.coyote.AbstractProtocol;
+import org.coldis.library.service.health.HealthCheckService;
 import org.coldis.library.service.jms.JmsRequestThreadsLimit;
 import org.coldis.library.test.StartTestWithContainerExtension;
 import org.coldis.library.test.TestHelper;
@@ -28,15 +29,16 @@ import org.springframework.boot.test.context.SpringBootTest.WebEnvironment;
 import org.springframework.boot.web.embedded.tomcat.TomcatWebServer;
 import org.springframework.boot.web.servlet.context.ServletWebServerApplicationContext;
 
+import io.micrometer.core.instrument.MeterRegistry;
 import jakarta.jms.Connection;
 import jakarta.jms.ConnectionFactory;
 
 /**
  * Limit on the request threads that may hold a pooled JMS connection at once,
- * through real requests: with every permit taken by requests that hold their
- * connection, as requests stuck on a broker would, a further request that needs
- * a connection fails after the maximum wait, while requests that need none, and
- * threads that serve no request, go on.
+ * through real requests: with more requests holding their connection than
+ * request threads, as when every request is stuck on a broker, the requests
+ * past the limit are refused after the maximum wait and free their threads, so
+ * the health check still answers; threads that serve no request go on.
  */
 @TestWithContainer(reuse = true)
 @ExtendWith(StartTestWithContainerExtension.class)
@@ -75,6 +77,12 @@ public class JmsRequestThreadsLimitTest extends ContainerTestHelper {
 	private ServletWebServerApplicationContext webServerApplicationContext;
 
 	/**
+	 * Meter registry.
+	 */
+	@Autowired
+	private MeterRegistry meterRegistry;
+
+	/**
 	 * Gets the URL of a test endpoint.
 	 *
 	 * @param  path Endpoint path.
@@ -86,42 +94,47 @@ public class JmsRequestThreadsLimitTest extends ContainerTestHelper {
 	}
 
 	/**
-	 * The limit is half of the server's request threads; past it, a request that
-	 * needs a connection fails after the maximum wait, while the health check
-	 * and a thread that serves no request go on; once the held connections
-	 * close, the permits come back.
+	 * The limit is half of the server's request threads. With more requests
+	 * holding a connection than request threads, the ones past the limit are
+	 * refused after the maximum wait, so the health check gets a thread and
+	 * answers; without the limit every thread would wait with them. Once the
+	 * held connections close, the permits come back.
 	 *
 	 * @throws Exception If the test fails.
 	 */
 	@Test
-	@DisplayName("Past the limit, a request that needs a JMS connection fails after the wait and the others go on")
-	public void testRequestsPastTheLimitFailAfterTheWait() throws Exception {
+	@DisplayName("With every request thread after a JMS connection, the ones past the limit are refused and the health check answers")
+	public void testRequestsPastTheLimitRefusedAndHealthCheckAnswers() throws Exception {
 		final Integer maxThreads = ((AbstractProtocol<?>) ((TomcatWebServer) this.webServerApplicationContext.getWebServer()).getTomcat().getConnector()
 				.getProtocolHandler()).getMaxThreads();
 		final Integer maxPermits = this.jmsRequestThreadsLimit.getMaxPermits();
 		Assertions.assertEquals(JmsRequestThreadsLimit.getMaxPermits(maxThreads, 0.5), maxPermits);
+		final Integer heldRequestsCount = maxThreads + 5;
+		final Double refusedBefore = this.meterRegistry.get(JmsRequestThreadsLimit.REFUSED).counter().count();
 		final HttpClient httpClient = HttpClient.newBuilder().version(HttpClient.Version.HTTP_1_1).build();
 		final List<CompletableFuture<HttpResponse<Void>>> heldRequests = new ArrayList<>();
 		this.jmsRequestThreadsLimitTestService.hold();
 		try {
-			// Takes every permit with requests that hold their connection.
-			for (int requestIndex = 0; requestIndex < maxPermits; requestIndex++) {
+			// More requests that hold their connection than request threads.
+			for (int requestIndex = 0; requestIndex < heldRequestsCount; requestIndex++) {
 				heldRequests.add(httpClient.sendAsync(HttpRequest.newBuilder(this.getUrl("/jms-request-threads-test/hold")).GET().build(),
 						BodyHandlers.discarding()));
 			}
 			Assertions.assertTrue(TestHelper.waitUntilValid(this.jmsRequestThreadsLimit::getHeldPermits, heldPermits -> heldPermits >= maxPermits,
 					TestHelper.LONG_WAIT, TestHelper.VERY_SHORT_WAIT));
-			// A further request that needs a connection fails after the maximum wait.
-			final long refusedStartNanos = System.nanoTime();
-			final HttpResponse<Void> refusedRequest = httpClient.send(HttpRequest.newBuilder(this.getUrl("/jms-request-threads-test/connect")).GET().build(),
-					BodyHandlers.discarding());
-			final long refusedMillis = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - refusedStartNanos);
-			Assertions.assertTrue(refusedRequest.statusCode() >= 400, "status " + refusedRequest.statusCode());
-			Assertions.assertTrue((refusedMillis >= 1500) && (refusedMillis < 10000), refusedMillis + " ms");
-			// A request that needs no connection still gets a thread.
+			// The health check gets a thread a refused request freed.
 			final HttpResponse<Void> healthCheck = httpClient
-					.sendAsync(HttpRequest.newBuilder(this.getUrl("/health-check")).GET().build(), BodyHandlers.discarding()).get(5, TimeUnit.SECONDS);
-			Assertions.assertTrue(healthCheck.statusCode() > 0);
+					.sendAsync(HttpRequest.newBuilder(this.getUrl("/health-check?" + HealthCheckService.SCOPE_PARAMETER + "=" + HealthCheckService.LIVENESS_SCOPE))
+							.GET().build(), BodyHandlers.discarding())
+					.get(5, TimeUnit.SECONDS);
+			Assertions.assertEquals(200, healthCheck.statusCode());
+			// Every request past the permits is refused by the limit, and only those.
+			Assertions.assertTrue(TestHelper.waitUntilValid(() -> this.meterRegistry.get(JmsRequestThreadsLimit.REFUSED).counter().count() - refusedBefore,
+					refused -> refused >= (heldRequestsCount - maxPermits), TestHelper.LONG_WAIT, TestHelper.VERY_SHORT_WAIT));
+			Assertions.assertEquals(maxPermits, this.jmsRequestThreadsLimit.getHeldPermits());
+			Assertions.assertTrue(TestHelper.waitUntilValid(() -> heldRequests.stream().filter(CompletableFuture::isDone).map(CompletableFuture::join)
+					.filter(response -> response.statusCode() >= 400).count(), refusedResponses -> refusedResponses == (heldRequestsCount - maxPermits),
+					TestHelper.LONG_WAIT, TestHelper.VERY_SHORT_WAIT));
 			// A thread that serves no request is not limited.
 			try (Connection connection = this.connectionFactory.createConnection()) {
 				Assertions.assertNotNull(connection.getMetaData());
@@ -131,6 +144,8 @@ public class JmsRequestThreadsLimitTest extends ContainerTestHelper {
 			this.jmsRequestThreadsLimitTestService.release();
 			CompletableFuture.allOf(heldRequests.toArray(CompletableFuture[]::new)).get(1, TimeUnit.MINUTES);
 		}
+		Assertions.assertEquals(heldRequestsCount - maxPermits,
+				this.meterRegistry.get(JmsRequestThreadsLimit.REFUSED).counter().count() - refusedBefore, 0.0);
 		// The permits come back once the held connections close.
 		Assertions.assertTrue(TestHelper.waitUntilValid(this.jmsRequestThreadsLimit::getHeldPermits, heldPermits -> heldPermits == 0, TestHelper.LONG_WAIT,
 				TestHelper.VERY_SHORT_WAIT));

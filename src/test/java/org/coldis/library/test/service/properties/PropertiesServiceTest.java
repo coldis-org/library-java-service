@@ -1,10 +1,16 @@
 package org.coldis.library.test.service.properties;
 
 import java.sql.Connection;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 
 import javax.sql.DataSource;
 
+import org.apache.activemq.artemis.core.client.impl.ClientSessionFactoryInternal;
+import org.apache.activemq.artemis.core.client.impl.ServerLocatorImpl;
+import org.apache.activemq.artemis.jms.client.ActiveMQConnectionFactory;
+import org.apache.activemq.artemis.spi.core.protocol.RemotingConnection;
 import org.coldis.library.test.StartTestWithContainerExtension;
 import org.coldis.library.test.TestHelper;
 import org.coldis.library.test.TestWithContainer;
@@ -318,6 +324,61 @@ public class PropertiesServiceTest extends ContainerTestHelper {
 			}
 		}, valid -> valid, TestHelper.VERY_LONG_WAIT, TestHelper.VERY_SHORT_WAIT));
 
+	}
+
+
+	/**
+	 * Gets the live connections of the pooled factory's Artemis factory.
+	 *
+	 * @return The live connections.
+	 */
+	private Set<RemotingConnection> getLiveArtemisConnections() {
+		final ServerLocatorImpl serverLocator = (ServerLocatorImpl) ((ActiveMQConnectionFactory) this.connectionFactory.getConnectionFactory())
+				.getServerLocator();
+		final Set<RemotingConnection> liveConnections = new HashSet<>();
+		final Set<ClientSessionFactoryInternal> sessionFactories = serverLocator.getFactories();
+		synchronized (sessionFactories) {
+			for (final ClientSessionFactoryInternal sessionFactory : sessionFactories) {
+				if (sessionFactory.numConnections() > 0) {
+					liveConnections.add(sessionFactory.getConnection());
+				}
+			}
+		}
+		return liveConnections;
+	}
+
+	/**
+	 * A new broker host sent through the endpoint, as the update scripts send
+	 * it, moves the live connections of the pooled factory to it without
+	 * clearing the pool: each is replaced by a new one, and sends go on.
+	 *
+	 * @throws Exception If the test fails.
+	 */
+	@Test
+	@DisplayName("A broker host changed through the endpoint moves the live connections, without clearing the pool")
+	public void testArtemisAddressChangeMovesLiveConnections() throws Exception {
+		this.jmsTemplate.convertAndSend("propertiesAddressChangeQueue", "before");
+		final Set<RemotingConnection> connectionsBefore = this.getLiveArtemisConnections();
+		Assertions.assertFalse(connectionsBefore.isEmpty());
+
+		// The same broker under another host name: the address changed.
+		this.restTemplate.put(
+				"http://localhost:" + this.port
+						+ "/properties/string/pooledJmsConnectionFactory/connectionFactory.serverLocator.initialConnectors.0.params.host?fieldAccess=true",
+				"127.0.0.1", Void.class);
+
+		// Every connection that was live fails and is replaced, with no clear() of the pool.
+		Assertions.assertTrue(TestHelper.waitUntilValid(this::getLiveArtemisConnections,
+				liveConnections -> liveConnections.stream().noneMatch(connectionsBefore::contains), TestHelper.LONG_WAIT, TestHelper.VERY_SHORT_WAIT));
+		Assertions.assertTrue(TestHelper.waitUntilValid(() -> {
+			try {
+				this.jmsTemplate.convertAndSend("propertiesAddressChangeQueue", "after");
+				return Boolean.TRUE;
+			}
+			catch (final Exception exception) {
+				return Boolean.FALSE;
+			}
+		}, isSent -> isSent, TestHelper.LONG_WAIT, TestHelper.VERY_SHORT_WAIT));
 	}
 
 }

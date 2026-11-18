@@ -2,7 +2,6 @@ package org.coldis.library.service.jms;
 
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.Semaphore;
 import java.util.function.ToDoubleFunction;
 
 import org.messaginghub.pooled.jms.JmsPoolConnection;
@@ -199,23 +198,23 @@ public class MeteredJmsPoolConnectionFactory extends JmsPoolConnectionFactory im
 	public Connection createConnection(
 			final String userName,
 			final String password) throws JMSException {
-		final Semaphore permits = (this.requestThreadsLimit == null) ? null : this.requestThreadsLimit.acquire();
+		final JmsRequestThreadsLimit.Permit permit = (this.requestThreadsLimit == null) ? null : this.requestThreadsLimit.acquire();
 		final Connection connection;
 		try {
 			connection = super.createConnection(userName, password);
 		}
 		catch (final JMSException | RuntimeException exception) {
-			if (permits != null) {
-				permits.release();
+			if (permit != null) {
+				permit.release();
 			}
 			throw exception;
 		}
-		if (permits != null) {
+		if (permit != null) {
 			if (connection instanceof final RequestThreadsLimitedConnection limitedConnection) {
-				limitedConnection.holdPermit(permits);
+				limitedConnection.holdPermit(permit);
 			}
 			else {
-				permits.release();
+				permit.release();
 			}
 		}
 		return connection;

@@ -1,10 +1,18 @@
 package org.coldis.library.service.jms;
 
+import java.time.Duration;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
 import java.util.TreeMap;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.ScheduledFuture;
+import java.util.concurrent.TimeUnit;
 
 import org.apache.activemq.artemis.api.core.ActiveMQNotConnectedException;
 import org.apache.activemq.artemis.api.core.TransportConfiguration;
@@ -15,6 +23,9 @@ import org.apache.activemq.artemis.spi.core.protocol.RemotingConnection;
 import org.messaginghub.pooled.jms.JmsPoolConnectionFactory;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.DisposableBean;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.stereotype.Component;
 
 /**
  * Moves the live connections of an Artemis connection factory to its broker
@@ -32,8 +43,16 @@ import org.slf4j.LoggerFactory;
  * does when it notices a lost broker by itself. Listener connections come from
  * the same locator and move with them.
  * </p>
+ * <p>
+ * The move runs apart from the update, after a short delay that each further
+ * change of the same factory restarts, so a host and a port sent one after the
+ * other move the connections once, to both. A session factory that has no
+ * connection (it is reconnecting) is left alone: it reads the new address on
+ * its next attempt.
+ * </p>
  */
-public final class ArtemisBrokerAddressChange {
+@Component
+public class ArtemisBrokerAddressChange implements DisposableBean {
 
 	/**
 	 * Logger.
@@ -41,46 +60,149 @@ public final class ArtemisBrokerAddressChange {
 	private static final Logger LOGGER = LoggerFactory.getLogger(ArtemisBrokerAddressChange.class);
 
 	/**
-	 * No instances.
+	 * Property prefix.
 	 */
-	private ArtemisBrokerAddressChange() {
+	public static final String PROPERTY_PREFIX = "org.coldis.library.service.jms.broker-address-change";
+
+	/**
+	 * Whether the live connections move.
+	 */
+	private final Boolean isEnabled;
+
+	/**
+	 * Delay between the last change of a factory and the move.
+	 */
+	private final Duration delay;
+
+	/**
+	 * Runs the moves, apart from the updates.
+	 */
+	private final ScheduledExecutorService scheduler;
+
+	/**
+	 * Move scheduled for each factory.
+	 */
+	private final Map<ActiveMQConnectionFactory, ScheduledFuture<?>> scheduledMoves = new ConcurrentHashMap<>();
+
+	/**
+	 * Broker address of an Artemis connection factory, noted before an update.
+	 * It only tells whether the address changed since; the address itself (whose
+	 * parameters may carry credentials) stays inside.
+	 */
+	public static final class Snapshot {
+
+		/**
+		 * Artemis connection factory.
+		 */
+		private final ActiveMQConnectionFactory connectionFactory;
+
+		/**
+		 * Address when noted.
+		 */
+		private final List<String> address;
+
+		/**
+		 * Constructor.
+		 *
+		 * @param connectionFactory Artemis connection factory.
+		 */
+		private Snapshot(final ActiveMQConnectionFactory connectionFactory) {
+			this.connectionFactory = connectionFactory;
+			this.address = Snapshot.getAddress(connectionFactory);
+		}
+
+		/**
+		 * Gets the broker address of a connection factory: the parameters of its
+		 * initial connectors, in a form that compares equal while they are the
+		 * same (a port given as text equals the same port as a number).
+		 *
+		 * @param  connectionFactory Artemis connection factory.
+		 * @return                   The broker address.
+		 */
+		private static List<String> getAddress(
+				final ActiveMQConnectionFactory connectionFactory) {
+			final TransportConfiguration[] connectors = connectionFactory.getServerLocator().getStaticTransportConfigurations();
+			return (connectors == null) ? List.of()
+					: Arrays.stream(connectors).map(connector -> (connector == null) ? null : Objects.toString(new TreeMap<>(connector.getParams()))).toList();
+		}
+
+		/**
+		 * Whether the broker address changed since it was noted.
+		 *
+		 * @return Whether it changed.
+		 */
+		public Boolean isChanged() {
+			return !Objects.equals(this.address, Snapshot.getAddress(this.connectionFactory));
+		}
+
 	}
 
 	/**
-	 * Gets the Artemis connection factory of a bean: the bean itself, or the one
-	 * a pooled factory wraps.
+	 * Constructor.
 	 *
-	 * @param  bean Bean.
-	 * @return      The Artemis connection factory, or null when the bean has none.
+	 * @param isEnabled Whether the live connections move.
+	 * @param delay     Delay between the last change of a factory and the move.
 	 */
-	public static ActiveMQConnectionFactory getConnectionFactory(
+	public ArtemisBrokerAddressChange(
+			@Value("${" + ArtemisBrokerAddressChange.PROPERTY_PREFIX + ".enabled:true}") final Boolean isEnabled,
+			@Value("${" + ArtemisBrokerAddressChange.PROPERTY_PREFIX + ".delay:1s}") final Duration delay) {
+		this.isEnabled = isEnabled;
+		this.delay = delay;
+		this.scheduler = Executors.newSingleThreadScheduledExecutor(Thread.ofPlatform().daemon().name("artemis-broker-address-change").factory());
+	}
+
+	/**
+	 * Notes the broker address of a bean before an update.
+	 *
+	 * @param  bean Bean: an Artemis connection factory, or a pooled factory over
+	 *                  one.
+	 * @return      The address, or null when the bean has no Artemis factory.
+	 */
+	public Snapshot snapshot(
 			final Object bean) {
 		final Object connectionFactory = (bean instanceof final JmsPoolConnectionFactory pooledFactory ? pooledFactory.getConnectionFactory() : bean);
-		return (connectionFactory instanceof final ActiveMQConnectionFactory artemisFactory ? artemisFactory : null);
+		return (connectionFactory instanceof final ActiveMQConnectionFactory artemisFactory ? new Snapshot(artemisFactory) : null);
 	}
 
 	/**
-	 * Gets the broker address of a connection factory: the parameters of its
-	 * initial connectors, in a form that compares equal while they are the same
-	 * (a port given as text equals the same port as a number).
+	 * Moves the live connections of a factory whose broker address changed
+	 * since it was noted, after the delay. An update that came from another host
+	 * changes the address but moves nothing: its connections move when the
+	 * client finds the broker gone.
 	 *
-	 * @param  connectionFactory Artemis connection factory (may be null).
-	 * @return                   The broker address, or null without a factory.
+	 * @param beanName      Name of the bean the factory belongs to (for the
+	 *                          log).
+	 * @param snapshot      Address noted before the update (may be null).
+	 * @param isLocalUpdate Whether the update came from the service's own host
+	 *                          or container.
 	 */
-	public static String getAddress(
-			final ActiveMQConnectionFactory connectionFactory) {
-		String address = null;
-		if (connectionFactory != null) {
-			final TransportConfiguration[] connectors = connectionFactory.getServerLocator().getStaticTransportConfigurations();
-			final List<String> connectorsParameters = new ArrayList<>();
-			if (connectors != null) {
-				for (final TransportConfiguration connector : connectors) {
-					connectorsParameters.add(connector == null ? null : Objects.toString(new TreeMap<>(connector.getParams())));
-				}
+	public void moveConnectionsIfChanged(
+			final String beanName,
+			final Snapshot snapshot,
+			final Boolean isLocalUpdate) {
+		if ((snapshot != null) && snapshot.isChanged()) {
+			if (Boolean.TRUE.equals(this.isEnabled) && Boolean.TRUE.equals(isLocalUpdate)) {
+				this.scheduledMoves.compute(snapshot.connectionFactory, (connectionFactory, scheduledMove) -> {
+					if (scheduledMove != null) {
+						scheduledMove.cancel(false);
+					}
+					return this.scheduler.schedule(() -> {
+						try {
+							this.moveConnections(beanName, connectionFactory);
+						}
+						catch (final RuntimeException exception) {
+							ArtemisBrokerAddressChange.LOGGER.error("Could not move the live connections of bean " + beanName + " to its new broker address.",
+									exception);
+						}
+					}, this.delay.toMillis(), TimeUnit.MILLISECONDS);
+				});
 			}
-			address = connectorsParameters.toString();
+			else {
+				ArtemisBrokerAddressChange.LOGGER.info("The broker address of bean " + beanName + " changed. Its live connections move when the client finds "
+						+ "the broker gone: " + (Boolean.TRUE.equals(this.isEnabled) ? "the update came from another host." : "moving them is off ("
+								+ ArtemisBrokerAddressChange.PROPERTY_PREFIX + ".enabled)."));
+			}
 		}
-		return address;
 	}
 
 	/**
@@ -88,12 +210,11 @@ public final class ArtemisBrokerAddressChange {
 	 * its own, since the client reconnects in the thread that fails the
 	 * connection and keeps trying while the new address does not answer.
 	 *
-	 * @param  beanName          Name of the bean the factory belongs to (for the
-	 *                               log).
-	 * @param  connectionFactory Artemis connection factory.
-	 * @return                   How many connections were failed.
+	 * @param beanName          Name of the bean the factory belongs to (for the
+	 *                              log).
+	 * @param connectionFactory Artemis connection factory.
 	 */
-	public static Integer failConnections(
+	private void moveConnections(
 			final String beanName,
 			final ActiveMQConnectionFactory connectionFactory) {
 		final List<ClientSessionFactoryInternal> sessionFactories = new ArrayList<>();
@@ -104,26 +225,36 @@ public final class ArtemisBrokerAddressChange {
 				sessionFactories.addAll(liveSessionFactories);
 			}
 		}
+		ArtemisBrokerAddressChange.LOGGER.info("The broker address of bean " + beanName + " changed: failing the live connections of its "
+				+ sessionFactories.size() + " session factories, so they reconnect to it.");
 		final ActiveMQNotConnectedException cause = new ActiveMQNotConnectedException("The broker address of bean " + beanName + " changed.");
-		Integer failedConnections = 0;
 		for (final ClientSessionFactoryInternal sessionFactory : sessionFactories) {
-			RemotingConnection connection = null;
-			try {
-				connection = sessionFactory.getConnection();
-			}
-			// A factory closed in the meantime has nothing to fail.
-			catch (final IllegalStateException exception) {
-				connection = null;
-			}
-			if (connection != null) {
-				final RemotingConnection failedConnection = connection;
-				Thread.ofVirtual().name("artemis-address-change-" + beanName).start(() -> failedConnection.fail(cause));
-				failedConnections++;
-			}
+			Thread.ofVirtual().name("artemis-broker-address-change-" + beanName).start(() -> {
+				// Getting the connection of a factory that has none opens one, so a factory that is
+				// reconnecting is left to read the new address on its next attempt.
+				if (sessionFactory.numConnections() > 0) {
+					try {
+						final RemotingConnection connection = sessionFactory.getConnection();
+						if (connection != null) {
+							connection.fail(cause);
+						}
+					}
+					// A factory closed in the meantime has nothing to fail.
+					catch (final IllegalStateException exception) {
+					}
+				}
+			});
 		}
-		ArtemisBrokerAddressChange.LOGGER.info("The broker address of bean " + beanName + " changed: failing its " + failedConnections
-				+ " live connections, so they reconnect to it.");
-		return failedConnections;
+	}
+
+	/**
+	 * Stops the moves.
+	 *
+	 * @see org.springframework.beans.factory.DisposableBean#destroy()
+	 */
+	@Override
+	public void destroy() {
+		this.scheduler.shutdownNow();
 	}
 
 }

@@ -36,12 +36,12 @@ public class JmsRequestThreadsLimitTestService {
 	private ConnectionFactory connectionFactory;
 
 	/**
-	 * Release of the held connections.
+	 * Release of the held connections; released until a test holds them.
 	 */
-	private volatile CountDownLatch release = new CountDownLatch(1);
+	private volatile CountDownLatch release = new CountDownLatch(0);
 
 	/**
-	 * Makes the next requests hold their connections again.
+	 * Makes the next requests hold their connections until released.
 	 */
 	public void hold() {
 		this.release = new CountDownLatch(1);

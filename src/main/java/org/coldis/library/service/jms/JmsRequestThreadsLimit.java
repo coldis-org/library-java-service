@@ -3,6 +3,7 @@ package org.coldis.library.service.jms;
 import java.time.Duration;
 import java.util.concurrent.Semaphore;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import org.apache.coyote.AbstractProtocol;
 import org.slf4j.Logger;
@@ -37,6 +38,11 @@ import jakarta.jms.ResourceAllocationException;
  * included. With it, a request past the share waits up to the maximum wait for
  * a holder to finish and then fails with a {@link ResourceAllocationException},
  * so the other request threads keep serving.
+ * <p>
+ * A permit belongs to the request thread, not to the connection: a thread that
+ * opens a second connection while it holds one (a nested transaction, a second
+ * broker) holds the same permit, and gives it back when its last connection
+ * closes. So requests never wait on each other for a second permit.
  * <p>
  * Only request threads count: listeners, schedulers and other executors have
  * pools of their own. The limit is sized when the main web server starts, from
@@ -93,6 +99,12 @@ public class JmsRequestThreadsLimit implements ApplicationListener<WebServerInit
 	public static final String REFUSED = "jms.request.threads.refused";
 
 	/**
+	 * Message a refused request gets. The limit, the wait and what they suggest
+	 * about the broker go to the log only.
+	 */
+	public static final String REFUSED_MESSAGE = "Too many requests are using JMS connections at once. Try again later.";
+
+	/**
 	 * Whether the limit applies.
 	 */
 	private final Boolean isEnabled;
@@ -107,6 +119,11 @@ public class JmsRequestThreadsLimit implements ApplicationListener<WebServerInit
 	 * Longest a request past the limit waits for a holder to finish.
 	 */
 	private final Duration maximumWait;
+
+	/**
+	 * Permit the current request thread holds, while it holds one.
+	 */
+	private final ThreadLocal<Permit> threadPermit = new ThreadLocal<>();
 
 	/**
 	 * Meter registry, or null when the service has none.
@@ -137,6 +154,69 @@ public class JmsRequestThreadsLimit implements ApplicationListener<WebServerInit
 	 * Refused requests, once sized with a registry.
 	 */
 	private volatile Counter refusals;
+
+	/**
+	 * Permit a request thread holds while any of the pooled connections it
+	 * opened is open. Each connection holds it once and gives it back once; the
+	 * last one gives it back to the limit.
+	 */
+	public static final class Permit {
+
+		/**
+		 * Permits it was taken from.
+		 */
+		private final Semaphore permits;
+
+		/**
+		 * Thread that took it.
+		 */
+		private final Thread owner;
+
+		/**
+		 * Where the owner keeps it.
+		 */
+		private final ThreadLocal<Permit> ownerPermit;
+
+		/**
+		 * Holds not given back yet; 0 once it went back to the limit.
+		 */
+		private final AtomicInteger holds = new AtomicInteger(1);
+
+		/**
+		 * Constructor.
+		 *
+		 * @param permits     Permits it was taken from.
+		 * @param ownerPermit Where the owner keeps it.
+		 */
+		private Permit(final Semaphore permits, final ThreadLocal<Permit> ownerPermit) {
+			this.permits = permits;
+			this.owner = Thread.currentThread();
+			this.ownerPermit = ownerPermit;
+		}
+
+		/**
+		 * Holds the permit once more, unless it already went back.
+		 *
+		 * @return Whether it is held.
+		 */
+		private Boolean hold() {
+			return this.holds.getAndUpdate(currentHolds -> (currentHolds > 0) ? (currentHolds + 1) : currentHolds) > 0;
+		}
+
+		/**
+		 * Gives one hold back; the last one gives the permit back to the limit.
+		 * Each holder calls it once.
+		 */
+		public void release() {
+			if (this.holds.decrementAndGet() == 0) {
+				this.permits.release();
+				if ((Thread.currentThread() == this.owner) && (this.ownerPermit.get() == this)) {
+					this.ownerPermit.remove();
+				}
+			}
+		}
+
+	}
 
 	/**
 	 * Constructor.
@@ -184,25 +264,6 @@ public class JmsRequestThreadsLimit implements ApplicationListener<WebServerInit
 	}
 
 	/**
-	 * Sizes the limit from the request threads of the server, when it applies,
-	 * and registers its meters.
-	 *
-	 * @param maxThreads Request threads of the server; 0 or less when it has no
-	 *                       such count.
-	 */
-	public void size(
-			final Integer maxThreads) {
-		final Integer newMaxPermits = JmsRequestThreadsLimit.getMaxPermits(maxThreads, this.maxShare);
-		if (Boolean.TRUE.equals(this.isEnabled) && (newMaxPermits != null)) {
-			this.maxPermits = newMaxPermits;
-			this.permits = new Semaphore(newMaxPermits);
-			this.registerMeters();
-			JmsRequestThreadsLimit.LOGGER.info("Request threads may hold at most " + newMaxPermits + " pooled JMS connections at once (" + this.maxShare
-					+ " of " + maxThreads + " request threads). Past that, a request waits up to " + this.maximumWait.toMillis() + " ms and then fails.");
-		}
-	}
-
-	/**
 	 * Registers the meters, when there is a registry. Registering again returns
 	 * the meters already there.
 	 */
@@ -219,6 +280,25 @@ public class JmsRequestThreadsLimit implements ApplicationListener<WebServerInit
 					.description("Time a request found the pooled JMS connections request threads may hold all taken, and waited for one.").register(registry);
 			this.refusals = Counter.builder(JmsRequestThreadsLimit.REFUSED)
 					.description("Requests refused a pooled JMS connection because none freed up within the maximum wait.").register(registry);
+		}
+	}
+
+	/**
+	 * Sizes the limit from the request threads of the server, when it applies,
+	 * and registers its meters.
+	 *
+	 * @param maxThreads Request threads of the server; 0 or less when it has no
+	 *                       such count.
+	 */
+	public void size(
+			final Integer maxThreads) {
+		final Integer newMaxPermits = JmsRequestThreadsLimit.getMaxPermits(maxThreads, this.maxShare);
+		if (Boolean.TRUE.equals(this.isEnabled) && (newMaxPermits != null)) {
+			this.maxPermits = newMaxPermits;
+			this.permits = new Semaphore(newMaxPermits);
+			this.registerMeters();
+			JmsRequestThreadsLimit.LOGGER.info("Request threads may hold at most " + newMaxPermits + " pooled JMS connections at once (" + this.maxShare
+					+ " of " + maxThreads + " request threads). Past that, a request waits up to " + this.maximumWait.toMillis() + " ms and then fails.");
 		}
 	}
 
@@ -257,52 +337,78 @@ public class JmsRequestThreadsLimit implements ApplicationListener<WebServerInit
 	}
 
 	/**
-	 * Takes a permit when the current thread serves a request and the limit
-	 * applies.
+	 * Gets the requests waiting for a permit now.
 	 *
-	 * @return              The permits to give the permit back to, or null when
-	 *                      none was taken.
+	 * @return The requests waiting, an estimate, 0 while the limit does not
+	 *         apply.
+	 */
+	public Integer getWaitingRequests() {
+		final Semaphore currentPermits = this.permits;
+		return (currentPermits == null) ? 0 : currentPermits.getQueueLength();
+	}
+
+	/**
+	 * Takes a permit from the limit, waiting up to the maximum wait for one.
+	 *
+	 * @param  currentPermits Permits to take it from.
+	 * @return                The permit.
+	 * @throws JMSException   A {@link ResourceAllocationException} when no
+	 *                            permit freed up within the maximum wait.
+	 */
+	private Permit take(
+			final Semaphore currentPermits) throws JMSException {
+		Boolean isTaken = currentPermits.tryAcquire();
+		// Every permit is taken: waits for one, and reports the wait.
+		if (!isTaken) {
+			final long waitStart = System.nanoTime();
+			try {
+				isTaken = currentPermits.tryAcquire(this.maximumWait.toMillis(), TimeUnit.MILLISECONDS);
+			}
+			catch (final InterruptedException exception) {
+				Thread.currentThread().interrupt();
+				isTaken = false;
+			}
+			final Timer currentWaits = this.waits;
+			if (currentWaits != null) {
+				currentWaits.record(System.nanoTime() - waitStart, TimeUnit.NANOSECONDS);
+			}
+		}
+		if (!isTaken) {
+			final Counter currentRefusals = this.refusals;
+			if (currentRefusals != null) {
+				currentRefusals.increment();
+			}
+			JmsRequestThreadsLimit.LOGGER.warn("All " + this.maxPermits + " pooled JMS connections request threads may hold are taken, so a broker may be slow or gone: "
+					+ "refused a request after " + this.maximumWait.toMillis() + " ms, so the other request threads keep serving (" + JmsRequestThreadsLimit.PROPERTY_PREFIX
+					+ ").");
+			throw new ResourceAllocationException(JmsRequestThreadsLimit.REFUSED_MESSAGE);
+		}
+		final Permit permit = new Permit(currentPermits, this.threadPermit);
+		this.threadPermit.set(permit);
+		final DistributionSummary currentHeldAtAcquire = this.heldAtAcquire;
+		if (currentHeldAtAcquire != null) {
+			currentHeldAtAcquire.record(this.getHeldPermits());
+		}
+		return permit;
+	}
+
+	/**
+	 * Takes a permit when the current thread serves a request and the limit
+	 * applies. A thread that already holds one holds it once more.
+	 *
+	 * @return              The permit, to give back once when the connection
+	 *                      closes, or null when none was taken.
 	 * @throws JMSException A {@link ResourceAllocationException} when no permit
 	 *                          freed up within the maximum wait.
 	 */
-	public Semaphore acquire() throws JMSException {
+	public Permit acquire() throws JMSException {
 		final Semaphore currentPermits = this.permits;
-		Semaphore acquiredPermits = null;
+		Permit permit = null;
 		if ((currentPermits != null) && (RequestContextHolder.getRequestAttributes() != null)) {
-			Boolean isAcquired = currentPermits.tryAcquire();
-			// Every permit is taken: waits for one, and reports the wait.
-			if (!isAcquired) {
-				final long waitStart = System.nanoTime();
-				try {
-					isAcquired = currentPermits.tryAcquire(this.maximumWait.toMillis(), TimeUnit.MILLISECONDS);
-				}
-				catch (final InterruptedException exception) {
-					Thread.currentThread().interrupt();
-					isAcquired = false;
-				}
-				final Timer currentWaits = this.waits;
-				if (currentWaits != null) {
-					currentWaits.record(System.nanoTime() - waitStart, TimeUnit.NANOSECONDS);
-				}
-			}
-			if (!isAcquired) {
-				final Counter currentRefusals = this.refusals;
-				if (currentRefusals != null) {
-					currentRefusals.increment();
-				}
-				final String message = "All " + this.maxPermits + " pooled JMS connections request threads may hold are taken, so a broker may be slow or gone: "
-						+ "refused after " + this.maximumWait.toMillis() + " ms, so the other request threads keep serving (" + JmsRequestThreadsLimit.PROPERTY_PREFIX
-						+ ").";
-				JmsRequestThreadsLimit.LOGGER.warn(message);
-				throw new ResourceAllocationException(message);
-			}
-			final DistributionSummary currentHeldAtAcquire = this.heldAtAcquire;
-			if (currentHeldAtAcquire != null) {
-				currentHeldAtAcquire.record(this.getHeldPermits());
-			}
-			acquiredPermits = currentPermits;
+			final Permit heldPermit = this.threadPermit.get();
+			permit = ((heldPermit != null) && (heldPermit.permits == currentPermits) && heldPermit.hold()) ? heldPermit : this.take(currentPermits);
 		}
-		return acquiredPermits;
+		return permit;
 	}
 
 }

@@ -1,6 +1,7 @@
 package org.coldis.library.service.properties;
 
-import java.util.Objects;
+import java.net.InetAddress;
+import java.net.UnknownHostException;
 
 import javax.sql.DataSource;
 
@@ -13,6 +14,7 @@ import org.messaginghub.pooled.jms.JmsPoolConnectionFactory;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.BeansException;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 import org.springframework.context.ApplicationContext;
 import org.springframework.context.ApplicationContextAware;
@@ -22,6 +24,8 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestMethod;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
+import org.springframework.web.context.request.RequestContextHolder;
+import org.springframework.web.context.request.ServletRequestAttributes;
 
 /**
  * Properties service.
@@ -39,6 +43,46 @@ public class PropertiesService implements ApplicationContextAware {
 	 * Application context.
 	 */
 	private ApplicationContext applicationContext;
+
+	/**
+	 * Moves the live connections of an Artemis factory whose broker address
+	 * changed, or null for none.
+	 */
+	private ArtemisBrokerAddressChange artemisBrokerAddressChange;
+
+	/**
+	 * Sets what moves the live connections of an Artemis factory whose broker
+	 * address changed.
+	 *
+	 * @param artemisBrokerAddressChange Broker address change.
+	 */
+	@Autowired(required = false)
+	public void setArtemisBrokerAddressChange(
+			final ArtemisBrokerAddressChange artemisBrokerAddressChange) {
+		this.artemisBrokerAddressChange = artemisBrokerAddressChange;
+	}
+
+	/**
+	 * Whether the current update came from the service's own host or container:
+	 * a request that arrived on a loopback address, or a call from within the
+	 * process. Judged by the local address of the connection, which no forwarded
+	 * header changes.
+	 *
+	 * @return Whether the update is local.
+	 */
+	private static Boolean isLocalUpdate() {
+		Boolean isLocal = true;
+		if (RequestContextHolder.getRequestAttributes() instanceof final ServletRequestAttributes requestAttributes) {
+			try {
+				final String localAddress = requestAttributes.getRequest().getLocalAddr();
+				isLocal = (localAddress != null) && InetAddress.getByName(localAddress).isLoopbackAddress();
+			}
+			catch (final UnknownHostException exception) {
+				isLocal = false;
+			}
+		}
+		return isLocal;
+	}
 
 	/**
 	 * @see org.springframework.context.ApplicationContextAware#setApplicationContext(org.springframework.context.ApplicationContext)
@@ -77,18 +121,18 @@ public class PropertiesService implements ApplicationContextAware {
 			}
 
 			// Notes the broker address of an Artemis connection factory before the change.
-			final ActiveMQConnectionFactory artemisFactory = ArtemisBrokerAddressChange.getConnectionFactory(bean);
-			final String previousBrokerAddress = ArtemisBrokerAddressChange.getAddress(artemisFactory);
+			final ArtemisBrokerAddressChange.Snapshot brokerAddress = (this.artemisBrokerAddressChange == null) ? null
+					: this.artemisBrokerAddressChange.snapshot(bean);
 
 			// Sets the property.
 			PropertiesService.LOGGER.info("Setting property " + name + " to " + PropertiesLogHelper.getLoggedValue(name, value) + " in bean " + beanName + ".");
 			ReflectionHelper.setAttribute(bean, fieldAccess, name, value);
 
-			// Moves the live connections to a broker address that really changed. The same
-			// address sent again (as after a restart, which clears the update scripts' state)
-			// leaves them alone.
-			if ((artemisFactory != null) && !Objects.equals(previousBrokerAddress, ArtemisBrokerAddressChange.getAddress(artemisFactory))) {
-				ArtemisBrokerAddressChange.failConnections(beanName, artemisFactory);
+			// Moves the live connections to a broker address that really changed, when the update
+			// came from the service's own host. The same address sent again (as after a restart,
+			// which clears the update scripts' state) leaves them alone.
+			if (brokerAddress != null) {
+				this.artemisBrokerAddressChange.moveConnectionsIfChanged(beanName, brokerAddress, PropertiesService.isLocalUpdate());
 			}
 		}
 

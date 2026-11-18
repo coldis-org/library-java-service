@@ -3,7 +3,9 @@ package org.coldis.library.test.service.jms;
 import java.io.IOException;
 import java.time.Duration;
 import java.util.Properties;
-import java.util.concurrent.Semaphore;
+import java.util.concurrent.Callable;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.FutureTask;
 import java.util.concurrent.TimeUnit;
 
 import org.coldis.library.service.jms.JmsRequestThreadsLimit;
@@ -64,8 +66,46 @@ public class JmsRequestThreadsLimitUnitTest {
 	}
 
 	/**
+	 * Runs a call on a request thread of its own.
+	 *
+	 * @param  <Type> Result type.
+	 * @param  call   Call.
+	 * @return        The call, running.
+	 */
+	public static <Type> FutureTask<Type> startOnRequestThread(
+			final Callable<Type> call) {
+		final FutureTask<Type> task = new FutureTask<>(() -> {
+			RequestContextHolder.setRequestAttributes(new ServletRequestAttributes(new MockHttpServletRequest()));
+			try {
+				return call.call();
+			}
+			finally {
+				RequestContextHolder.resetRequestAttributes();
+			}
+		});
+		Thread.ofVirtual().start(task);
+		return task;
+	}
+
+	/**
+	 * Waits until requests wait for a permit, up to a deadline.
+	 *
+	 * @param  limit Limit.
+	 * @return       Whether a request waits.
+	 */
+	public static Boolean awaitWaitingRequest(
+			final JmsRequestThreadsLimit limit) {
+		final long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+		while ((limit.getWaitingRequests() == 0) && (System.nanoTime() < deadline)) {
+			Thread.onSpinWait();
+		}
+		return limit.getWaitingRequests() > 0;
+	}
+
+	/**
 	 * The limit reports the permits in all and held, the permits held each time
-	 * a request takes one, the waits for a permit and the refusals.
+	 * a request takes one, the waits for a permit and the refusals. A refused
+	 * request gets a message that says nothing of the limit.
 	 *
 	 * @throws Exception If the test fails.
 	 */
@@ -76,44 +116,73 @@ public class JmsRequestThreadsLimitUnitTest {
 		final JmsRequestThreadsLimit limit = new JmsRequestThreadsLimit(true, 0.5, Duration.ofMillis(500));
 		limit.setMeterRegistry(registry);
 		limit.size(4);
-		RequestContextHolder.setRequestAttributes(new ServletRequestAttributes(new MockHttpServletRequest()));
-		try {
-			// Two requests take the two permits without waiting.
-			final Semaphore permits = limit.acquire();
-			limit.acquire();
-			Assertions.assertEquals(2.0, registry.get(JmsRequestThreadsLimit.PERMITS_MAX).gauge().value());
-			Assertions.assertEquals(2.0, registry.get(JmsRequestThreadsLimit.PERMITS_HELD).gauge().value());
-			Assertions.assertEquals(2, registry.get(JmsRequestThreadsLimit.HELD_AT_ACQUIRE).summary().count());
-			Assertions.assertEquals(2.0, registry.get(JmsRequestThreadsLimit.HELD_AT_ACQUIRE).summary().max());
-			Assertions.assertEquals(0, registry.get(JmsRequestThreadsLimit.WAIT).timer().count());
+		// Two requests take the two permits without waiting.
+		final JmsRequestThreadsLimit.Permit firstPermit = JmsRequestThreadsLimitUnitTest.startOnRequestThread(limit::acquire).get(5, TimeUnit.SECONDS);
+		final JmsRequestThreadsLimit.Permit secondPermit = JmsRequestThreadsLimitUnitTest.startOnRequestThread(limit::acquire).get(5, TimeUnit.SECONDS);
+		Assertions.assertEquals(2.0, registry.get(JmsRequestThreadsLimit.PERMITS_MAX).gauge().value());
+		Assertions.assertEquals(2.0, registry.get(JmsRequestThreadsLimit.PERMITS_HELD).gauge().value());
+		Assertions.assertEquals(2, registry.get(JmsRequestThreadsLimit.HELD_AT_ACQUIRE).summary().count());
+		Assertions.assertEquals(2.0, registry.get(JmsRequestThreadsLimit.HELD_AT_ACQUIRE).summary().max());
+		Assertions.assertEquals(0, registry.get(JmsRequestThreadsLimit.WAIT).timer().count());
 
-			// A third waits the maximum wait and is refused.
-			Assertions.assertThrows(ResourceAllocationException.class, limit::acquire);
-			Assertions.assertEquals(1, registry.get(JmsRequestThreadsLimit.WAIT).timer().count());
-			Assertions.assertTrue(registry.get(JmsRequestThreadsLimit.WAIT).timer().max(TimeUnit.MILLISECONDS) >= 500);
-			Assertions.assertEquals(1.0, registry.get(JmsRequestThreadsLimit.REFUSED).counter().count());
+		// A third waits the maximum wait and is refused.
+		final ExecutionException refusal = Assertions.assertThrows(ExecutionException.class,
+				() -> JmsRequestThreadsLimitUnitTest.startOnRequestThread(limit::acquire).get(5, TimeUnit.SECONDS));
+		Assertions.assertInstanceOf(ResourceAllocationException.class, refusal.getCause());
+		Assertions.assertEquals(JmsRequestThreadsLimit.REFUSED_MESSAGE, refusal.getCause().getMessage());
+		Assertions.assertEquals(1, registry.get(JmsRequestThreadsLimit.WAIT).timer().count());
+		Assertions.assertTrue(registry.get(JmsRequestThreadsLimit.WAIT).timer().max(TimeUnit.MILLISECONDS) >= 500);
+		Assertions.assertEquals(1.0, registry.get(JmsRequestThreadsLimit.REFUSED).counter().count());
 
-			// A fourth waits until a holder gives its permit back, and takes it.
-			final Thread holder = Thread.ofVirtual().start(() -> {
-				while (!permits.hasQueuedThreads()) {
-					Thread.onSpinWait();
-				}
-				permits.release();
-			});
-			Assertions.assertNotNull(limit.acquire());
-			holder.join();
-			Assertions.assertEquals(2, registry.get(JmsRequestThreadsLimit.WAIT).timer().count());
-			Assertions.assertEquals(1.0, registry.get(JmsRequestThreadsLimit.REFUSED).counter().count());
-			Assertions.assertEquals(3, registry.get(JmsRequestThreadsLimit.HELD_AT_ACQUIRE).summary().count());
-			Assertions.assertEquals(2.0, registry.get(JmsRequestThreadsLimit.PERMITS_HELD).gauge().value());
+		// A fourth waits until a holder gives its permit back, and takes it.
+		final FutureTask<JmsRequestThreadsLimit.Permit> fourthRequest = JmsRequestThreadsLimitUnitTest.startOnRequestThread(limit::acquire);
+		Assertions.assertTrue(JmsRequestThreadsLimitUnitTest.awaitWaitingRequest(limit));
+		firstPermit.release();
+		final JmsRequestThreadsLimit.Permit fourthPermit = fourthRequest.get(5, TimeUnit.SECONDS);
+		Assertions.assertNotNull(fourthPermit);
+		Assertions.assertEquals(2, registry.get(JmsRequestThreadsLimit.WAIT).timer().count());
+		Assertions.assertEquals(1.0, registry.get(JmsRequestThreadsLimit.REFUSED).counter().count());
+		Assertions.assertEquals(3, registry.get(JmsRequestThreadsLimit.HELD_AT_ACQUIRE).summary().count());
+		Assertions.assertEquals(2.0, registry.get(JmsRequestThreadsLimit.PERMITS_HELD).gauge().value());
 
-			// Given back, the permits read as free.
-			permits.release(2);
-			Assertions.assertEquals(0.0, registry.get(JmsRequestThreadsLimit.PERMITS_HELD).gauge().value());
-		}
-		finally {
-			RequestContextHolder.resetRequestAttributes();
-		}
+		// Given back, the permits read as free.
+		secondPermit.release();
+		fourthPermit.release();
+		Assertions.assertEquals(0.0, registry.get(JmsRequestThreadsLimit.PERMITS_HELD).gauge().value());
+	}
+
+	/**
+	 * A request thread holds one permit however many connections it opens, and
+	 * gives it back when the last one closes; the next connection takes a new
+	 * one.
+	 *
+	 * @throws Exception If the test fails.
+	 */
+	@Test
+	@DisplayName("A request thread holds one permit for all its connections")
+	public void testOnePermitPerThread() throws Exception {
+		final JmsRequestThreadsLimit limit = new JmsRequestThreadsLimit(true, 0.5, Duration.ofMillis(500));
+		limit.size(2);
+		Assertions.assertEquals(1, limit.getMaxPermits());
+		JmsRequestThreadsLimitUnitTest.startOnRequestThread(() -> {
+			// With a single permit, a second connection of the same request would wait for the
+			// first one and be refused if it took a permit of its own.
+			final JmsRequestThreadsLimit.Permit firstHold = limit.acquire();
+			final JmsRequestThreadsLimit.Permit secondHold = limit.acquire();
+			Assertions.assertSame(firstHold, secondHold);
+			Assertions.assertEquals(1, limit.getHeldPermits());
+			secondHold.release();
+			Assertions.assertEquals(1, limit.getHeldPermits());
+			firstHold.release();
+			Assertions.assertEquals(0, limit.getHeldPermits());
+			// The next connection takes a new permit.
+			final JmsRequestThreadsLimit.Permit nextHold = limit.acquire();
+			Assertions.assertNotSame(firstHold, nextHold);
+			Assertions.assertEquals(1, limit.getHeldPermits());
+			nextHold.release();
+			Assertions.assertEquals(0, limit.getHeldPermits());
+			return null;
+		}).get(5, TimeUnit.SECONDS);
 	}
 
 	/**
