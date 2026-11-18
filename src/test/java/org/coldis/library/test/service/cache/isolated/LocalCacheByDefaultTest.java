@@ -1,6 +1,8 @@
 package org.coldis.library.test.service.cache.isolated;
 
+import java.io.IOException;
 import java.time.Duration;
+import java.util.Properties;
 
 import org.coldis.library.service.cache.CacheManagerExpiration;
 import org.coldis.library.service.cache.LocalCacheAutoConfiguration;
@@ -9,10 +11,12 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.cache.caffeine.CaffeineCacheManager;
 import org.springframework.cache.support.NoOpCacheManager;
+import org.springframework.core.io.ClassPathResource;
+import org.springframework.core.io.support.PropertiesLoaderUtils;
 
 /**
- * A service without Redis and without cache properties: local caching is on, each local cache holds at most the default
- * maximum entries and has the default expiration, and the central cache manager names do not cache. Before the fallback, the central call failed with NoSuchBeanDefinitionException ("No bean named
+ * A service without Redis and without cache properties: local caching is on, each local cache is unbounded (no maximum
+ * entries unless configured) and has the default expiration, and the central cache manager names do not cache. Before the fallback, the central call failed with NoSuchBeanDefinitionException ("No bean named
  * 'minutesExpirationCentralCacheManager' available"), thrown by the cache aspect when it resolved the manager on the
  * call; the context itself started.
  */
@@ -46,6 +50,19 @@ public class LocalCacheByDefaultTest {
 			Assertions.assertEquals(1, cacheClient.getLocalCalls());
 			Assertions.assertEquals(3, cacheClient.getCentralCalls());
 		});
+	}
+
+	/**
+	 * Tests that the shipped service properties do not bound local caches. A size there applies to every service and
+	 * thrashes caches whose working set is larger (2.0.308 shipped 10000 and saturated personal-lending's Redis).
+	 *
+	 * @throws IOException If the properties cannot be read.
+	 */
+	@Test
+	@DisplayName("The shipped service properties leave local caches unbounded")
+	public void testShippedPropertiesLeaveLocalCachesUnbounded() throws IOException {
+		final Properties serviceProperties = PropertiesLoaderUtils.loadProperties(new ClassPathResource("service.properties"));
+		Assertions.assertFalse(serviceProperties.containsKey(LocalCacheAutoConfiguration.MAXIMUM_SIZE_PROPERTY));
 	}
 
 }
