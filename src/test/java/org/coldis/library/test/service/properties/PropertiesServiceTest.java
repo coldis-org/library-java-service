@@ -1,11 +1,16 @@
 package org.coldis.library.test.service.properties;
 
+import java.io.BufferedReader;
+import java.io.InputStreamReader;
+import java.io.OutputStream;
+import java.net.Socket;
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpRequest.BodyPublishers;
 import java.net.http.HttpResponse;
 import java.net.http.HttpResponse.BodyHandlers;
+import java.nio.charset.StandardCharsets;
 import java.sql.Connection;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -414,8 +419,31 @@ public class PropertiesServiceTest extends ContainerTestHelper {
 	}
 
 	/**
+	 * Sends a GET as written, with no client in between to normalize its path,
+	 * and gets the response status.
+	 *
+	 * @param  port      Port.
+	 * @param  rawPath   Path, as sent.
+	 * @return           The response status.
+	 * @throws Exception If the request fails.
+	 */
+	private static Integer getStatusAsSent(
+			final Integer port,
+			final String rawPath) throws Exception {
+		try (Socket socket = new Socket("127.0.0.1", port)) {
+			socket.setSoTimeout(5000);
+			final OutputStream output = socket.getOutputStream();
+			output.write(("GET " + rawPath + " HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n").getBytes(StandardCharsets.US_ASCII));
+			output.flush();
+			final String statusLine = new BufferedReader(new InputStreamReader(socket.getInputStream(), StandardCharsets.US_ASCII)).readLine();
+			return Integer.valueOf(statusLine.split(" ")[1]);
+		}
+	}
+
+	/**
 	 * The properties connector listens on the loopback address the library
-	 * ships, and serves no path but the properties endpoint.
+	 * ships, and serves no path but the properties endpoint, judged after Tomcat
+	 * resolves the path.
 	 *
 	 * @throws Exception If the test fails.
 	 */
@@ -437,6 +465,11 @@ public class PropertiesServiceTest extends ContainerTestHelper {
 		final HttpResponse<Void> pathOutsideTheEndpoint = httpClient.send(
 				HttpRequest.newBuilder(URI.create(this.getPropertiesConnectorUrl() + "/properties-connector-test/wait")).GET().build(), BodyHandlers.discarding());
 		Assertions.assertEquals(404, pathOutsideTheEndpoint.statusCode());
+		// A path that starts with the endpoint and leaves it is outside it, and is served on the main connector.
+		Assertions.assertEquals(404, PropertiesServiceTest.getStatusAsSent(this.propertiesConnectorCustomizer.getLocalPort(), "/properties/../health-check"));
+		Assertions.assertEquals(404,
+				PropertiesServiceTest.getStatusAsSent(this.propertiesConnectorCustomizer.getLocalPort(), "/properties/%2e%2e/health-check"));
+		Assertions.assertNotEquals(404, PropertiesServiceTest.getStatusAsSent(this.port, "/properties/../health-check"));
 	}
 
 }

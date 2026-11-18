@@ -8,6 +8,7 @@ import org.apache.coyote.AbstractProtocol;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.boot.web.embedded.tomcat.TomcatServletWebServerFactory;
 import org.springframework.boot.web.server.WebServerFactoryCustomizer;
 import org.springframework.stereotype.Component;
@@ -28,9 +29,15 @@ import org.springframework.stereotype.Component;
  * <p>
  * Off by default: the deployment that ships the scripts calling it turns it on,
  * so test runs and developer machines, where several services or test processes
- * share one network namespace, never open the port.
+ * share one network namespace, never open the port. While off, neither this
+ * customizer nor the filter exists.
  */
 @Component
+@ConditionalOnProperty(
+		name = PropertiesConnectorCustomizer.PROPERTY_PREFIX + ".enabled",
+		havingValue = "true",
+		matchIfMissing = false
+)
 public class PropertiesConnectorCustomizer implements WebServerFactoryCustomizer<TomcatServletWebServerFactory> {
 
 	/**
@@ -42,11 +49,6 @@ public class PropertiesConnectorCustomizer implements WebServerFactoryCustomizer
 	 * Property prefix.
 	 */
 	public static final String PROPERTY_PREFIX = "org.coldis.library.service.properties.connector";
-
-	/**
-	 * Whether the connector is added.
-	 */
-	private final Boolean isEnabled;
 
 	/**
 	 * Address the connector listens on.
@@ -66,22 +68,24 @@ public class PropertiesConnectorCustomizer implements WebServerFactoryCustomizer
 	/**
 	 * Connector, once added.
 	 */
-	private Connector connector;
+	private volatile Connector connector;
+
+	/**
+	 * Port the connector listens on, once it is bound.
+	 */
+	private volatile Integer localPort;
 
 	/**
 	 * Constructor.
 	 *
-	 * @param isEnabled  Whether the connector is added.
 	 * @param address    Address the connector listens on.
 	 * @param port       Port the connector listens on (0 picks a free one).
 	 * @param maxThreads Request threads of the connector.
 	 */
 	public PropertiesConnectorCustomizer(
-			@Value("${" + PropertiesConnectorCustomizer.PROPERTY_PREFIX + ".enabled:false}") final Boolean isEnabled,
 			@Value("${" + PropertiesConnectorCustomizer.PROPERTY_PREFIX + ".address:127.0.0.1}") final String address,
 			@Value("${" + PropertiesConnectorCustomizer.PROPERTY_PREFIX + ".port:9091}") final Integer port,
 			@Value("${" + PropertiesConnectorCustomizer.PROPERTY_PREFIX + ".max-threads:2}") final Integer maxThreads) {
-		this.isEnabled = isEnabled;
 		this.address = address;
 		this.port = port;
 		this.maxThreads = maxThreads;
@@ -116,12 +120,23 @@ public class PropertiesConnectorCustomizer implements WebServerFactoryCustomizer
 	}
 
 	/**
-	 * Gets the port the connector listens on, once the server started.
+	 * Gets the port the connector listens on, once it is bound. Tomcat reads it
+	 * by reflection, so it is read until the connector is bound, and kept from
+	 * then on.
 	 *
-	 * @return The port, or null when the connector was not added.
+	 * @return The port, or null while the connector is not added or not bound.
 	 */
 	public Integer getLocalPort() {
-		return (this.connector == null) ? null : this.connector.getLocalPort();
+		Integer currentLocalPort = this.localPort;
+		final Connector currentConnector = this.connector;
+		if ((currentLocalPort == null) && (currentConnector != null)) {
+			final int boundPort = currentConnector.getLocalPort();
+			if (boundPort > 0) {
+				currentLocalPort = boundPort;
+				this.localPort = currentLocalPort;
+			}
+		}
+		return currentLocalPort;
 	}
 
 	/**
@@ -130,7 +145,7 @@ public class PropertiesConnectorCustomizer implements WebServerFactoryCustomizer
 	@Override
 	public void customize(
 			final TomcatServletWebServerFactory factory) {
-		if (Boolean.TRUE.equals(this.isEnabled) && (this.connector == null)) {
+		if (this.connector == null) {
 			this.connector = PropertiesConnectorCustomizer.createConnector(this.address, this.port, this.maxThreads);
 			factory.addAdditionalTomcatConnectors(this.connector);
 			PropertiesConnectorCustomizer.LOGGER.info("Adding a connector for the properties endpoint only, on " + this.address + ":" + this.port
