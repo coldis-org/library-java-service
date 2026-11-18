@@ -2,6 +2,7 @@ package org.coldis.library.test.service.cache.isolated;
 
 import java.time.Duration;
 
+import org.coldis.library.service.cache.CacheHelper;
 import org.coldis.library.service.cache.CacheManagerFallbackAutoConfiguration;
 import org.coldis.library.service.cache.LocalCacheAutoConfiguration;
 import org.coldis.library.service.cache.RedisCacheAutoConfiguration;
@@ -48,7 +49,7 @@ public final class IsolatedCacheContext {
 		return new ApplicationContextRunner().withConfiguration(AutoConfigurations.of(JacksonAutoConfiguration.class))
 				.withPropertyValues("org.coldis.configuration.base-package=org.coldis")
 				.withUserConfiguration(JsonMapperAutoConfiguration.class, LocalCacheAutoConfiguration.class, RedisCacheAutoConfiguration.class)
-				.withBean(CacheClient.class);
+				.withBean(CacheClient.class).withBean(CacheHelper.class);
 	}
 
 	/**

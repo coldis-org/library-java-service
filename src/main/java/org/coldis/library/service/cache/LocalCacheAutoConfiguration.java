@@ -17,6 +17,7 @@ import org.springframework.context.annotation.Configuration;
 import org.springframework.context.annotation.DependsOn;
 import org.springframework.context.annotation.Primary;
 import org.springframework.core.convert.converter.Converter;
+import org.springframework.core.env.Environment;
 
 import com.fasterxml.jackson.annotation.JsonInclude;
 import com.fasterxml.jackson.annotation.JsonTypeInfo;
@@ -117,7 +118,7 @@ public class LocalCacheAutoConfiguration {
 	public static final String MAXIMUM_SIZE_PROPERTY = "org.coldis.configuration.cache.local.maximum-size";
 
 	/** Maximum entries of each local cache. */
-	@Value(value = "${" + LocalCacheAutoConfiguration.MAXIMUM_SIZE_PROPERTY + ":" + LocalCacheAutoConfiguration.DEFAULT_MAXIMUM_SIZE + "}")
+	@Value(value = "${" + LocalCacheAutoConfiguration.MAXIMUM_SIZE_PROPERTY + ":}")
 	private Long maximumSize;
 
 	/**
@@ -163,7 +164,7 @@ public class LocalCacheAutoConfiguration {
 	 * Creates a local cache manager.
 	 *
 	 * @param  expiration        Expiration after write.
-	 * @param  maximumSize       Maximum entries per cache (none if null).
+	 * @param  maximumSize       Maximum entries per cache ({@link #DEFAULT_MAXIMUM_SIZE} if null or not positive).
 	 * @param  shouldRecordStats If stats should be recorded.
 	 * @return                   Cache manager.
 	 */
@@ -173,9 +174,7 @@ public class LocalCacheAutoConfiguration {
 			final Boolean shouldRecordStats) {
 		final CaffeineCacheManager cacheManager = new CaffeineCacheManager();
 		Caffeine<Object, Object> caffeine = Caffeine.newBuilder().expireAfterWrite(expiration);
-		if (maximumSize != null) {
-			caffeine.maximumSize(maximumSize);
-		}
+		caffeine.maximumSize((maximumSize == null) || (maximumSize <= 0) ? LocalCacheAutoConfiguration.DEFAULT_MAXIMUM_SIZE : maximumSize);
 		if (Boolean.TRUE.equals(shouldRecordStats)) {
 			caffeine = caffeine.recordStats();
 		}
@@ -197,79 +196,79 @@ public class LocalCacheAutoConfiguration {
 	/**
 	 * Short lived cache.
 	 *
+	 * @param  environment Environment.
 	 * @return Short lived cache.
 	 */
 	@Bean
 	public CacheManager millisExpirationLocalCacheManager(
-			@Value(value = "${org.coldis.configuration.cache.millis-expiration:3100}")
-			final Long expiration) {
-		this.millisExpirationLocalCacheManager = this.getCacheManager(Duration.ofMillis(expiration));
+			final Environment environment) {
+		this.millisExpirationLocalCacheManager = this.getCacheManager(CacheManagerExpiration.MILLIS.getExpiration(environment));
 		return this.millisExpirationLocalCacheManager;
 	}
 
 	/**
 	 * Short lived cache.
 	 *
+	 * @param  environment Environment.
 	 * @return Short lived cache.
 	 */
 	@Bean
 	public CacheManager secondsExpirationLocalCacheManager(
-			@Value(value = "${org.coldis.configuration.cache.seconds-expiration:23}")
-			final Long expiration) {
-		this.secondsExpirationLocalCacheManager = this.getCacheManager(Duration.ofSeconds(expiration));
+			final Environment environment) {
+		this.secondsExpirationLocalCacheManager = this.getCacheManager(CacheManagerExpiration.SECONDS.getExpiration(environment));
 		return this.secondsExpirationLocalCacheManager;
 	}
 
 	/**
 	 * Short lived cache.
 	 *
+	 * @param  environment Environment.
 	 * @return Short lived cache.
 	 */
 	@Bean
 	@Primary
 	public CacheManager minutesExpirationLocalCacheManager(
-			@Value(value = "${org.coldis.configuration.cache.minutes-expiration:11}")
-			final Long expiration) {
-		this.minutesExpirationLocalCacheManager = this.getCacheManager(Duration.ofMinutes(expiration));
+			final Environment environment) {
+		this.minutesExpirationLocalCacheManager = this.getCacheManager(CacheManagerExpiration.MINUTES.getExpiration(environment));
 		return this.minutesExpirationLocalCacheManager;
 	}
 
 	/**
 	 * Long lived cache.
 	 *
+	 * @param  environment Environment.
 	 * @return Long lived cache.
 	 */
 	@Bean
 	public CacheManager hoursExpirationLocalCacheManager(
-			@Value(value = "${org.coldis.configuration.cache.hours-expiration:3}")
-			final Long expiration) {
-		this.hoursExpirationLocalCacheManager = this.getCacheManager(Duration.ofHours(expiration));
+			final Environment environment) {
+		this.hoursExpirationLocalCacheManager = this.getCacheManager(CacheManagerExpiration.HOURS.getExpiration(environment));
 		return this.hoursExpirationLocalCacheManager;
 	}
 
 	/**
 	 * Long lived cache.
 	 *
+	 * @param  environment Environment.
 	 * @return Long lived cache.
 	 */
 	@Bean
 	public CacheManager dayExpirationLocalCacheManager(
-			@Value(value = "${org.coldis.configuration.cache.day-expiration:1}")
-			final Long expiration) {
-		this.dayExpirationLocalCacheManager = this.getCacheManager(Duration.ofDays(expiration));
+			final Environment environment) {
+		this.dayExpirationLocalCacheManager = this.getCacheManager(CacheManagerExpiration.DAY.getExpiration(environment));
 		return this.dayExpirationLocalCacheManager;
 	}
 
 	/**
 	 * Long lived cache.
 	 *
+	 * @param  environment Environment.
 	 * @return Long lived cache.
 	 */
 	@Bean
 	public CacheManager daysExpirationLocalCacheManager(
-			@Value(value = "${org.coldis.configuration.cache.days-expiration:5}")
-			final Long expiration) {
-		this.daysExpirationLocalCacheManager = this.getCacheManager(Duration.ofDays(expiration));
+			final Environment environment) {
+		this.daysExpirationLocalCacheManager = this.getCacheManager(CacheManagerExpiration.DAYS.getExpiration(environment));
 		return this.daysExpirationLocalCacheManager;
 	}
 

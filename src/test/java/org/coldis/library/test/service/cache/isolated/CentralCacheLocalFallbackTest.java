@@ -2,6 +2,7 @@ package org.coldis.library.test.service.cache.isolated;
 
 import org.coldis.library.service.cache.CacheManagerFallbackRegistrar;
 import org.coldis.library.service.cache.LocalCacheAutoConfiguration;
+import org.coldis.library.service.cache.CacheHelper;
 import org.coldis.library.service.cache.CacheManagerExpiration;
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.DisplayName;
@@ -16,7 +17,7 @@ public class CentralCacheLocalFallbackTest {
 
 	/**
 	 * Tests that a central cached method caches locally, in a cache manager apart from the local ones, with the same
-	 * expirations, and that the fallback registrar clears it.
+	 * expirations, and that the cache helper clears it.
 	 */
 	@Test
 	@DisplayName("With the local fallback, central cached methods cache locally, apart, with the local expirations and size")
@@ -38,7 +39,7 @@ public class CentralCacheLocalFallbackTest {
 				Assertions.assertEquals(IsolatedCacheContext.getExpiration(context.getBean(expiration.getLocalCacheManagerName())),
 						IsolatedCacheContext.getExpiration(context.getBean(expiration.getCentralCacheManagerName())));
 			}
-			context.getBean(CacheManagerFallbackRegistrar.class).evictAll();
+			context.getBean(CacheHelper.class).clearCaches();
 			Assertions.assertEquals(3, cacheClient.getFromCentralCache("key"));
 		});
 	}

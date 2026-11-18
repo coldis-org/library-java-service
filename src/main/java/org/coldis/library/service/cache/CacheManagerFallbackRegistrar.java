@@ -4,7 +4,6 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Locale;
-import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.function.Supplier;
 
 import org.slf4j.Logger;
@@ -15,7 +14,6 @@ import org.springframework.beans.factory.support.BeanDefinitionRegistry;
 import org.springframework.beans.factory.support.BeanDefinitionRegistryPostProcessor;
 import org.springframework.beans.factory.support.RootBeanDefinition;
 import org.springframework.cache.CacheManager;
-import org.springframework.cache.caffeine.CaffeineCacheManager;
 import org.springframework.cache.support.NoOpCacheManager;
 import org.springframework.core.Ordered;
 import org.springframework.core.env.Environment;
@@ -44,11 +42,6 @@ public class CacheManagerFallbackRegistrar implements BeanDefinitionRegistryPost
 	 * Environment.
 	 */
 	private final Environment environment;
-
-	/**
-	 * The local cache managers created for central names, kept so they can be cleared (they belong to no configuration).
-	 */
-	private final List<CaffeineCacheManager> centralLocalCacheManagers = new CopyOnWriteArrayList<>();
 
 	/**
 	 * Constructor.
@@ -83,19 +76,9 @@ public class CacheManagerFallbackRegistrar implements BeanDefinitionRegistryPost
 	 */
 	private CacheManager createLocalCacheManager(
 			final CacheManagerExpiration expiration) {
-		final CaffeineCacheManager cacheManager = LocalCacheAutoConfiguration.createCacheManager(expiration.getExpiration(this.environment),
-				this.environment.getProperty(LocalCacheAutoConfiguration.MAXIMUM_SIZE_PROPERTY, Long.class, LocalCacheAutoConfiguration.DEFAULT_MAXIMUM_SIZE),
+		return LocalCacheAutoConfiguration.createCacheManager(expiration.getExpiration(this.environment),
+				this.environment.getProperty(LocalCacheAutoConfiguration.MAXIMUM_SIZE_PROPERTY, Long.class),
 				this.environment.getProperty(LocalCacheAutoConfiguration.RECORD_STATS_PROPERTY, Boolean.class, false));
-		this.centralLocalCacheManagers.add(cacheManager);
-		return cacheManager;
-	}
-
-	/**
-	 * Evicts all entries of the local cache managers created for central names (none unless the central fallback is
-	 * local). Their statistics are not logged by the local cache stats configuration.
-	 */
-	public void evictAll() {
-		this.centralLocalCacheManagers.forEach(cacheManager -> cacheManager.getCacheNames().forEach(name -> cacheManager.getCache(name).clear()));
 	}
 
 	/**
@@ -128,28 +111,28 @@ public class CacheManagerFallbackRegistrar implements BeanDefinitionRegistryPost
 	public void postProcessBeanDefinitionRegistry(
 			final BeanDefinitionRegistry registry) throws BeansException {
 		final CentralCacheFallback centralFallback = this.getCentralFallback();
-		final List<String> withoutCaching = new ArrayList<>();
-		final List<String> withLocalCaching = new ArrayList<>();
+		final List<String> namesWithoutCaching = new ArrayList<>();
+		final List<String> centralNamesCachedLocally = new ArrayList<>();
 		for (final CacheManagerExpiration expiration : CacheManagerExpiration.values()) {
 			// Local caching off: the local names do not cache, and the minutes one stays the default, as when it is on.
 			if (this.registerIfMissing(registry, expiration.getLocalCacheManagerName(), expiration == CacheManagerExpiration.MINUTES, NoOpCacheManager::new)) {
-				withoutCaching.add(expiration.getLocalCacheManagerName());
+				namesWithoutCaching.add(expiration.getLocalCacheManagerName());
 			}
 			// No central (Redis) configuration: the central names do not cache, or cache locally if the service chose it.
 			if (CentralCacheFallback.LOCAL == centralFallback) {
 				if (this.registerIfMissing(registry, expiration.getCentralCacheManagerName(), false, () -> this.createLocalCacheManager(expiration))) {
-					withLocalCaching.add(expiration.getCentralCacheManagerName());
+					centralNamesCachedLocally.add(expiration.getCentralCacheManagerName());
 				}
 			}
 			else if (this.registerIfMissing(registry, expiration.getCentralCacheManagerName(), false, NoOpCacheManager::new)) {
-				withoutCaching.add(expiration.getCentralCacheManagerName());
+				namesWithoutCaching.add(expiration.getCentralCacheManagerName());
 			}
 		}
-		if (!withoutCaching.isEmpty()) {
-			CacheManagerFallbackRegistrar.LOGGER.info("Cache managers without a configuration do not cache: {}.", withoutCaching);
+		if (!namesWithoutCaching.isEmpty()) {
+			CacheManagerFallbackRegistrar.LOGGER.info("Cache managers without a configuration do not cache: {}.", namesWithoutCaching);
 		}
-		if (!withLocalCaching.isEmpty()) {
-			CacheManagerFallbackRegistrar.LOGGER.info("Central cache managers without a configuration cache locally: {}.", withLocalCaching);
+		if (!centralNamesCachedLocally.isEmpty()) {
+			CacheManagerFallbackRegistrar.LOGGER.info("Central cache managers without a configuration cache locally: {}.", centralNamesCachedLocally);
 		}
 	}
 
