@@ -1,6 +1,5 @@
 package org.coldis.library.service.cache;
 
-import java.time.Duration;
 
 import org.coldis.library.service.serialization.JsonMapperAutoConfiguration;
 import org.slf4j.Logger;
@@ -15,6 +14,7 @@ import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.context.annotation.DependsOn;
 import org.springframework.core.convert.converter.Converter;
+import org.springframework.core.env.Environment;
 import org.springframework.data.redis.cache.CacheKeyPrefix;
 import org.springframework.data.redis.cache.RedisCacheConfiguration;
 import org.springframework.data.redis.cache.RedisCacheManager;
@@ -138,14 +138,15 @@ public class RedisCacheAutoConfiguration {
 	/**
 	 * Short lived cache.
 	 *
+	 * @param  redisConnectionFactory Redis connection factory.
+	 * @param  environment            Environment.
 	 * @return Short lived cache.
 	 */
 	@Bean
 	public CacheManager millisExpirationCentralCacheManager(
 			final RedisConnectionFactory redisConnectionFactory,
-			@Value(value = "${org.coldis.configuration.cache.millis-expiration:3100}")
-			final Long expiration) {
-		final RedisCacheConfiguration cacheConfiguration = RedisCacheConfiguration.defaultCacheConfig().entryTtl(Duration.ofMillis(expiration))
+			final Environment environment) {
+		final RedisCacheConfiguration cacheConfiguration = RedisCacheConfiguration.defaultCacheConfig().entryTtl(CacheManagerExpiration.MILLIS.getExpiration(environment))
 				.serializeValuesWith(this.serializationPair).computePrefixWith(CacheKeyPrefix.simple());
 		cacheConfiguration.configureKeyConverters(conversionService -> conversionService.addConverter(SimpleKey.class, String.class, this.keyConverter));
 		cacheConfiguration.configureKeyConverters(conversionService -> conversionService.addConverter(this.keyConverter));
@@ -156,14 +157,15 @@ public class RedisCacheAutoConfiguration {
 	/**
 	 * Short lived cache.
 	 *
+	 * @param  redisConnectionFactory Redis connection factory.
+	 * @param  environment            Environment.
 	 * @return Short lived cache.
 	 */
 	@Bean
 	public CacheManager secondsExpirationCentralCacheManager(
 			final RedisConnectionFactory redisConnectionFactory,
-			@Value(value = "${org.coldis.configuration.cache.seconds-expiration:23}")
-			final Long expiration) {
-		final RedisCacheConfiguration cacheConfiguration = RedisCacheConfiguration.defaultCacheConfig().entryTtl(Duration.ofSeconds(expiration))
+			final Environment environment) {
+		final RedisCacheConfiguration cacheConfiguration = RedisCacheConfiguration.defaultCacheConfig().entryTtl(CacheManagerExpiration.SECONDS.getExpiration(environment))
 				.serializeValuesWith(this.serializationPair).computePrefixWith(CacheKeyPrefix.simple());
 		cacheConfiguration.configureKeyConverters(conversionService -> conversionService.addConverter(SimpleKey.class, String.class, this.keyConverter));
 		cacheConfiguration.configureKeyConverters(conversionService -> conversionService.addConverter(this.keyConverter));
@@ -174,14 +176,15 @@ public class RedisCacheAutoConfiguration {
 	/**
 	 * Short lived cache.
 	 *
+	 * @param  redisConnectionFactory Redis connection factory.
+	 * @param  environment            Environment.
 	 * @return Short lived cache.
 	 */
 	@Bean
 	public CacheManager minutesExpirationCentralCacheManager(
 			final RedisConnectionFactory redisConnectionFactory,
-			@Value(value = "${org.coldis.configuration.cache.minutes-expiration:11}")
-			final Long expiration) {
-		final RedisCacheConfiguration cacheConfiguration = RedisCacheConfiguration.defaultCacheConfig().entryTtl(Duration.ofMinutes(expiration))
+			final Environment environment) {
+		final RedisCacheConfiguration cacheConfiguration = RedisCacheConfiguration.defaultCacheConfig().entryTtl(CacheManagerExpiration.MINUTES.getExpiration(environment))
 				.serializeValuesWith(this.serializationPair).computePrefixWith(CacheKeyPrefix.simple());
 		cacheConfiguration.configureKeyConverters(conversionService -> conversionService.addConverter(SimpleKey.class, String.class, this.keyConverter));
 		cacheConfiguration.configureKeyConverters(conversionService -> conversionService.addConverter(this.keyConverter));
@@ -192,14 +195,15 @@ public class RedisCacheAutoConfiguration {
 	/**
 	 * Long lived cache.
 	 *
+	 * @param  redisConnectionFactory Redis connection factory.
+	 * @param  environment            Environment.
 	 * @return Long lived cache.
 	 */
 	@Bean
 	public CacheManager hoursExpirationCentralCacheManager(
 			final RedisConnectionFactory redisConnectionFactory,
-			@Value(value = "${org.coldis.configuration.cache.hours-expiration:3}")
-			final Long expiration) {
-		final RedisCacheConfiguration cacheConfiguration = RedisCacheConfiguration.defaultCacheConfig().entryTtl(Duration.ofHours(expiration))
+			final Environment environment) {
+		final RedisCacheConfiguration cacheConfiguration = RedisCacheConfiguration.defaultCacheConfig().entryTtl(CacheManagerExpiration.HOURS.getExpiration(environment))
 				.serializeValuesWith(this.serializationPair).computePrefixWith(CacheKeyPrefix.simple());
 		cacheConfiguration.configureKeyConverters(conversionService -> conversionService.addConverter(SimpleKey.class, String.class, this.keyConverter));
 		cacheConfiguration.configureKeyConverters(conversionService -> conversionService.addConverter(this.keyConverter));
@@ -210,14 +214,15 @@ public class RedisCacheAutoConfiguration {
 	/**
 	 * Long lived cache.
 	 *
+	 * @param  redisConnectionFactory Redis connection factory.
+	 * @param  environment            Environment.
 	 * @return Long lived cache.
 	 */
 	@Bean
 	public CacheManager dayExpirationCentralCacheManager(
 			final RedisConnectionFactory redisConnectionFactory,
-			@Value(value = "${org.coldis.configuration.cache.day-expiration:1}")
-			final Long expiration) {
-		final RedisCacheConfiguration cacheConfiguration = RedisCacheConfiguration.defaultCacheConfig().entryTtl(Duration.ofDays(expiration))
+			final Environment environment) {
+		final RedisCacheConfiguration cacheConfiguration = RedisCacheConfiguration.defaultCacheConfig().entryTtl(CacheManagerExpiration.DAY.getExpiration(environment))
 				.serializeValuesWith(this.serializationPair).computePrefixWith(CacheKeyPrefix.simple());
 		cacheConfiguration.configureKeyConverters(conversionService -> conversionService.addConverter(SimpleKey.class, String.class, this.keyConverter));
 		cacheConfiguration.configureKeyConverters(conversionService -> conversionService.addConverter(this.keyConverter));
@@ -228,14 +233,15 @@ public class RedisCacheAutoConfiguration {
 	/**
 	 * Long lived cache.
 	 *
+	 * @param  redisConnectionFactory Redis connection factory.
+	 * @param  environment            Environment.
 	 * @return Long lived cache.
 	 */
 	@Bean
 	public CacheManager daysExpirationCentralCacheManager(
 			final RedisConnectionFactory redisConnectionFactory,
-			@Value(value = "${org.coldis.configuration.cache.days-expiration:5}")
-			final Long expiration) {
-		final RedisCacheConfiguration cacheConfiguration = RedisCacheConfiguration.defaultCacheConfig().entryTtl(Duration.ofDays(expiration))
+			final Environment environment) {
+		final RedisCacheConfiguration cacheConfiguration = RedisCacheConfiguration.defaultCacheConfig().entryTtl(CacheManagerExpiration.DAYS.getExpiration(environment))
 				.serializeValuesWith(this.serializationPair).computePrefixWith(CacheKeyPrefix.simple());
 		cacheConfiguration.configureKeyConverters(conversionService -> conversionService.addConverter(SimpleKey.class, String.class, this.keyConverter));
 		cacheConfiguration.configureKeyConverters(conversionService -> conversionService.addConverter(this.keyConverter));
