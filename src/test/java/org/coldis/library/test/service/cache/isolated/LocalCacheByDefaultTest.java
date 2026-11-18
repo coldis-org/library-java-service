@@ -22,7 +22,7 @@ public class LocalCacheByDefaultTest {
 	 * Tests that local caching works out of the box and a central cached method is called through.
 	 */
 	@Test
-	@DisplayName("Without Redis or cache properties, local caching works, bounded, and central cached methods are called through")
+	@DisplayName("Without Redis or cache properties, local caching works, unbounded, and central cached methods are called through")
 	public void testLocalCacheByDefault() {
 		IsolatedCacheContext.withoutRedis().run(context -> {
 			Assertions.assertNull(context.getStartupFailure());
@@ -30,8 +30,7 @@ public class LocalCacheByDefaultTest {
 			Assertions.assertInstanceOf(CaffeineCacheManager.class, context.getBean("minutesExpirationLocalCacheManager"));
 			Assertions.assertInstanceOf(NoOpCacheManager.class, context.getBean("minutesExpirationCentralCacheManager"));
 			for (final CacheManagerExpiration expiration : CacheManagerExpiration.values()) {
-				Assertions.assertEquals(LocalCacheAutoConfiguration.DEFAULT_MAXIMUM_SIZE,
-						IsolatedCacheContext.getMaximumSize(context.getBean(expiration.getLocalCacheManagerName())));
+				Assertions.assertTrue(IsolatedCacheContext.isUnbounded(context.getBean(expiration.getLocalCacheManagerName())));
 			}
 			Assertions.assertEquals(Duration.ofMillis(3100), IsolatedCacheContext.getExpiration(context.getBean("millisExpirationLocalCacheManager")));
 			Assertions.assertEquals(Duration.ofSeconds(23), IsolatedCacheContext.getExpiration(context.getBean("secondsExpirationLocalCacheManager")));

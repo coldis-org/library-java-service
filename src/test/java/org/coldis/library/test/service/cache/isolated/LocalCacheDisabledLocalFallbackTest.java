@@ -19,7 +19,7 @@ public class LocalCacheDisabledLocalFallbackTest {
 	 * (caching is enabled by the fallback configuration) and that the cache keeps the default maximum size.
 	 */
 	@Test
-	@DisplayName("With local caching off, no Redis and the local fallback, central cached methods cache, bounded, without stats")
+	@DisplayName("With local caching off, no Redis and the local fallback, central cached methods cache, unbounded, without stats")
 	public void testLocalCacheDisabledLocalFallback() {
 		IsolatedCacheContext.withoutRedis()
 				.withUserConfiguration(LocalCacheStatsConfigurationTestSeam.getConfigurationClass())
@@ -31,8 +31,7 @@ public class LocalCacheDisabledLocalFallbackTest {
 					Assertions.assertEquals(0,
 							context.getBeanNamesForType(LocalCacheStatsConfigurationTestSeam.getConfigurationClass()).length);
 					Assertions.assertInstanceOf(CaffeineCacheManager.class, context.getBean("minutesExpirationCentralCacheManager"));
-					Assertions.assertEquals(LocalCacheAutoConfiguration.DEFAULT_MAXIMUM_SIZE,
-							IsolatedCacheContext.getMaximumSize(context.getBean("minutesExpirationCentralCacheManager")));
+					Assertions.assertTrue(IsolatedCacheContext.isUnbounded(context.getBean("minutesExpirationCentralCacheManager")));
 					final CacheClient cacheClient = context.getBean(CacheClient.class);
 					for (int call = 0; call < 3; call++) {
 						Assertions.assertEquals(1, cacheClient.getFromCentralCache("key"));

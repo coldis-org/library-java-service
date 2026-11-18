@@ -84,6 +84,17 @@ public final class IsolatedCacheContext {
 	}
 
 	/**
+	 * Gets whether a cache of a Caffeine cache manager has no size bound (no size-based eviction).
+	 *
+	 * @param  cacheManager Cache manager.
+	 * @return              Whether the cache is unbounded.
+	 */
+	public static boolean isUnbounded(
+			final Object cacheManager) {
+		return ((CaffeineCache) ((CaffeineCacheManager) cacheManager).getCache("unbounded")).getNativeCache().policy().eviction().isEmpty();
+	}
+
+	/**
 	 * Gets the expiration after write of a cache of a Caffeine cache manager.
 	 *
 	 * @param  cacheManager Cache manager.

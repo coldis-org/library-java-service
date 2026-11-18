@@ -108,12 +108,10 @@ public class LocalCacheAutoConfiguration {
 	}
 
 	/**
-	 * Default maximum entries of each local cache (each cache name of each local cache manager).
-	 */
-	public static final long DEFAULT_MAXIMUM_SIZE = 10000L;
-
-	/**
-	 * Maximum entries of each local cache property.
+	 * Maximum entries of each local cache property (each cache name of each local cache manager). Unset or
+	 * not positive leaves local caches unbounded (bounded by their expiration only), as before local
+	 * caching was on by default: a default cap thrashes caches whose working set is larger (statistics
+	 * buckets, for instance) and sends every miss to the central cache or the database.
 	 */
 	public static final String MAXIMUM_SIZE_PROPERTY = "org.coldis.configuration.cache.local.maximum-size";
 
@@ -164,7 +162,7 @@ public class LocalCacheAutoConfiguration {
 	 * Creates a local cache manager.
 	 *
 	 * @param  expiration        Expiration after write.
-	 * @param  maximumSize       Maximum entries per cache ({@link #DEFAULT_MAXIMUM_SIZE} if null or not positive).
+	 * @param  maximumSize       Maximum entries per cache (unbounded if null or not positive).
 	 * @param  shouldRecordStats If stats should be recorded.
 	 * @return                   Cache manager.
 	 */
@@ -174,7 +172,9 @@ public class LocalCacheAutoConfiguration {
 			final Boolean shouldRecordStats) {
 		final CaffeineCacheManager cacheManager = new CaffeineCacheManager();
 		Caffeine<Object, Object> caffeine = Caffeine.newBuilder().expireAfterWrite(expiration);
-		caffeine.maximumSize((maximumSize == null) || (maximumSize <= 0) ? LocalCacheAutoConfiguration.DEFAULT_MAXIMUM_SIZE : maximumSize);
+		if ((maximumSize != null) && (maximumSize > 0)) {
+			caffeine = caffeine.maximumSize(maximumSize);
+		}
 		if (Boolean.TRUE.equals(shouldRecordStats)) {
 			caffeine = caffeine.recordStats();
 		}
