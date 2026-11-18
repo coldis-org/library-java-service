@@ -69,7 +69,8 @@ public class CacheManagerFallbackRegistrar implements BeanDefinitionRegistryPost
 	}
 
 	/**
-	 * Creates a local cache manager with the central cache manager's expiration.
+	 * Creates a local cache manager with the central cache manager's expiration. It records no stats: the local cache
+	 * stats configuration logs only the local cache managers.
 	 *
 	 * @param  expiration Expiration.
 	 * @return            The local cache manager.
@@ -78,7 +79,7 @@ public class CacheManagerFallbackRegistrar implements BeanDefinitionRegistryPost
 			final CacheManagerExpiration expiration) {
 		return LocalCacheAutoConfiguration.createCacheManager(expiration.getExpiration(this.environment),
 				this.environment.getProperty(LocalCacheAutoConfiguration.MAXIMUM_SIZE_PROPERTY, Long.class),
-				this.environment.getProperty(LocalCacheAutoConfiguration.RECORD_STATS_PROPERTY, Boolean.class, false));
+				false);
 	}
 
 	/**

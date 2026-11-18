@@ -1,6 +1,6 @@
 package org.coldis.library.service.cache;
 
-import java.util.List;
+import java.util.Map;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -28,9 +28,9 @@ public class CacheHelper {
 	@Autowired(required = false)
 	private RedisCacheAutoConfiguration redisCacheAutoConfiguration;
 
-	/** Cache managers (including the local ones the fallback creates for central names, which no configuration owns). */
+	/** Cache managers by bean name (the local ones the fallback creates for central names are owned by no configuration). */
 	@Autowired(required = false)
-	private List<CacheManager> cacheManagers;
+	private Map<String, CacheManager> cacheManagers;
 
 	/**
 	 * Clears caches.
@@ -47,16 +47,18 @@ public class CacheHelper {
 		}
 		catch (final Exception exception) {
 		}
-		// Clears the local caches no configuration owns (the central fallback ones).
+		// Clears the local caches the fallback created under the central names (with Redis, these names are Redis).
 		if (this.cacheManagers != null) {
-			this.cacheManagers.stream().filter(CaffeineCacheManager.class::isInstance).forEach(cacheManager -> {
-				try {
-					cacheManager.getCacheNames().forEach(name -> cacheManager.getCache(name).clear());
+			for (final CacheManagerExpiration expiration : CacheManagerExpiration.values()) {
+				if (this.cacheManagers.get(expiration.getCentralCacheManagerName()) instanceof final CaffeineCacheManager cacheManager) {
+					try {
+						cacheManager.getCacheNames().forEach(name -> cacheManager.getCache(name).clear());
+					}
+					catch (final Exception exception) {
+						CacheHelper.LOGGER.warn("Cache manager '" + expiration.getCentralCacheManagerName() + "' could not be cleared.", exception);
+					}
 				}
-				catch (final Exception exception) {
-					CacheHelper.LOGGER.warn("Local cache manager could not be cleared.", exception);
-				}
-			});
+			}
 		}
 	}
 

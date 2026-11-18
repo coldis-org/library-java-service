@@ -20,7 +20,8 @@ import org.springframework.data.redis.connection.lettuce.LettuceConnectionFactor
 /**
  * Small contexts with the library's cache configurations, for the cache set-ups the shared test context (local and
  * Redis caching on) does not have. The AspectJ cache aspect is one per JVM and keeps the cache managers of the last
- * context that configured it, so each test class here builds ONE context and runs in its own JVM (the
+ * context that configured it, so each test class here has ONE test method that builds ONE context, and runs in its own
+ * JVM (the
  * {@code isolated-cache-test} execution in the pom).
  */
 public final class IsolatedCacheContext {
