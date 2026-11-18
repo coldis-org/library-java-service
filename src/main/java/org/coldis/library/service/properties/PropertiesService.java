@@ -1,11 +1,14 @@
 package org.coldis.library.service.properties;
 
+import java.util.Objects;
+
 import javax.sql.DataSource;
 
 import org.apache.activemq.artemis.jms.client.ActiveMQConnectionFactory;
 import org.coldis.library.exception.IntegrationException;
 import org.coldis.library.helper.ReflectionHelper;
 import org.coldis.library.model.SimpleMessage;
+import org.coldis.library.service.jms.ArtemisBrokerAddressChange;
 import org.messaginghub.pooled.jms.JmsPoolConnectionFactory;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -73,9 +76,20 @@ public class PropertiesService implements ApplicationContextAware {
 				throw new IntegrationException(new SimpleMessage("Bean " + beanName + " does not have @ConfigurationProperties annotation."));
 			}
 
+			// Notes the broker address of an Artemis connection factory before the change.
+			final ActiveMQConnectionFactory artemisFactory = ArtemisBrokerAddressChange.getConnectionFactory(bean);
+			final String previousBrokerAddress = ArtemisBrokerAddressChange.getAddress(artemisFactory);
+
 			// Sets the property.
 			PropertiesService.LOGGER.info("Setting property " + name + " to " + PropertiesLogHelper.getLoggedValue(name, value) + " in bean " + beanName + ".");
 			ReflectionHelper.setAttribute(bean, fieldAccess, name, value);
+
+			// Moves the live connections to a broker address that really changed. The same
+			// address sent again (as after a restart, which clears the update scripts' state)
+			// leaves them alone.
+			if ((artemisFactory != null) && !Objects.equals(previousBrokerAddress, ArtemisBrokerAddressChange.getAddress(artemisFactory))) {
+				ArtemisBrokerAddressChange.failConnections(beanName, artemisFactory);
+			}
 		}
 
 	}
