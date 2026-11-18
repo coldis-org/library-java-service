@@ -7,6 +7,7 @@ import java.util.concurrent.TimeUnit;
 import org.apache.coyote.AbstractProtocol;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.web.context.WebServerInitializedEvent;
 import org.springframework.boot.web.embedded.tomcat.TomcatWebServer;
@@ -14,6 +15,11 @@ import org.springframework.context.ApplicationListener;
 import org.springframework.stereotype.Component;
 import org.springframework.web.context.request.RequestContextHolder;
 
+import io.micrometer.core.instrument.Counter;
+import io.micrometer.core.instrument.DistributionSummary;
+import io.micrometer.core.instrument.Gauge;
+import io.micrometer.core.instrument.MeterRegistry;
+import io.micrometer.core.instrument.Timer;
 import jakarta.jms.JMSException;
 import jakarta.jms.ResourceAllocationException;
 
@@ -37,6 +43,13 @@ import jakarta.jms.ResourceAllocationException;
  * its request threads. A server on an external executor (virtual threads) has
  * no such count and is not limited. One limit covers every pooled factory, so
  * two brokers failing together still leave the other threads free.
+ * <p>
+ * Once sized, and when the service has a meter registry, the limit reports how
+ * close requests come to it: the permits in all ({@link #PERMITS_MAX}) and held
+ * now ({@link #PERMITS_HELD}), the permits held each time a request takes one
+ * ({@link #HELD_AT_ACQUIRE}, whose max catches peaks between scrapes), how
+ * long requests waited for one ({@link #WAIT}), and how many were refused
+ * ({@link #REFUSED}).
  */
 @Component
 public class JmsRequestThreadsLimit implements ApplicationListener<WebServerInitializedEvent> {
@@ -50,6 +63,34 @@ public class JmsRequestThreadsLimit implements ApplicationListener<WebServerInit
 	 * Property prefix.
 	 */
 	public static final String PROPERTY_PREFIX = "org.coldis.library.service.jms.request-threads";
+
+	/**
+	 * Gauge: permits in all.
+	 */
+	public static final String PERMITS_MAX = "jms.request.threads.permits.max";
+
+	/**
+	 * Gauge: permits request threads hold now.
+	 */
+	public static final String PERMITS_HELD = "jms.request.threads.permits.held";
+
+	/**
+	 * Summary: permits held, the new one included, each time a request takes
+	 * one.
+	 */
+	public static final String HELD_AT_ACQUIRE = "jms.request.threads.held.at.acquire";
+
+	/**
+	 * Timer: how long a request found every permit taken and waited for one,
+	 * whether it got it or was refused.
+	 */
+	public static final String WAIT = "jms.request.threads.wait";
+
+	/**
+	 * Counter: requests refused because no permit freed up within the maximum
+	 * wait.
+	 */
+	public static final String REFUSED = "jms.request.threads.refused";
 
 	/**
 	 * Whether the limit applies.
@@ -68,6 +109,11 @@ public class JmsRequestThreadsLimit implements ApplicationListener<WebServerInit
 	private final Duration maximumWait;
 
 	/**
+	 * Meter registry, or null when the service has none.
+	 */
+	private MeterRegistry meterRegistry;
+
+	/**
 	 * Permits, once sized; null while the limit does not apply.
 	 */
 	private volatile Semaphore permits;
@@ -76,6 +122,21 @@ public class JmsRequestThreadsLimit implements ApplicationListener<WebServerInit
 	 * Permits in all, once sized.
 	 */
 	private volatile Integer maxPermits;
+
+	/**
+	 * Permits held each time a request takes one, once sized with a registry.
+	 */
+	private volatile DistributionSummary heldAtAcquire;
+
+	/**
+	 * Waits for a permit, once sized with a registry.
+	 */
+	private volatile Timer waits;
+
+	/**
+	 * Refused requests, once sized with a registry.
+	 */
+	private volatile Counter refusals;
 
 	/**
 	 * Constructor.
@@ -96,6 +157,18 @@ public class JmsRequestThreadsLimit implements ApplicationListener<WebServerInit
 	}
 
 	/**
+	 * Sets the meter registry the limit reports to. Takes effect when the limit
+	 * is sized.
+	 *
+	 * @param meterRegistry Meter registry.
+	 */
+	@Autowired(required = false)
+	public void setMeterRegistry(
+			final MeterRegistry meterRegistry) {
+		this.meterRegistry = meterRegistry;
+	}
+
+	/**
 	 * Gets how many request threads may hold a pooled JMS connection at once.
 	 *
 	 * @param  maxThreads Request threads of the server; 0 or less when it has
@@ -111,7 +184,8 @@ public class JmsRequestThreadsLimit implements ApplicationListener<WebServerInit
 	}
 
 	/**
-	 * Sizes the limit from the request threads of the server, when it applies.
+	 * Sizes the limit from the request threads of the server, when it applies,
+	 * and registers its meters.
 	 *
 	 * @param maxThreads Request threads of the server; 0 or less when it has no
 	 *                       such count.
@@ -122,8 +196,29 @@ public class JmsRequestThreadsLimit implements ApplicationListener<WebServerInit
 		if (Boolean.TRUE.equals(this.isEnabled) && (newMaxPermits != null)) {
 			this.maxPermits = newMaxPermits;
 			this.permits = new Semaphore(newMaxPermits);
+			this.registerMeters();
 			JmsRequestThreadsLimit.LOGGER.info("Request threads may hold at most " + newMaxPermits + " pooled JMS connections at once (" + this.maxShare
 					+ " of " + maxThreads + " request threads). Past that, a request waits up to " + this.maximumWait.toMillis() + " ms and then fails.");
+		}
+	}
+
+	/**
+	 * Registers the meters, when there is a registry. Registering again returns
+	 * the meters already there.
+	 */
+	private void registerMeters() {
+		final MeterRegistry registry = this.meterRegistry;
+		if (registry != null) {
+			Gauge.builder(JmsRequestThreadsLimit.PERMITS_MAX, this, limit -> limit.maxPermits == null ? 0 : limit.maxPermits)
+					.description("Request threads that may hold a pooled JMS connection at once.").register(registry);
+			Gauge.builder(JmsRequestThreadsLimit.PERMITS_HELD, this, JmsRequestThreadsLimit::getHeldPermits)
+					.description("Request threads holding a pooled JMS connection now.").register(registry);
+			this.heldAtAcquire = DistributionSummary.builder(JmsRequestThreadsLimit.HELD_AT_ACQUIRE)
+					.description("Request threads holding a pooled JMS connection each time a request takes one, itself included.").register(registry);
+			this.waits = Timer.builder(JmsRequestThreadsLimit.WAIT)
+					.description("Time a request found the pooled JMS connections request threads may hold all taken, and waited for one.").register(registry);
+			this.refusals = Counter.builder(JmsRequestThreadsLimit.REFUSED)
+					.description("Requests refused a pooled JMS connection because none freed up within the maximum wait.").register(registry);
 		}
 	}
 
@@ -174,20 +269,36 @@ public class JmsRequestThreadsLimit implements ApplicationListener<WebServerInit
 		final Semaphore currentPermits = this.permits;
 		Semaphore acquiredPermits = null;
 		if ((currentPermits != null) && (RequestContextHolder.getRequestAttributes() != null)) {
-			Boolean isAcquired;
-			try {
-				isAcquired = currentPermits.tryAcquire(this.maximumWait.toMillis(), TimeUnit.MILLISECONDS);
-			}
-			catch (final InterruptedException exception) {
-				Thread.currentThread().interrupt();
-				isAcquired = false;
+			Boolean isAcquired = currentPermits.tryAcquire();
+			// Every permit is taken: waits for one, and reports the wait.
+			if (!isAcquired) {
+				final long waitStart = System.nanoTime();
+				try {
+					isAcquired = currentPermits.tryAcquire(this.maximumWait.toMillis(), TimeUnit.MILLISECONDS);
+				}
+				catch (final InterruptedException exception) {
+					Thread.currentThread().interrupt();
+					isAcquired = false;
+				}
+				final Timer currentWaits = this.waits;
+				if (currentWaits != null) {
+					currentWaits.record(System.nanoTime() - waitStart, TimeUnit.NANOSECONDS);
+				}
 			}
 			if (!isAcquired) {
+				final Counter currentRefusals = this.refusals;
+				if (currentRefusals != null) {
+					currentRefusals.increment();
+				}
 				final String message = "All " + this.maxPermits + " pooled JMS connections request threads may hold are taken, so a broker may be slow or gone: "
 						+ "refused after " + this.maximumWait.toMillis() + " ms, so the other request threads keep serving (" + JmsRequestThreadsLimit.PROPERTY_PREFIX
 						+ ").";
 				JmsRequestThreadsLimit.LOGGER.warn(message);
 				throw new ResourceAllocationException(message);
+			}
+			final DistributionSummary currentHeldAtAcquire = this.heldAtAcquire;
+			if (currentHeldAtAcquire != null) {
+				currentHeldAtAcquire.record(this.getHeldPermits());
 			}
 			acquiredPermits = currentPermits;
 		}

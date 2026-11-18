@@ -3,6 +3,8 @@ package org.coldis.library.test.service.jms;
 import java.io.IOException;
 import java.time.Duration;
 import java.util.Properties;
+import java.util.concurrent.Semaphore;
+import java.util.concurrent.TimeUnit;
 
 import org.coldis.library.service.jms.JmsRequestThreadsLimit;
 import org.junit.jupiter.api.Assertions;
@@ -10,6 +12,12 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.core.io.ClassPathResource;
 import org.springframework.core.io.support.PropertiesLoaderUtils;
+import org.springframework.mock.web.MockHttpServletRequest;
+import org.springframework.web.context.request.RequestContextHolder;
+import org.springframework.web.context.request.ServletRequestAttributes;
+
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
+import jakarta.jms.ResourceAllocationException;
 
 /**
  * Covers how the limit on request threads holding pooled JMS connections is
@@ -53,6 +61,59 @@ public class JmsRequestThreadsLimitUnitTest {
 		// This test thread serves no request.
 		Assertions.assertNull(enabledLimit.acquire());
 		Assertions.assertEquals(0, enabledLimit.getHeldPermits());
+	}
+
+	/**
+	 * The limit reports the permits in all and held, the permits held each time
+	 * a request takes one, the waits for a permit and the refusals.
+	 *
+	 * @throws Exception If the test fails.
+	 */
+	@Test
+	@DisplayName("Reports how close requests come to the limit")
+	public void testMeters() throws Exception {
+		final SimpleMeterRegistry registry = new SimpleMeterRegistry();
+		final JmsRequestThreadsLimit limit = new JmsRequestThreadsLimit(true, 0.5, Duration.ofMillis(500));
+		limit.setMeterRegistry(registry);
+		limit.size(4);
+		RequestContextHolder.setRequestAttributes(new ServletRequestAttributes(new MockHttpServletRequest()));
+		try {
+			// Two requests take the two permits without waiting.
+			final Semaphore permits = limit.acquire();
+			limit.acquire();
+			Assertions.assertEquals(2.0, registry.get(JmsRequestThreadsLimit.PERMITS_MAX).gauge().value());
+			Assertions.assertEquals(2.0, registry.get(JmsRequestThreadsLimit.PERMITS_HELD).gauge().value());
+			Assertions.assertEquals(2, registry.get(JmsRequestThreadsLimit.HELD_AT_ACQUIRE).summary().count());
+			Assertions.assertEquals(2.0, registry.get(JmsRequestThreadsLimit.HELD_AT_ACQUIRE).summary().max());
+			Assertions.assertEquals(0, registry.get(JmsRequestThreadsLimit.WAIT).timer().count());
+
+			// A third waits the maximum wait and is refused.
+			Assertions.assertThrows(ResourceAllocationException.class, limit::acquire);
+			Assertions.assertEquals(1, registry.get(JmsRequestThreadsLimit.WAIT).timer().count());
+			Assertions.assertTrue(registry.get(JmsRequestThreadsLimit.WAIT).timer().max(TimeUnit.MILLISECONDS) >= 500);
+			Assertions.assertEquals(1.0, registry.get(JmsRequestThreadsLimit.REFUSED).counter().count());
+
+			// A fourth waits until a holder gives its permit back, and takes it.
+			final Thread holder = Thread.ofVirtual().start(() -> {
+				while (!permits.hasQueuedThreads()) {
+					Thread.onSpinWait();
+				}
+				permits.release();
+			});
+			Assertions.assertNotNull(limit.acquire());
+			holder.join();
+			Assertions.assertEquals(2, registry.get(JmsRequestThreadsLimit.WAIT).timer().count());
+			Assertions.assertEquals(1.0, registry.get(JmsRequestThreadsLimit.REFUSED).counter().count());
+			Assertions.assertEquals(3, registry.get(JmsRequestThreadsLimit.HELD_AT_ACQUIRE).summary().count());
+			Assertions.assertEquals(2.0, registry.get(JmsRequestThreadsLimit.PERMITS_HELD).gauge().value());
+
+			// Given back, the permits read as free.
+			permits.release(2);
+			Assertions.assertEquals(0.0, registry.get(JmsRequestThreadsLimit.PERMITS_HELD).gauge().value());
+		}
+		finally {
+			RequestContextHolder.resetRequestAttributes();
+		}
 	}
 
 	/**
