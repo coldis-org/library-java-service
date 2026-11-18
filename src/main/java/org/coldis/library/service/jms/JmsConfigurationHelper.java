@@ -89,6 +89,12 @@ public class JmsConfigurationHelper {
 	@Autowired(required = false)
 	private MeterRegistry meterRegistry;
 
+	/**
+	 * Limit on the request threads that may hold a pooled JMS connection at once.
+	 */
+	@Autowired(required = false)
+	private JmsRequestThreadsLimit jmsRequestThreadsLimit;
+
 	/** Application base packages (comma separated). */
 	@Value("${org.coldis.configuration.base-package:}")
 	private String basePackages;
@@ -550,8 +556,10 @@ public class JmsConfigurationHelper {
 				properties.getClass().getAnnotation(ConfigurationProperties.class) == null ? null
 						: properties.getClass().getAnnotation(ConfigurationProperties.class).prefix());
 		final ExtendedArtemisProperties actualProperties = this.mergeProperties(properties);
-		return MeteredJmsPoolConnectionFactory.create(this.meterRegistry, actualProperties.getPool(),
-				this.createNativeJmsConnectionFactory(beanFactory, actualProperties));
+		final MeteredJmsPoolConnectionFactory pooledConnectionFactory = MeteredJmsPoolConnectionFactory.create(this.meterRegistry,
+				actualProperties.getPool(), this.createNativeJmsConnectionFactory(beanFactory, actualProperties));
+		pooledConnectionFactory.setRequestThreadsLimit(this.jmsRequestThreadsLimit);
+		return pooledConnectionFactory;
 	}
 
 	/**
