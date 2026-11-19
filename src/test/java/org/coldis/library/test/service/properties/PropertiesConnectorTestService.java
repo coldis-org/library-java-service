@@ -53,4 +53,16 @@ public class PropertiesConnectorTestService {
 		this.release.await(PropertiesConnectorTestService.MAXIMUM_WAIT_SECONDS, TimeUnit.SECONDS);
 	}
 
+	/**
+	 * Answers any path under it. Spring MVC picks the handler by the path as
+	 * sent, so a path whose ".." Tomcat resolves into the properties endpoint
+	 * still comes here.
+	 */
+	@RequestMapping(
+			path = "any/**",
+			method = RequestMethod.GET
+	)
+	public void any() {
+	}
+
 }

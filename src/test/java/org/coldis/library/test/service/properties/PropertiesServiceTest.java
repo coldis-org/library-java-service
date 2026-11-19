@@ -481,6 +481,11 @@ public class PropertiesServiceTest extends ContainerTestHelper {
 			Assertions.assertEquals(200, PropertiesServiceTest.getStatusAsSent(this.port, path), path);
 			Assertions.assertEquals(404, PropertiesServiceTest.getStatusAsSent(this.propertiesConnectorCustomizer.getLocalPort(), path), path);
 		}
+		// A path sent from elsewhere that Tomcat resolves into the endpoint goes, by the path as sent, to another
+		// handler on the main connector, and the properties connector refuses it.
+		final String pathIntoTheEndpoint = "/properties-connector-test/any/../../properties/string/testProperties1/property1";
+		Assertions.assertEquals(200, PropertiesServiceTest.getStatusAsSent(this.port, pathIntoTheEndpoint));
+		Assertions.assertEquals(404, PropertiesServiceTest.getStatusAsSent(this.propertiesConnectorCustomizer.getLocalPort(), pathIntoTheEndpoint));
 	}
 
 }

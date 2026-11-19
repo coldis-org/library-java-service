@@ -105,9 +105,10 @@ public class PropertiesConnectorFilter extends OncePerRequestFilter implements O
 	}
 
 	/**
-	 * Runs right after the filters at the highest precedence (character
-	 * encoding, the warm-up health check), so a refused request costs as little
-	 * as possible.
+	 * Runs after the filters at the highest precedence (character encoding, the
+	 * warm-up health check), so a refused request costs little. Spring Boot's
+	 * HTTP observation filter has this same order, so a refused request may
+	 * still be timed in the request metrics.
 	 *
 	 * @see org.springframework.core.Ordered#getOrder()
 	 */

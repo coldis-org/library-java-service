@@ -205,7 +205,11 @@ public class PropertiesConnectorCustomizerUnitTest {
 	public void testFilterPassesOtherPortsAndUnbound() throws ServletException, IOException {
 		Assertions.assertTrue(PropertiesConnectorCustomizerUnitTest.isPassedOn(PropertiesConnectorCustomizerUnitTest.createBoundFilter(),
 				PropertiesConnectorCustomizerUnitTest.createRequest(9090, "/health-check", "/health-check")));
-		final PropertiesConnectorFilter unboundFilter = new PropertiesConnectorFilter(new PropertiesConnectorCustomizer("127.0.0.1", 9091, 2));
+		// Added to a server, not bound yet: Tomcat reports its port as -1, which is not kept.
+		final PropertiesConnectorCustomizer unboundCustomizer = new PropertiesConnectorCustomizer("127.0.0.1", 9091, 2);
+		unboundCustomizer.customize(new TomcatServletWebServerFactory());
+		Assertions.assertNull(unboundCustomizer.getLocalPort());
+		final PropertiesConnectorFilter unboundFilter = new PropertiesConnectorFilter(unboundCustomizer);
 		Assertions.assertTrue(PropertiesConnectorCustomizerUnitTest.isPassedOn(unboundFilter,
 				PropertiesConnectorCustomizerUnitTest.createRequest(9091, "/health-check", "/health-check")));
 	}
