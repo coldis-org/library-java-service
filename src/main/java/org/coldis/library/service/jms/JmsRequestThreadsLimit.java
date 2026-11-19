@@ -203,7 +203,7 @@ public class JmsRequestThreadsLimit implements ApplicationListener<WebServerInit
 		 *
 		 * @return Whether it is held.
 		 */
-		private Boolean hold() {
+		private Boolean tryHold() {
 			return this.holds.getAndUpdate(currentHolds -> (currentHolds > 0) ? (currentHolds + 1) : currentHolds) > 0;
 		}
 
@@ -264,12 +264,42 @@ public class JmsRequestThreadsLimit implements ApplicationListener<WebServerInit
 	 * @return            The permits, at least 1, or null when the server has
 	 *                    no thread count.
 	 */
-	public static Integer getMaxPermits(
+	public static Integer calculateMaxPermits(
 			final Integer maxThreads,
 			final Double maxShare) {
 		// As a decimal, so 0.29 of 100 threads gives 29 permits, not 28.
 		return ((maxThreads == null) || (maxThreads <= 0)) ? null
 				: Math.max(1, BigDecimal.valueOf(maxShare).multiply(BigDecimal.valueOf(maxThreads)).intValue());
+	}
+
+	/**
+	 * Gets the permits in all.
+	 *
+	 * @return The permits in all, or null while the limit does not apply.
+	 */
+	public Integer getMaxPermits() {
+		return this.maxPermits;
+	}
+
+	/**
+	 * Gets the permits request threads hold now.
+	 *
+	 * @return The permits held, 0 while the limit does not apply.
+	 */
+	public Integer getHeldPermits() {
+		final Semaphore currentPermits = this.permits;
+		return (currentPermits == null) ? 0 : (this.maxPermits - currentPermits.availablePermits());
+	}
+
+	/**
+	 * Gets the requests waiting for a permit now.
+	 *
+	 * @return The requests waiting, an estimate, 0 while the limit does not
+	 *         apply.
+	 */
+	public Integer getWaitingRequests() {
+		final Semaphore currentPermits = this.permits;
+		return (currentPermits == null) ? 0 : currentPermits.getQueueLength();
 	}
 
 	/**
@@ -301,7 +331,7 @@ public class JmsRequestThreadsLimit implements ApplicationListener<WebServerInit
 	 */
 	public void sizeFromRequestThreads(
 			final Integer maxThreads) {
-		final Integer newMaxPermits = JmsRequestThreadsLimit.getMaxPermits(maxThreads, this.maxShare);
+		final Integer newMaxPermits = JmsRequestThreadsLimit.calculateMaxPermits(maxThreads, this.maxShare);
 		if (Boolean.TRUE.equals(this.isEnabled) && (newMaxPermits != null)) {
 			this.maxPermits = newMaxPermits;
 			this.permits = new Semaphore(newMaxPermits);
@@ -324,36 +354,6 @@ public class JmsRequestThreadsLimit implements ApplicationListener<WebServerInit
 				&& (tomcatWebServer.getTomcat().getConnector().getProtocolHandler() instanceof final AbstractProtocol<?> protocol)) {
 			this.sizeFromRequestThreads(protocol.getMaxThreads());
 		}
-	}
-
-	/**
-	 * Gets the permits in all.
-	 *
-	 * @return The permits in all, or null while the limit does not apply.
-	 */
-	public Integer getMaxPermits() {
-		return this.maxPermits;
-	}
-
-	/**
-	 * Gets the permits request threads hold now.
-	 *
-	 * @return The permits held, 0 while the limit does not apply.
-	 */
-	public Integer getHeldPermits() {
-		final Semaphore currentPermits = this.permits;
-		return (currentPermits == null) ? 0 : (this.maxPermits - currentPermits.availablePermits());
-	}
-
-	/**
-	 * Gets the requests waiting for a permit now.
-	 *
-	 * @return The requests waiting, an estimate, 0 while the limit does not
-	 *         apply.
-	 */
-	public Integer getWaitingRequests() {
-		final Semaphore currentPermits = this.permits;
-		return (currentPermits == null) ? 0 : currentPermits.getQueueLength();
 	}
 
 	/**
@@ -415,7 +415,7 @@ public class JmsRequestThreadsLimit implements ApplicationListener<WebServerInit
 		Permit permit = null;
 		if ((currentPermits != null) && (RequestContextHolder.getRequestAttributes() != null)) {
 			final Permit heldPermit = this.threadPermit.get();
-			permit = ((heldPermit != null) && (heldPermit.permits == currentPermits) && heldPermit.hold()) ? heldPermit : this.take(currentPermits);
+			permit = ((heldPermit != null) && (heldPermit.permits == currentPermits) && heldPermit.tryHold()) ? heldPermit : this.take(currentPermits);
 		}
 		return permit;
 	}

@@ -1,6 +1,7 @@
 package org.coldis.library.test.service.properties;
 
 import java.sql.Connection;
+import java.time.Duration;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
@@ -88,6 +89,10 @@ public class PropertiesServiceTest extends ContainerTestHelper {
 	@Autowired
 	private ArtemisBrokerAddressChange artemisBrokerAddressChange;
 
+	/** Properties service. */
+	@Autowired
+	private PropertiesService propertiesService;
+
 	/** Original datasource URL from environment. */
 	@Value("${spring.datasource.url}")
 	private String originalJdbcUrl;
@@ -96,9 +101,28 @@ public class PropertiesServiceTest extends ContainerTestHelper {
 	@Value("${ARTEMIS_CONTAINER_61616}")
 	private String originalArtemisPort;
 
-	/** Resets shared singletons after each test to their initial environment-based values. */
+	/**
+	 * Whether every session factory of the pooled factory's Artemis locator has a
+	 * live connection.
+	 *
+	 * @return Whether they are all connected.
+	 */
+	private Boolean areArtemisSessionFactoriesConnected() {
+		final ServerLocatorImpl serverLocator = (ServerLocatorImpl) ((ActiveMQConnectionFactory) this.connectionFactory.getConnectionFactory())
+				.getServerLocator();
+		final Set<ClientSessionFactoryInternal> sessionFactories = serverLocator.getFactories();
+		synchronized (sessionFactories) {
+			return sessionFactories.stream().allMatch(sessionFactory -> sessionFactory.numConnections() > 0);
+		}
+	}
+
+	/**
+	 * Resets shared singletons after each test to their initial environment-based values.
+	 *
+	 * @throws Exception If the Artemis connections do not come back.
+	 */
 	@org.junit.jupiter.api.AfterEach
-	public void tearDown() {
+	public void tearDown() throws Exception {
 		try {
 			this.restTemplate.put("http://localhost:" + this.port + "/properties/string/testProperties1/property1", 1, Void.class);
 			this.restTemplate.put("http://localhost:" + this.port + "/properties/long/testProperties1/property2", 1, Void.class);
@@ -136,6 +160,10 @@ public class PropertiesServiceTest extends ContainerTestHelper {
 			this.connectionFactory.clear();
 		} catch (final Exception exception) {
 		}
+		this.propertiesService.setArtemisBrokerAddressChange(this.artemisBrokerAddressChange);
+		// The next test, in this class or in one that shares the context, finds every listener connected.
+		Assertions.assertTrue(TestHelper.waitUntilValid(this::areArtemisSessionFactoriesConnected, isConnected -> isConnected, TestHelper.VERY_LONG_WAIT,
+				TestHelper.VERY_SHORT_WAIT));
 	}
 
 	/** A value set through the endpoint is logged masked: a password-like string by its length only. */
@@ -264,6 +292,10 @@ public class PropertiesServiceTest extends ContainerTestHelper {
 	 */
 	@Test
 	public void testArtemisConnectionUpdate() throws Exception {
+		// The live connections stay: this test checks the new ones, and moving the listeners to an
+		// address that does not answer would leave them reconnecting there (the teardown restores it).
+		this.propertiesService.setArtemisBrokerAddressChange(new ArtemisBrokerAddressChange(false, Duration.ofSeconds(1)));
+
 		// Validates initial property value.
 		this.jmsTemplate.convertAndSend("testQueue", "testMessage");
 

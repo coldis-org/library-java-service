@@ -203,7 +203,7 @@ public class MeteredJmsPoolConnectionFactory extends JmsPoolConnectionFactory im
 		try {
 			connection = super.createConnection(userName, password);
 		}
-		catch (final JMSException | RuntimeException exception) {
+		catch (final JMSException | RuntimeException | Error exception) {
 			if (permit != null) {
 				permit.release();
 			}

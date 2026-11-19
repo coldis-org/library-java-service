@@ -1,6 +1,5 @@
 package org.coldis.library.test.service.jms;
 
-import java.lang.reflect.Proxy;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
@@ -94,7 +93,7 @@ public class JmsRequestThreadsLimitBrokerTest extends ContainerTestHelper {
 						"tcp://127.0.0.1:" + proxy.getPort() + "?" + EmbeddedBrokerTestHelper.CLIENT_QUERY)) {
 			final MeteredJmsPoolConnectionFactory pool = JmsRequestThreadsLimitBrokerTest.createPool(artemisFactory, limit);
 			final JmsTemplate template = new JmsTemplate(pool);
-			// Not a request thread: not limited.
+			// Outside a request thread: nothing is left held.
 			template.convertAndSend("limit-frozen", "before the freeze");
 			Assertions.assertEquals(0, limit.getHeldPermits());
 
@@ -233,20 +232,16 @@ public class JmsRequestThreadsLimitBrokerTest extends ContainerTestHelper {
 	public void testPermitReturnedWhenConnectionFails() throws Exception {
 		final JmsRequestThreadsLimit limit = new JmsRequestThreadsLimit(true, 0.5, Duration.ofMillis(500));
 		limit.sizeFromRequestThreads(4);
-		final ConnectionFactory failingFactory = (ConnectionFactory) Proxy.newProxyInstance(ConnectionFactory.class.getClassLoader(),
-				new Class<?>[] { ConnectionFactory.class }, (proxy, method, arguments) -> switch (method.getName()) {
-					case "hashCode" -> System.identityHashCode(proxy);
-					case "equals" -> proxy == arguments[0];
-					case "toString" -> "failing connection factory";
-					default -> throw new JMSException("The broker is gone.");
-				});
-		final MeteredJmsPoolConnectionFactory pool = JmsRequestThreadsLimitBrokerTest.createPool(failingFactory, limit);
-		JmsRequestThreadsLimitUnitTest.startOnRequestThread(() -> {
-			Assertions.assertThrows(JMSException.class, pool::createConnection);
-			Assertions.assertEquals(0, limit.getHeldPermits());
-			return null;
-		}).get(5, TimeUnit.SECONDS);
-		pool.stop();
+		// Nothing listens on the port.
+		try (ActiveMQConnectionFactory goneBrokerFactory = new ActiveMQConnectionFactory("tcp://127.0.0.1:" + EmbeddedBrokerTestHelper.freePort())) {
+			final MeteredJmsPoolConnectionFactory pool = JmsRequestThreadsLimitBrokerTest.createPool(goneBrokerFactory, limit);
+			JmsRequestThreadsLimitUnitTest.startOnRequestThread(() -> {
+				Assertions.assertThrows(JMSException.class, pool::createConnection);
+				Assertions.assertEquals(0, limit.getHeldPermits());
+				return null;
+			}).get(15, TimeUnit.SECONDS);
+			pool.stop();
+		}
 	}
 
 }

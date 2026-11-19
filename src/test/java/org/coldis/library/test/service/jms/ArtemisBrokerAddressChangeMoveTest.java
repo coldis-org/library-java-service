@@ -44,6 +44,7 @@ import org.springframework.web.context.request.ServletRequestAttributes;
 
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import jakarta.jms.Connection;
+import jakarta.jms.Session;
 
 /**
  * Covers how a broker address change through the properties endpoint moves
@@ -85,7 +86,7 @@ public class ArtemisBrokerAddressChangeMoveTest extends ContainerTestHelper {
 	 * Binds a request on a loopback address, as the update scripts make.
 	 */
 	@BeforeEach
-	public void bindLocalRequest() {
+	public void beforeEach() {
 		RequestContextHolder.setRequestAttributes(new ServletRequestAttributes(new MockHttpServletRequest()));
 	}
 
@@ -93,7 +94,7 @@ public class ArtemisBrokerAddressChangeMoveTest extends ContainerTestHelper {
 	 * Unbinds the request.
 	 */
 	@AfterEach
-	public void unbindRequest() {
+	public void afterEach() {
 		RequestContextHolder.resetRequestAttributes();
 	}
 
@@ -187,19 +188,15 @@ public class ArtemisBrokerAddressChangeMoveTest extends ContainerTestHelper {
 			}
 
 			// The next send reaches the new broker.
-			Exception lastFailure = null;
-			boolean isSent = false;
-			while (!isSent && (TimeUnit.NANOSECONDS.toSeconds(System.nanoTime() - changed) < 10)) {
+			Assertions.assertTrue(TestHelper.waitUntilValid(() -> {
 				try {
 					template.convertAndSend(queue, "after the change");
-					isSent = true;
+					return Boolean.TRUE;
 				}
 				catch (final Exception exception) {
-					lastFailure = exception;
-					Thread.sleep(200);
+					return Boolean.FALSE;
 				}
-			}
-			Assertions.assertTrue(isSent, "no send reached the new broker: " + lastFailure);
+			}, isSent -> isSent, TestHelper.LONG_WAIT, TestHelper.VERY_SHORT_WAIT), "no send reached the new broker");
 			Assertions.assertTrue(TimeUnit.NANOSECONDS.toSeconds(System.nanoTime() - changed) < 10,
 					"sending after the change must not wait for the call timeout");
 			Assertions.assertEquals("after the change", EmbeddedBrokerTestHelper.receive(newPort, queue));
@@ -235,32 +232,39 @@ public class ArtemisBrokerAddressChangeMoveTest extends ContainerTestHelper {
 			final MeteredJmsPoolConnectionFactory pool = MeteredJmsPoolConnectionFactory.create(new SimpleMeterRegistry(),
 					new JmsPoolConnectionFactoryProperties(), artemisFactory);
 			final PropertiesService propertiesService = ArtemisBrokerAddressChangeMoveTest.propertiesService(context, pool, change);
-			try (Connection connection = pool.createConnection()) {
-				final RemotingConnection liveConnection = ArtemisBrokerAddressChangeMoveTest.remotingConnection(connection);
+			// A connection of the factory itself: it reconnects in place, so a second move would fail it
+			// again (the pool closes a failed connection and opens the next one only when asked).
+			try (ActiveMQConnection connection = (ActiveMQConnection) artemisFactory.createConnection()) {
+				final ClientSessionFactoryInternal sessionFactory = (ClientSessionFactoryInternal) connection.getSessionFactory();
+				final RemotingConnection liveConnection = sessionFactory.getConnection();
 				final long oldBrokerConnections = oldBroker.getActiveMQServer().getTotalConnectionCount();
 				final AtomicInteger failures = new AtomicInteger();
-				((ActiveMQConnection) ((JmsPoolConnection) connection).getConnection()).setFailoverListener(eventType -> {
+				connection.setFailoverListener(eventType -> {
 					if (eventType == FailoverEventType.FAILURE_DETECTED) {
 						failures.incrementAndGet();
 					}
 				});
 
+				// Apart, as the update script sends them, and within the delay: without the restart of the
+				// delay, the host alone would move the connection, and the port would move it again.
 				propertiesService.setStringProperty(ArtemisBrokerAddressChangeMoveTest.BEAN_NAME, true, ArtemisBrokerAddressChangeMoveTest.HOST_PROPERTY,
 						"localhost", true);
+				Thread.sleep(ArtemisBrokerAddressChangeMoveTest.DELAY.toMillis() / 2);
 				propertiesService.setStringProperty(ArtemisBrokerAddressChangeMoveTest.BEAN_NAME, true, ArtemisBrokerAddressChangeMoveTest.PORT_PROPERTY,
 						String.valueOf(newPort), true);
 				// Nothing moved yet: the move waits for the delay.
-				Assertions.assertSame(liveConnection, ArtemisBrokerAddressChangeMoveTest.remotingConnection(connection));
+				Assertions.assertSame(liveConnection, sessionFactory.getConnection());
 				Assertions.assertEquals(0, failures.get());
 
-				// The connection fails once, after the delay, and the pool replaces it with one to the new
-				// host and port: the old broker gets no new connection, as it would from a move to the new
-				// host on the old port.
+				// The connection fails once, after the delay, and reconnects to the new host and port: the
+				// old broker gets no new connection, as it would from a move to the new host on the old port.
 				Assertions.assertTrue(TestHelper.waitUntilValid(failures::get, failuresCount -> failuresCount > 0, TestHelper.LONG_WAIT,
 						TestHelper.VERY_SHORT_WAIT));
 				Thread.sleep(ArtemisBrokerAddressChangeMoveTest.DELAY.toMillis() * 3);
 				Assertions.assertEquals(1, failures.get());
-				new JmsTemplate(pool).convertAndSend("address-change-once", "moved once");
+				try (Session session = connection.createSession(false, Session.AUTO_ACKNOWLEDGE)) {
+					session.createProducer(session.createQueue("address-change-once")).send(session.createTextMessage("moved once"));
+				}
 				Assertions.assertEquals("moved once", EmbeddedBrokerTestHelper.receive(newPort, "address-change-once"));
 				Assertions.assertEquals(oldBrokerConnections, oldBroker.getActiveMQServer().getTotalConnectionCount());
 			}

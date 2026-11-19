@@ -43,6 +43,7 @@ import jakarta.jms.ConnectionFactory;
 @TestWithContainer(reuse = true)
 @ExtendWith(StartTestWithContainerExtension.class)
 @SpringBootTest(webEnvironment = WebEnvironment.RANDOM_PORT)
+@DisplayName("JmsRequestThreadsLimit — in a running service, requests past the share are refused and the health check answers")
 public class JmsRequestThreadsLimitTest extends ContainerTestHelper {
 
 	/**
@@ -108,7 +109,7 @@ public class JmsRequestThreadsLimitTest extends ContainerTestHelper {
 		final Integer maxThreads = ((AbstractProtocol<?>) ((TomcatWebServer) this.webServerApplicationContext.getWebServer()).getTomcat().getConnector()
 				.getProtocolHandler()).getMaxThreads();
 		final Integer maxPermits = this.jmsRequestThreadsLimit.getMaxPermits();
-		Assertions.assertEquals(JmsRequestThreadsLimit.getMaxPermits(maxThreads, 0.5), maxPermits);
+		Assertions.assertEquals(JmsRequestThreadsLimit.calculateMaxPermits(maxThreads, 0.5), maxPermits);
 		final Integer heldRequestsCount = maxThreads + 5;
 		final Double refusedBefore = this.meterRegistry.get(JmsRequestThreadsLimit.REFUSED).counter().count();
 		final HttpClient httpClient = HttpClient.newBuilder().version(HttpClient.Version.HTTP_1_1).build();

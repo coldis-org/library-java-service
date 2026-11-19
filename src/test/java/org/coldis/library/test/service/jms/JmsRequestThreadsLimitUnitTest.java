@@ -10,6 +10,7 @@ import java.util.concurrent.TimeUnit;
 
 import org.apache.tomcat.util.threads.VirtualThreadExecutor;
 import org.coldis.library.service.jms.JmsRequestThreadsLimit;
+import org.coldis.library.test.TestHelper;
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -40,15 +41,15 @@ public class JmsRequestThreadsLimitUnitTest {
 	@Test
 	@DisplayName("Sizes the permits as a share of the request threads")
 	public void testMaxPermits() {
-		Assertions.assertEquals(10, JmsRequestThreadsLimit.getMaxPermits(20, 0.5));
-		Assertions.assertEquals(50, JmsRequestThreadsLimit.getMaxPermits(100, 0.5));
-		Assertions.assertEquals(12, JmsRequestThreadsLimit.getMaxPermits(25, 0.5));
-		Assertions.assertEquals(1, JmsRequestThreadsLimit.getMaxPermits(1, 0.5));
-		Assertions.assertEquals(29, JmsRequestThreadsLimit.getMaxPermits(100, 0.29));
-		Assertions.assertEquals(100, JmsRequestThreadsLimit.getMaxPermits(100, 1.0));
-		Assertions.assertNull(JmsRequestThreadsLimit.getMaxPermits(-1, 0.5));
-		Assertions.assertNull(JmsRequestThreadsLimit.getMaxPermits(0, 0.5));
-		Assertions.assertNull(JmsRequestThreadsLimit.getMaxPermits(null, 0.5));
+		Assertions.assertEquals(10, JmsRequestThreadsLimit.calculateMaxPermits(20, 0.5));
+		Assertions.assertEquals(50, JmsRequestThreadsLimit.calculateMaxPermits(100, 0.5));
+		Assertions.assertEquals(12, JmsRequestThreadsLimit.calculateMaxPermits(25, 0.5));
+		Assertions.assertEquals(1, JmsRequestThreadsLimit.calculateMaxPermits(1, 0.5));
+		Assertions.assertEquals(29, JmsRequestThreadsLimit.calculateMaxPermits(100, 0.29));
+		Assertions.assertEquals(100, JmsRequestThreadsLimit.calculateMaxPermits(100, 1.0));
+		Assertions.assertNull(JmsRequestThreadsLimit.calculateMaxPermits(-1, 0.5));
+		Assertions.assertNull(JmsRequestThreadsLimit.calculateMaxPermits(0, 0.5));
+		Assertions.assertNull(JmsRequestThreadsLimit.calculateMaxPermits(null, 0.5));
 	}
 
 	/**
@@ -175,16 +176,14 @@ public class JmsRequestThreadsLimitUnitTest {
 	/**
 	 * Waits until requests wait for a permit, up to a deadline.
 	 *
-	 * @param  limit Limit.
-	 * @return       Whether a request waits.
+	 * @param  limit     Limit.
+	 * @return           Whether a request waits.
+	 * @throws Exception If the wait fails.
 	 */
 	public static Boolean awaitWaitingRequest(
-			final JmsRequestThreadsLimit limit) {
-		final long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
-		while ((limit.getWaitingRequests() == 0) && (System.nanoTime() < deadline)) {
-			Thread.onSpinWait();
-		}
-		return limit.getWaitingRequests() > 0;
+			final JmsRequestThreadsLimit limit) throws Exception {
+		return TestHelper.waitUntilValid(limit::getWaitingRequests, waitingRequests -> waitingRequests > 0, TestHelper.LONG_WAIT,
+				TestHelper.VERY_SHORT_WAIT);
 	}
 
 	/**
