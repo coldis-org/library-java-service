@@ -61,6 +61,25 @@ public final class EmbeddedBrokerTestHelper {
 	}
 
 	/**
+	 * Sends one text message straight to a broker.
+	 *
+	 * @param  port      Broker port.
+	 * @param  queue     Queue.
+	 * @param  text      Text.
+	 * @throws Exception If it cannot send.
+	 */
+	public static void send(
+			final int port,
+			final String queue,
+			final String text) throws Exception {
+		try (ActiveMQConnectionFactory factory = new ActiveMQConnectionFactory("tcp://127.0.0.1:" + port);
+				Connection connection = factory.createConnection()) {
+			final Session session = connection.createSession(false, Session.AUTO_ACKNOWLEDGE);
+			session.createProducer(session.createQueue(queue)).send(session.createTextMessage(text));
+		}
+	}
+
+	/**
 	 * Receives one text message straight from a broker.
 	 *
 	 * @param  port      Broker port.

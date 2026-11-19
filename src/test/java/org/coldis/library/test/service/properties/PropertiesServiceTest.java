@@ -29,7 +29,9 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.context.SpringBootTest.WebEnvironment;
+import org.springframework.jms.config.JmsListenerEndpointRegistry;
 import org.springframework.jms.core.JmsTemplate;
+import org.springframework.jms.listener.DefaultMessageListenerContainer;
 import org.springframework.test.annotation.DirtiesContext;
 import org.springframework.web.client.RestTemplate;
 import org.testcontainers.containers.GenericContainer;
@@ -93,6 +95,10 @@ public class PropertiesServiceTest extends ContainerTestHelper {
 	@Autowired
 	private PropertiesService propertiesService;
 
+	/** JMS listener containers of the context. */
+	@Autowired
+	private JmsListenerEndpointRegistry jmsListenerEndpointRegistry;
+
 	/** Original datasource URL from environment. */
 	@Value("${spring.datasource.url}")
 	private String originalJdbcUrl;
@@ -102,18 +108,17 @@ public class PropertiesServiceTest extends ContainerTestHelper {
 	private String originalArtemisPort;
 
 	/**
-	 * Whether every session factory of the pooled factory's Artemis locator has a
-	 * live connection.
+	 * Whether every running listener container of the context has a consumer
+	 * registered with its destination. The test context does not let the client
+	 * reconnect, so a failed listener connection is replaced by the container's
+	 * recovery, a few seconds later.
 	 *
-	 * @return Whether they are all connected.
+	 * @return Whether every listener is registered.
 	 */
-	private Boolean areArtemisSessionFactoriesConnected() {
-		final ServerLocatorImpl serverLocator = (ServerLocatorImpl) ((ActiveMQConnectionFactory) this.connectionFactory.getConnectionFactory())
-				.getServerLocator();
-		final Set<ClientSessionFactoryInternal> sessionFactories = serverLocator.getFactories();
-		synchronized (sessionFactories) {
-			return sessionFactories.stream().allMatch(sessionFactory -> sessionFactory.numConnections() > 0);
-		}
+	private Boolean areJmsListenersRegistered() {
+		return this.jmsListenerEndpointRegistry.getListenerContainers().stream()
+				.filter(container -> container.isRunning() && (container instanceof DefaultMessageListenerContainer))
+				.allMatch(container -> ((DefaultMessageListenerContainer) container).isRegisteredWithDestination());
 	}
 
 	/**
@@ -123,6 +128,7 @@ public class PropertiesServiceTest extends ContainerTestHelper {
 	 */
 	@org.junit.jupiter.api.AfterEach
 	public void tearDown() throws Exception {
+		final Set<RemotingConnection> connectionsBeforeReverts = this.getLiveArtemisConnections();
 		try {
 			this.restTemplate.put("http://localhost:" + this.port + "/properties/string/testProperties1/property1", 1, Void.class);
 			this.restTemplate.put("http://localhost:" + this.port + "/properties/long/testProperties1/property2", 1, Void.class);
@@ -155,14 +161,19 @@ public class PropertiesServiceTest extends ContainerTestHelper {
 							+ "/properties/string/pooledJmsConnectionFactory/connectionFactory.serverLocator.initialConnectors.0.params.port?fieldAccess=true",
 					this.originalArtemisPort, Void.class);
 			// A move the reverts scheduled (after a test that changed the address and failed before
-			// changing it back) runs now, and not on the connections of the next test.
+			// changing it back) runs now, and fails its connections, before the next test.
+			final Boolean isMoveScheduled = this.artemisBrokerAddressChange.isMoving();
 			TestHelper.waitUntilValid(this.artemisBrokerAddressChange::isMoving, isMoving -> !isMoving, TestHelper.LONG_WAIT, TestHelper.VERY_SHORT_WAIT);
+			if (isMoveScheduled) {
+				TestHelper.waitUntilValid(this::getLiveArtemisConnections,
+						liveConnections -> liveConnections.stream().noneMatch(connectionsBeforeReverts::contains), TestHelper.LONG_WAIT, TestHelper.VERY_SHORT_WAIT);
+			}
 			this.connectionFactory.clear();
 		} catch (final Exception exception) {
 		}
 		this.propertiesService.setArtemisBrokerAddressChange(this.artemisBrokerAddressChange);
-		// The next test, in this class or in one that shares the context, finds every listener connected.
-		Assertions.assertTrue(TestHelper.waitUntilValid(this::areArtemisSessionFactoriesConnected, isConnected -> isConnected, TestHelper.VERY_LONG_WAIT,
+		// The next test, in this class or in one that shares the context, finds every listener consuming.
+		Assertions.assertTrue(TestHelper.waitUntilValid(this::areJmsListenersRegistered, isRegistered -> isRegistered, TestHelper.VERY_LONG_WAIT,
 				TestHelper.VERY_SHORT_WAIT));
 	}
 
@@ -414,6 +425,9 @@ public class PropertiesServiceTest extends ContainerTestHelper {
 				return Boolean.FALSE;
 			}
 		}, isSent -> isSent, TestHelper.LONG_WAIT, TestHelper.VERY_SHORT_WAIT));
+		// The listeners, whose connections moved too, consume again.
+		Assertions.assertTrue(TestHelper.waitUntilValid(this::areJmsListenersRegistered, isRegistered -> isRegistered, TestHelper.VERY_LONG_WAIT,
+				TestHelper.VERY_SHORT_WAIT));
 	}
 
 	/**

@@ -3,14 +3,12 @@ package org.coldis.library.test.service.jms;
 import java.io.IOException;
 import java.time.Duration;
 import java.util.Properties;
-import java.util.concurrent.Callable;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.FutureTask;
 import java.util.concurrent.TimeUnit;
 
 import org.apache.tomcat.util.threads.VirtualThreadExecutor;
 import org.coldis.library.service.jms.JmsRequestThreadsLimit;
-import org.coldis.library.test.TestHelper;
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -20,9 +18,6 @@ import org.springframework.boot.web.servlet.context.ServletWebServerApplicationC
 import org.springframework.boot.web.servlet.context.ServletWebServerInitializedEvent;
 import org.springframework.core.io.ClassPathResource;
 import org.springframework.core.io.support.PropertiesLoaderUtils;
-import org.springframework.mock.web.MockHttpServletRequest;
-import org.springframework.web.context.request.RequestContextHolder;
-import org.springframework.web.context.request.ServletRequestAttributes;
 
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import jakarta.jms.ResourceAllocationException;
@@ -54,15 +49,19 @@ public class JmsRequestThreadsLimitUnitTest {
 
 	/**
 	 * A share that is not above 0 and at most 1 stops the service from starting,
-	 * instead of turning into a single permit or into no limit.
+	 * instead of turning into a single permit or into no limit, and so does a
+	 * missing or negative wait.
 	 */
 	@Test
-	@DisplayName("Refuses a share that is not above 0 and at most 1")
-	public void testShareOutOfRangeRefused() {
+	@DisplayName("Refuses a share that is not above 0 and at most 1, and a missing or negative wait")
+	public void testInvalidSettingsRefused() {
 		for (final Double maxShare : new Double[] { null, 0.0, -0.5, 1.5, Double.NaN }) {
 			Assertions.assertThrows(IllegalArgumentException.class, () -> new JmsRequestThreadsLimit(true, maxShare, Duration.ofSeconds(2)), "share " + maxShare);
 		}
 		Assertions.assertDoesNotThrow(() -> new JmsRequestThreadsLimit(true, 1.0, Duration.ofSeconds(2)));
+		Assertions.assertThrows(IllegalArgumentException.class, () -> new JmsRequestThreadsLimit(true, 0.5, null));
+		Assertions.assertThrows(IllegalArgumentException.class, () -> new JmsRequestThreadsLimit(true, 0.5, Duration.ofSeconds(-1)));
+		Assertions.assertDoesNotThrow(() -> new JmsRequestThreadsLimit(true, 0.5, Duration.ZERO));
 	}
 
 	/**
@@ -152,41 +151,6 @@ public class JmsRequestThreadsLimitUnitTest {
 	}
 
 	/**
-	 * Runs a call on a request thread of its own.
-	 *
-	 * @param  <Type> Result type.
-	 * @param  call   Call.
-	 * @return        The call, running.
-	 */
-	public static <Type> FutureTask<Type> startOnRequestThread(
-			final Callable<Type> call) {
-		final FutureTask<Type> task = new FutureTask<>(() -> {
-			RequestContextHolder.setRequestAttributes(new ServletRequestAttributes(new MockHttpServletRequest()));
-			try {
-				return call.call();
-			}
-			finally {
-				RequestContextHolder.resetRequestAttributes();
-			}
-		});
-		Thread.ofVirtual().start(task);
-		return task;
-	}
-
-	/**
-	 * Waits until requests wait for a permit, up to a deadline.
-	 *
-	 * @param  limit     Limit.
-	 * @return           Whether a request waits.
-	 * @throws Exception If the wait fails.
-	 */
-	public static Boolean awaitWaitingRequest(
-			final JmsRequestThreadsLimit limit) throws Exception {
-		return TestHelper.waitUntilValid(limit::getWaitingRequests, waitingRequests -> waitingRequests > 0, TestHelper.LONG_WAIT,
-				TestHelper.VERY_SHORT_WAIT);
-	}
-
-	/**
 	 * The limit reports the permits in all and held, the permits held each time
 	 * a request takes one, the waits for a permit and the refusals. A refused
 	 * request gets a message that says nothing of the limit.
@@ -201,8 +165,8 @@ public class JmsRequestThreadsLimitUnitTest {
 		limit.setMeterRegistry(registry);
 		limit.sizeFromRequestThreads(4);
 		// Two requests take the two permits without waiting.
-		final JmsRequestThreadsLimit.Permit firstPermit = JmsRequestThreadsLimitUnitTest.startOnRequestThread(limit::acquire).get(5, TimeUnit.SECONDS);
-		final JmsRequestThreadsLimit.Permit secondPermit = JmsRequestThreadsLimitUnitTest.startOnRequestThread(limit::acquire).get(5, TimeUnit.SECONDS);
+		final JmsRequestThreadsLimit.Permit firstPermit = RequestThreadTestHelper.startOnRequestThread(limit::acquire).get(5, TimeUnit.SECONDS);
+		final JmsRequestThreadsLimit.Permit secondPermit = RequestThreadTestHelper.startOnRequestThread(limit::acquire).get(5, TimeUnit.SECONDS);
 		Assertions.assertEquals(2.0, registry.get(JmsRequestThreadsLimit.PERMITS_MAX).gauge().value());
 		Assertions.assertEquals(2.0, registry.get(JmsRequestThreadsLimit.PERMITS_HELD).gauge().value());
 		Assertions.assertEquals(2, registry.get(JmsRequestThreadsLimit.HELD_AT_ACQUIRE).summary().count());
@@ -211,7 +175,7 @@ public class JmsRequestThreadsLimitUnitTest {
 
 		// A third waits the maximum wait and is refused.
 		final ExecutionException refusal = Assertions.assertThrows(ExecutionException.class,
-				() -> JmsRequestThreadsLimitUnitTest.startOnRequestThread(limit::acquire).get(5, TimeUnit.SECONDS));
+				() -> RequestThreadTestHelper.startOnRequestThread(limit::acquire).get(5, TimeUnit.SECONDS));
 		Assertions.assertInstanceOf(ResourceAllocationException.class, refusal.getCause());
 		Assertions.assertEquals(JmsRequestThreadsLimit.REFUSED_MESSAGE, refusal.getCause().getMessage());
 		Assertions.assertEquals(1, registry.get(JmsRequestThreadsLimit.WAIT).timer().count());
@@ -219,8 +183,8 @@ public class JmsRequestThreadsLimitUnitTest {
 		Assertions.assertEquals(1.0, registry.get(JmsRequestThreadsLimit.REFUSED).counter().count());
 
 		// A fourth waits until a holder gives its permit back, and takes it.
-		final FutureTask<JmsRequestThreadsLimit.Permit> fourthRequest = JmsRequestThreadsLimitUnitTest.startOnRequestThread(limit::acquire);
-		Assertions.assertTrue(JmsRequestThreadsLimitUnitTest.awaitWaitingRequest(limit));
+		final FutureTask<JmsRequestThreadsLimit.Permit> fourthRequest = RequestThreadTestHelper.startOnRequestThread(limit::acquire);
+		Assertions.assertTrue(RequestThreadTestHelper.awaitWaitingRequest(limit));
 		firstPermit.release();
 		final JmsRequestThreadsLimit.Permit fourthPermit = fourthRequest.get(5, TimeUnit.SECONDS);
 		Assertions.assertNotNull(fourthPermit);
@@ -248,7 +212,7 @@ public class JmsRequestThreadsLimitUnitTest {
 		final JmsRequestThreadsLimit limit = new JmsRequestThreadsLimit(true, 0.5, Duration.ofMillis(500));
 		limit.sizeFromRequestThreads(2);
 		Assertions.assertEquals(1, limit.getMaxPermits());
-		JmsRequestThreadsLimitUnitTest.startOnRequestThread(() -> {
+		RequestThreadTestHelper.startOnRequestThread(() -> {
 			// With a single permit, a second connection of the same request would wait for the
 			// first one and be refused if it took a permit of its own.
 			final JmsRequestThreadsLimit.Permit firstHold = limit.acquire();
@@ -281,7 +245,7 @@ public class JmsRequestThreadsLimitUnitTest {
 		final Properties libraryDefaults = PropertiesLoaderUtils.loadProperties(new ClassPathResource("service.properties"));
 		Assertions.assertEquals("true", libraryDefaults.getProperty(JmsRequestThreadsLimit.PROPERTY_PREFIX + ".enabled"));
 		Assertions.assertEquals("0.5", libraryDefaults.getProperty(JmsRequestThreadsLimit.PROPERTY_PREFIX + ".max-share"));
-		Assertions.assertEquals("2s", libraryDefaults.getProperty(JmsRequestThreadsLimit.PROPERTY_PREFIX + ".maximum-wait"));
+		Assertions.assertEquals("2s", libraryDefaults.getProperty(JmsRequestThreadsLimit.PROPERTY_PREFIX + ".max-wait"));
 	}
 
 }

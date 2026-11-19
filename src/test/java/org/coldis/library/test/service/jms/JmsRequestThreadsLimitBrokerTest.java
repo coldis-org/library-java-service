@@ -100,7 +100,7 @@ public class JmsRequestThreadsLimitBrokerTest extends ContainerTestHelper {
 			// Five requests send to the frozen broker.
 			proxy.freeze();
 			for (int requestIndex = 0; requestIndex < 5; requestIndex++) {
-				requests.add(JmsRequestThreadsLimitUnitTest.startOnRequestThread(() -> {
+				requests.add(RequestThreadTestHelper.startOnRequestThread(() -> {
 					template.convertAndSend("limit-frozen", "while frozen");
 					return null;
 				}));
@@ -235,7 +235,7 @@ public class JmsRequestThreadsLimitBrokerTest extends ContainerTestHelper {
 		// Nothing listens on the port.
 		try (ActiveMQConnectionFactory goneBrokerFactory = new ActiveMQConnectionFactory("tcp://127.0.0.1:" + EmbeddedBrokerTestHelper.freePort())) {
 			final MeteredJmsPoolConnectionFactory pool = JmsRequestThreadsLimitBrokerTest.createPool(goneBrokerFactory, limit);
-			JmsRequestThreadsLimitUnitTest.startOnRequestThread(() -> {
+			RequestThreadTestHelper.startOnRequestThread(() -> {
 				Assertions.assertThrows(JMSException.class, pool::createConnection);
 				Assertions.assertEquals(0, limit.getHeldPermits());
 				return null;

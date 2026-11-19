@@ -153,6 +153,9 @@ public class ArtemisBrokerAddressChange implements DisposableBean {
 	public ArtemisBrokerAddressChange(
 			@Value("${" + ArtemisBrokerAddressChange.PROPERTY_PREFIX + ".enabled:true}") final Boolean isEnabled,
 			@Value("${" + ArtemisBrokerAddressChange.PROPERTY_PREFIX + ".delay:1s}") final Duration delay) {
+		if ((delay == null) || delay.isNegative()) {
+			throw new IllegalArgumentException(ArtemisBrokerAddressChange.PROPERTY_PREFIX + ".delay must be set and not negative, not " + delay + ".");
+		}
 		this.isEnabled = isEnabled;
 		this.delay = delay;
 		this.scheduler = Executors.newSingleThreadScheduledExecutor(Thread.ofPlatform().daemon().name("artemis-broker-address-change").factory());
