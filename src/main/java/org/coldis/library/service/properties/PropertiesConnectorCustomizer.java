@@ -27,6 +27,13 @@ import org.springframework.stereotype.Component;
  * connector keeps serving the endpoint as before, and the health check stays
  * there, so it still reports when the service's own threads run out.
  * <p>
+ * The update scripts do not read the port from here: they call
+ * {@code JAVA_ENDPOINT_URL} (127.0.0.1:9091 in the image), so a deployment that
+ * moves the port changes both. A port of 0 picks a free one, which no script
+ * can find: for tests only. The connector takes none of the main connector's
+ * {@code server.tomcat.*} settings (connection timeout, keep-alive, limits);
+ * Tomcat's defaults suit a few local updates.
+ * <p>
  * Off by default: the deployment that ships the scripts calling it turns it on,
  * so test runs and developer machines, where several services or test processes
  * share one network namespace, never open the port. While off, neither this
@@ -95,7 +102,7 @@ public class PropertiesConnectorCustomizer implements WebServerFactoryCustomizer
 	 * Creates a connector that listens on the given address and port, with the
 	 * given request threads of its own.
 	 *
-	 * @param  address    Address the connector listens on.
+	 * @param  address    Address the connector listens on: a loopback one.
 	 * @param  port       Port the connector listens on (0 picks a free one).
 	 * @param  maxThreads Request threads of the connector.
 	 * @return            The connector.
@@ -107,13 +114,20 @@ public class PropertiesConnectorCustomizer implements WebServerFactoryCustomizer
 		final Connector connector = new Connector(TomcatServletWebServerFactory.DEFAULT_PROTOCOL);
 		connector.setPort(port);
 		final AbstractProtocol<?> protocol = (AbstractProtocol<?>) connector.getProtocolHandler();
+		final InetAddress inetAddress;
 		try {
-			protocol.setAddress(InetAddress.getByName(address));
+			inetAddress = InetAddress.getByName(address);
 		}
 		catch (final UnknownHostException exception) {
 			throw new IllegalStateException("Invalid address for the properties connector (" + PropertiesConnectorCustomizer.PROPERTY_PREFIX + ".address): "
 					+ address + ".", exception);
 		}
+		// Anything that reaches it can change the service's properties.
+		if (!inetAddress.isLoopbackAddress()) {
+			throw new IllegalStateException("The properties connector (" + PropertiesConnectorCustomizer.PROPERTY_PREFIX + ".address) listens on a loopback "
+					+ "address only, not on " + address + ".");
+		}
+		protocol.setAddress(inetAddress);
 		protocol.setMaxThreads(maxThreads);
 		protocol.setMinSpareThreads(1);
 		return connector;

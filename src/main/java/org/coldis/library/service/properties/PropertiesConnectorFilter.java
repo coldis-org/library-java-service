@@ -1,6 +1,7 @@
 package org.coldis.library.service.properties;
 
 import java.io.IOException;
+import java.util.Objects;
 
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.core.Ordered;
@@ -47,19 +48,24 @@ public class PropertiesConnectorFilter extends OncePerRequestFilter implements O
 	}
 
 	/**
-	 * Gets the path a request is served by: the servlet path and the path info,
-	 * as Tomcat mapped them, decoded and normalized (no "..", no path
-	 * parameters). The request URI is neither, so "/properties/../health-check"
-	 * starts like the endpoint and is served by the health check.
+	 * Whether a path of a request is within the properties endpoint. Tomcat
+	 * maps a servlet by the servlet path and the path info, decoded and
+	 * normalized (no "..", no path parameters), while Spring MVC picks a handler
+	 * by the request URI as sent, less the context path. So both must be within
+	 * the endpoint: "/properties/../health-check" maps to "/health-check", and
+	 * "/actuator/health/../../properties/x" maps to the endpoint but goes to the
+	 * actuator.
 	 *
 	 * @param  request Request.
-	 * @return         The path within the application.
+	 * @return         Whether both paths are within the endpoint.
 	 */
-	private static String getMappedPath(
+	private static Boolean isWithinEndpoint(
 			final HttpServletRequest request) {
-		final String servletPath = request.getServletPath();
-		final String pathInfo = request.getPathInfo();
-		return ((servletPath == null) ? "" : servletPath) + ((pathInfo == null) ? "" : pathInfo);
+		final String mappedPath = Objects.toString(request.getServletPath(), "") + Objects.toString(request.getPathInfo(), "");
+		final String requestUri = Objects.toString(request.getRequestURI(), "");
+		final String contextPath = Objects.toString(request.getContextPath(), "");
+		final String pathAsSent = requestUri.startsWith(contextPath) ? requestUri.substring(contextPath.length()) : requestUri;
+		return mappedPath.startsWith(PropertiesConnectorFilter.PROPERTIES_PATH_PREFIX) && pathAsSent.startsWith(PropertiesConnectorFilter.PROPERTIES_PATH_PREFIX);
 	}
 
 	/**
@@ -72,8 +78,7 @@ public class PropertiesConnectorFilter extends OncePerRequestFilter implements O
 	public Boolean isRefused(
 			final HttpServletRequest request) {
 		final Integer connectorPort = this.propertiesConnectorCustomizer.getLocalPort();
-		return (connectorPort != null) && (request.getLocalPort() == connectorPort)
-				&& !PropertiesConnectorFilter.getMappedPath(request).startsWith(PropertiesConnectorFilter.PROPERTIES_PATH_PREFIX);
+		return (connectorPort != null) && (request.getLocalPort() == connectorPort) && !PropertiesConnectorFilter.isWithinEndpoint(request);
 	}
 
 	/**

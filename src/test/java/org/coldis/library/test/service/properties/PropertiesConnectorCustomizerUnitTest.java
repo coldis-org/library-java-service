@@ -102,18 +102,12 @@ public class PropertiesConnectorCustomizerUnitTest {
 	}
 
 	/**
-	 * On the properties connector, the filter refuses every path outside the
-	 * properties endpoint, judged by the path Tomcat maps (so a ".." that leaves
-	 * the endpoint is outside it), and lets the endpoint through. On another
-	 * port, and while the connector is not bound, it lets everything through.
+	 * Creates a filter whose connector is bound to port 9091.
 	 *
-	 * @throws ServletException If the filter fails.
-	 * @throws IOException      If the filter fails.
+	 * @return The filter.
 	 */
-	@Test
-	@DisplayName("The filter refuses paths outside /properties/ on the connector only")
-	public void testFilter() throws ServletException, IOException {
-		final PropertiesConnectorFilter filter = new PropertiesConnectorFilter(new PropertiesConnectorCustomizer("127.0.0.1", 9091, 2) {
+	private static PropertiesConnectorFilter createBoundFilter() {
+		return new PropertiesConnectorFilter(new PropertiesConnectorCustomizer("127.0.0.1", 9091, 2) {
 
 			@Override
 			public Integer getLocalPort() {
@@ -121,41 +115,115 @@ public class PropertiesConnectorCustomizerUnitTest {
 			}
 
 		});
-		Assertions.assertFalse(filter.isRefused(PropertiesConnectorCustomizerUnitTest.createRequest(9091, "/properties/string/bean/attribute",
-				"/properties/string/bean/attribute")));
-		Assertions.assertTrue(filter.isRefused(PropertiesConnectorCustomizerUnitTest.createRequest(9091, "/health-check", "/health-check")));
-		Assertions.assertTrue(filter.isRefused(PropertiesConnectorCustomizerUnitTest.createRequest(9091, "/properties", "/properties")));
-		Assertions.assertTrue(filter.isRefused(PropertiesConnectorCustomizerUnitTest.createRequest(9091, "/properties-other", "/properties-other")));
-		Assertions.assertTrue(filter.isRefused(PropertiesConnectorCustomizerUnitTest.createRequest(9091, "/properties/../health-check", "/health-check")));
-		Assertions.assertTrue(
-				filter.isRefused(PropertiesConnectorCustomizerUnitTest.createRequest(9091, "/properties/%2e%2e/health-check", "/health-check")));
-		Assertions.assertFalse(filter.isRefused(PropertiesConnectorCustomizerUnitTest.createRequest(9090, "/health-check", "/health-check")));
-		// A refused request gets 404 and never reaches the chain.
-		final MockHttpServletResponse refusedResponse = new MockHttpServletResponse();
-		final MockFilterChain refusedChain = new MockFilterChain();
-		filter.doFilter(PropertiesConnectorCustomizerUnitTest.createRequest(9091, "/properties/../health-check", "/health-check"), refusedResponse,
-				refusedChain);
-		Assertions.assertEquals(404, refusedResponse.getStatus());
-		Assertions.assertNull(refusedChain.getRequest());
-		final MockFilterChain passedChain = new MockFilterChain();
-		filter.doFilter(PropertiesConnectorCustomizerUnitTest.createRequest(9090, "/health-check", "/health-check"), new MockHttpServletResponse(),
-				passedChain);
-		Assertions.assertNotNull(passedChain.getRequest());
-		// While the connector is not bound, nothing is refused.
-		final PropertiesConnectorFilter unboundFilter = new PropertiesConnectorFilter(new PropertiesConnectorCustomizer("127.0.0.1", 9091, 2));
-		Assertions.assertFalse(unboundFilter.isRefused(PropertiesConnectorCustomizerUnitTest.createRequest(9091, "/health-check", "/health-check")));
 	}
 
 	/**
-	 * An address that is not one fails the start up, naming the property. A
-	 * malformed IPv6 literal is refused without any name lookup.
+	 * Runs a request through a filter.
+	 *
+	 * @param  filter           Filter.
+	 * @param  request          Request.
+	 * @return                  Whether the request reached the chain; when not,
+	 *                          it got 404.
+	 * @throws ServletException If the filter fails.
+	 * @throws IOException      If the filter fails.
+	 */
+	private static Boolean isPassedOn(
+			final PropertiesConnectorFilter filter,
+			final MockHttpServletRequest request) throws ServletException, IOException {
+		final MockHttpServletResponse response = new MockHttpServletResponse();
+		final MockFilterChain chain = new MockFilterChain();
+		filter.doFilter(request, response, chain);
+		Assertions.assertEquals((chain.getRequest() == null), (response.getStatus() == 404));
+		return chain.getRequest() != null;
+	}
+
+	/**
+	 * On the properties connector, the properties endpoint reaches the
+	 * application, under a context path too.
+	 *
+	 * @throws ServletException If the filter fails.
+	 * @throws IOException      If the filter fails.
 	 */
 	@Test
-	@DisplayName("An invalid address fails naming the property")
+	@DisplayName("The filter lets the properties endpoint through on the connector")
+	public void testFilterLetsTheEndpointThrough() throws ServletException, IOException {
+		final PropertiesConnectorFilter filter = PropertiesConnectorCustomizerUnitTest.createBoundFilter();
+		Assertions.assertTrue(PropertiesConnectorCustomizerUnitTest.isPassedOn(filter,
+				PropertiesConnectorCustomizerUnitTest.createRequest(9091, "/properties/string/bean/attribute", "/properties/string/bean/attribute")));
+		final MockHttpServletRequest requestUnderContextPath = PropertiesConnectorCustomizerUnitTest.createRequest(9091, "/app/properties/string/bean/attribute",
+				"/properties/string/bean/attribute");
+		requestUnderContextPath.setContextPath("/app");
+		Assertions.assertTrue(PropertiesConnectorCustomizerUnitTest.isPassedOn(filter, requestUnderContextPath));
+	}
+
+	/**
+	 * On the properties connector, any other path gets 404 and never reaches the
+	 * application, one that only starts like the endpoint included.
+	 *
+	 * @throws ServletException If the filter fails.
+	 * @throws IOException      If the filter fails.
+	 */
+	@Test
+	@DisplayName("The filter answers 404 to other paths on the connector")
+	public void testFilterRefusesOtherPaths() throws ServletException, IOException {
+		final PropertiesConnectorFilter filter = PropertiesConnectorCustomizerUnitTest.createBoundFilter();
+		for (final String path : new String[] { "/health-check", "/properties", "/properties-other" }) {
+			Assertions.assertFalse(PropertiesConnectorCustomizerUnitTest.isPassedOn(filter, PropertiesConnectorCustomizerUnitTest.createRequest(9091, path, path)),
+					path);
+		}
+	}
+
+	/**
+	 * On the properties connector, a path is refused when either the path as
+	 * sent (which Spring MVC routes by) or the path Tomcat maps (decoded and
+	 * normalized) is outside the endpoint.
+	 *
+	 * @throws ServletException If the filter fails.
+	 * @throws IOException      If the filter fails.
+	 */
+	@Test
+	@DisplayName("The filter refuses a path that leaves the endpoint, as sent or as mapped")
+	public void testFilterRefusesPathsLeavingTheEndpoint() throws ServletException, IOException {
+		final PropertiesConnectorFilter filter = PropertiesConnectorCustomizerUnitTest.createBoundFilter();
+		Assertions.assertFalse(PropertiesConnectorCustomizerUnitTest.isPassedOn(filter,
+				PropertiesConnectorCustomizerUnitTest.createRequest(9091, "/properties/../health-check", "/health-check")));
+		Assertions.assertFalse(PropertiesConnectorCustomizerUnitTest.isPassedOn(filter,
+				PropertiesConnectorCustomizerUnitTest.createRequest(9091, "/properties/%2e%2e/health-check", "/health-check")));
+		Assertions.assertFalse(PropertiesConnectorCustomizerUnitTest.isPassedOn(filter, PropertiesConnectorCustomizerUnitTest.createRequest(9091,
+				"/actuator/health/../../properties/string/bean/attribute", "/properties/string/bean/attribute")));
+	}
+
+	/**
+	 * On another port, and while the connector is not bound, the filter lets
+	 * every path through.
+	 *
+	 * @throws ServletException If the filter fails.
+	 * @throws IOException      If the filter fails.
+	 */
+	@Test
+	@DisplayName("The filter lets every path through on other ports and while the connector is not bound")
+	public void testFilterPassesOtherPortsAndUnbound() throws ServletException, IOException {
+		Assertions.assertTrue(PropertiesConnectorCustomizerUnitTest.isPassedOn(PropertiesConnectorCustomizerUnitTest.createBoundFilter(),
+				PropertiesConnectorCustomizerUnitTest.createRequest(9090, "/health-check", "/health-check")));
+		final PropertiesConnectorFilter unboundFilter = new PropertiesConnectorFilter(new PropertiesConnectorCustomizer("127.0.0.1", 9091, 2));
+		Assertions.assertTrue(PropertiesConnectorCustomizerUnitTest.isPassedOn(unboundFilter,
+				PropertiesConnectorCustomizerUnitTest.createRequest(9091, "/health-check", "/health-check")));
+	}
+
+	/**
+	 * An address that is not one, or not a loopback one, fails the start up,
+	 * naming the property. A malformed IPv6 literal is refused without any name
+	 * lookup.
+	 */
+	@Test
+	@DisplayName("An invalid or non-loopback address fails naming the property")
 	public void testInvalidAddressFails() {
-		final IllegalStateException exception = Assertions.assertThrows(IllegalStateException.class,
-				() -> PropertiesConnectorCustomizer.createConnector("[invalid", 9091, 2));
-		Assertions.assertTrue(exception.getMessage().contains(PropertiesConnectorCustomizer.PROPERTY_PREFIX + ".address"));
+		for (final String address : new String[] { "[invalid", "0.0.0.0", "10.1.2.3" }) {
+			final IllegalStateException exception = Assertions.assertThrows(IllegalStateException.class,
+					() -> PropertiesConnectorCustomizer.createConnector(address, 9091, 2), address);
+			Assertions.assertTrue(exception.getMessage().contains(PropertiesConnectorCustomizer.PROPERTY_PREFIX + ".address"), address);
+		}
+		Assertions.assertDoesNotThrow(() -> PropertiesConnectorCustomizer.createConnector("::1", 9091, 2));
 	}
 
 	/**
