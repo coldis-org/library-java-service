@@ -232,7 +232,8 @@ public class PropertiesConnectorCustomizerUnitTest {
 
 	/**
 	 * The library ships the connector off, on the loopback address and the port
-	 * the update scripts call: only a deployment that calls it turns it on.
+	 * the update scripts call, with 2 threads: only a deployment that calls it
+	 * turns it on.
 	 *
 	 * @throws IOException If the library defaults cannot be read.
 	 */
@@ -241,7 +242,10 @@ public class PropertiesConnectorCustomizerUnitTest {
 	public void testShippedDefaults() throws IOException {
 		final Properties libraryDefaults = PropertiesLoaderUtils.loadProperties(new ClassPathResource("service.properties"));
 		Assertions.assertEquals("false", libraryDefaults.getProperty(PropertiesConnectorCustomizer.PROPERTY_PREFIX + ".enabled"));
+		// InetAddress reads a missing or empty address as loopback too.
+		Assertions.assertNotNull(libraryDefaults.getProperty(PropertiesConnectorCustomizer.PROPERTY_PREFIX + ".address"));
 		Assertions.assertTrue(InetAddress.getByName(libraryDefaults.getProperty(PropertiesConnectorCustomizer.PROPERTY_PREFIX + ".address")).isLoopbackAddress());
+		Assertions.assertEquals("2", libraryDefaults.getProperty(PropertiesConnectorCustomizer.PROPERTY_PREFIX + ".max-threads"));
 		Assertions.assertEquals("9091", libraryDefaults.getProperty(PropertiesConnectorCustomizer.PROPERTY_PREFIX + ".port"));
 	}
 
