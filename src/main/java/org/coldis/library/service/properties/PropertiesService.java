@@ -24,8 +24,13 @@ import org.springframework.web.bind.annotation.RestController;
  * Properties service.
  */
 @RestController
-@RequestMapping("/properties")
+@RequestMapping(PropertiesService.PATH)
 public class PropertiesService implements ApplicationContextAware {
+
+	/**
+	 * Path of the endpoint.
+	 */
+	public static final String PATH = "/properties";
 
 	/**
 	 * Logger.

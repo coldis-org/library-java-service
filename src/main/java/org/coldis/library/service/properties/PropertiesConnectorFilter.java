@@ -19,6 +19,12 @@ import jakarta.servlet.http.HttpServletResponse;
  * so nothing else (the health check, the management endpoints) takes its few
  * request threads. Requests on every other connector pass untouched. It exists
  * only while the connector is on.
+ * <p>
+ * Filters at the highest precedence run before it: while a service warms up,
+ * the warm-up filter answers the health check with 503 on this connector too.
+ * The paths are judged from the root, as the dispatcher servlet is mapped
+ * there ({@code spring.mvc.servlet.path} unset); under a servlet path, the
+ * endpoint itself would be refused here.
  */
 @Component
 @ConditionalOnProperty(
@@ -31,7 +37,7 @@ public class PropertiesConnectorFilter extends OncePerRequestFilter implements O
 	/**
 	 * Path prefix of the properties endpoint.
 	 */
-	public static final String PROPERTIES_PATH_PREFIX = "/properties/";
+	public static final String PROPERTIES_PATH_PREFIX = PropertiesService.PATH + "/";
 
 	/**
 	 * Properties connector.
@@ -99,8 +105,9 @@ public class PropertiesConnectorFilter extends OncePerRequestFilter implements O
 	}
 
 	/**
-	 * Runs before the other filters, so a refused request costs as little as
-	 * possible.
+	 * Runs right after the filters at the highest precedence (character
+	 * encoding, the warm-up health check), so a refused request costs as little
+	 * as possible.
 	 *
 	 * @see org.springframework.core.Ordered#getOrder()
 	 */

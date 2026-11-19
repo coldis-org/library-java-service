@@ -462,6 +462,7 @@ public class PropertiesServiceTest extends ContainerTestHelper {
 				.stream(((TomcatWebServer) this.webServerApplicationContext.getWebServer()).getTomcat().getService().findConnectors())
 				.filter(connector -> connector.getLocalPort() == this.propertiesConnectorCustomizer.getLocalPort()).findFirst().orElseThrow();
 		Assertions.assertTrue(((AbstractProtocol<?>) propertiesConnector.getProtocolHandler()).getAddress().isLoopbackAddress());
+		Assertions.assertEquals(2, ((AbstractProtocol<?>) propertiesConnector.getProtocolHandler()).getMaxThreads());
 		final HttpClient httpClient = HttpClient.newBuilder().version(HttpClient.Version.HTTP_1_1).build();
 		final HttpResponse<Void> healthCheckOnPropertiesConnector = httpClient.send(
 				HttpRequest.newBuilder(URI.create(this.getPropertiesConnectorUrl() + "/health-check")).GET().build(), BodyHandlers.discarding());
@@ -473,10 +474,13 @@ public class PropertiesServiceTest extends ContainerTestHelper {
 		final HttpResponse<Void> pathOutsideTheEndpoint = httpClient.send(
 				HttpRequest.newBuilder(URI.create(this.getPropertiesConnectorUrl() + "/properties-connector-test/wait")).GET().build(), BodyHandlers.discarding());
 		Assertions.assertEquals(404, pathOutsideTheEndpoint.statusCode());
-		// A path that starts with the endpoint and leaves it is outside it.
-		Assertions.assertEquals(404, PropertiesServiceTest.getStatusAsSent(this.propertiesConnectorCustomizer.getLocalPort(), "/properties/../health-check"));
-		Assertions.assertEquals(404,
-				PropertiesServiceTest.getStatusAsSent(this.propertiesConnectorCustomizer.getLocalPort(), "/properties/%2e%2e/health-check"));
+		// A path that starts with the endpoint and leaves it is outside it: Tomcat routes it, by the path it
+		// resolves, to a servlet that answers on the main connector, and the properties connector refuses it.
+		for (final String pathLeavingTheEndpoint : new String[] { "/properties/../", "/properties/%2e%2e/" }) {
+			final String path = pathLeavingTheEndpoint + PropertiesConnectorTestServletConfiguration.PATH.substring(1) + "/any";
+			Assertions.assertEquals(200, PropertiesServiceTest.getStatusAsSent(this.port, path), path);
+			Assertions.assertEquals(404, PropertiesServiceTest.getStatusAsSent(this.propertiesConnectorCustomizer.getLocalPort(), path), path);
+		}
 	}
 
 }
