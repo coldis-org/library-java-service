@@ -233,7 +233,8 @@ public class JmsRequestThreadsLimitBrokerTest extends ContainerTestHelper {
 		final JmsRequestThreadsLimit limit = new JmsRequestThreadsLimit(true, 0.5, Duration.ofMillis(500));
 		limit.sizeFromRequestThreads(4);
 		// Nothing listens on the port.
-		try (ActiveMQConnectionFactory goneBrokerFactory = new ActiveMQConnectionFactory("tcp://127.0.0.1:" + EmbeddedBrokerTestHelper.freePort())) {
+		try (ActiveMQConnectionFactory goneBrokerFactory = new ActiveMQConnectionFactory(
+				"tcp://127.0.0.1:" + EmbeddedBrokerTestHelper.freePort() + "?" + EmbeddedBrokerTestHelper.NETTY_QUERY)) {
 			final MeteredJmsPoolConnectionFactory pool = JmsRequestThreadsLimitBrokerTest.createPool(goneBrokerFactory, limit);
 			RequestThreadTestHelper.startOnRequestThread(() -> {
 				Assertions.assertThrows(JMSException.class, pool::createConnection);

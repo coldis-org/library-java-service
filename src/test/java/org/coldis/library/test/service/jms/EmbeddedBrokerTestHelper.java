@@ -18,11 +18,20 @@ import jakarta.jms.TextMessage;
 public final class EmbeddedBrokerTestHelper {
 
 	/**
+	 * Netty setting of the library's broker URL. The client shares one event
+	 * loop group in the JVM, and once a Spring context of the suite has made it
+	 * with this setting, a connection made without it fails ("incompatible event
+	 * loop type").
+	 */
+	public static final String NETTY_QUERY = "useEpoll=false";
+
+	/**
 	 * Client settings of the library (service.properties), so the calls on a
 	 * frozen broker wait as long as they do in a service.
 	 */
-	public static final String CLIENT_QUERY = "useTopologyForLoadBalancing=false;callTimeout=20000;callFailoverTimeout=10000;reconnectAttempts=-1;"
-			+ "retryInterval=3000;retryIntervalMultiplier=1.5;clientFailureCheckPeriod=20000;connectionTTL=120000;blockOnDurableSend=true";
+	public static final String CLIENT_QUERY = EmbeddedBrokerTestHelper.NETTY_QUERY + ";useTopologyForLoadBalancing=false;callTimeout=20000;"
+			+ "callFailoverTimeout=10000;reconnectAttempts=-1;retryInterval=3000;retryIntervalMultiplier=1.5;clientFailureCheckPeriod=20000;"
+			+ "connectionTTL=120000;blockOnDurableSend=true";
 
 	/**
 	 * No instances.
@@ -72,7 +81,7 @@ public final class EmbeddedBrokerTestHelper {
 			final int port,
 			final String queue,
 			final String text) throws Exception {
-		try (ActiveMQConnectionFactory factory = new ActiveMQConnectionFactory("tcp://127.0.0.1:" + port);
+		try (ActiveMQConnectionFactory factory = new ActiveMQConnectionFactory("tcp://127.0.0.1:" + port + "?" + EmbeddedBrokerTestHelper.NETTY_QUERY);
 				Connection connection = factory.createConnection()) {
 			final Session session = connection.createSession(false, Session.AUTO_ACKNOWLEDGE);
 			session.createProducer(session.createQueue(queue)).send(session.createTextMessage(text));
@@ -90,7 +99,7 @@ public final class EmbeddedBrokerTestHelper {
 	public static String receive(
 			final int port,
 			final String queue) throws Exception {
-		try (ActiveMQConnectionFactory factory = new ActiveMQConnectionFactory("tcp://127.0.0.1:" + port);
+		try (ActiveMQConnectionFactory factory = new ActiveMQConnectionFactory("tcp://127.0.0.1:" + port + "?" + EmbeddedBrokerTestHelper.NETTY_QUERY);
 				Connection connection = factory.createConnection()) {
 			connection.start();
 			final Session session = connection.createSession(false, Session.AUTO_ACKNOWLEDGE);
