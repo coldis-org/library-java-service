@@ -13,9 +13,13 @@ import org.apache.activemq.artemis.core.server.embedded.EmbeddedActiveMQ;
 import org.apache.activemq.artemis.jms.client.ActiveMQConnectionFactory;
 import org.coldis.library.service.jms.JmsRequestThreadsLimit;
 import org.coldis.library.service.jms.MeteredJmsPoolConnectionFactory;
+import org.coldis.library.test.StartTestWithContainerExtension;
+import org.coldis.library.test.TestWithContainer;
+import org.coldis.library.test.service.ContainerTestHelper;
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
 import org.springframework.boot.autoconfigure.jms.JmsPoolConnectionFactoryProperties;
 import org.springframework.core.NestedExceptionUtils;
 import org.springframework.jms.core.JmsTemplate;
@@ -38,9 +42,16 @@ import jakarta.jms.ResourceAllocationException;
  * the pooled factory, against embedded brokers: a frozen broker with more
  * requests than permits, a permit held until the transaction a send joined
  * ends, and a permit given back when no connection could be made.
+ * <p>
+ * It runs its own embedded brokers but holds the shared containers, as
+ * {@link ArtemisBrokerAddressChangeTest} does: with no class referencing them
+ * for longer than their stop delay, the containers of its fork would stop
+ * under the next classes' cached Spring context.
  */
+@TestWithContainer(reuse = true)
+@ExtendWith(StartTestWithContainerExtension.class)
 @DisplayName("JmsRequestThreadsLimit — through the pooled factory, against embedded brokers")
-public class JmsRequestThreadsLimitBrokerUnitTest {
+public class JmsRequestThreadsLimitBrokerTest extends ContainerTestHelper {
 
 	/**
 	 * Creates a pooled factory with a limit of 2 permits and a short wait.
@@ -76,12 +87,12 @@ public class JmsRequestThreadsLimitBrokerUnitTest {
 		final SimpleMeterRegistry registry = new SimpleMeterRegistry();
 		final JmsRequestThreadsLimit limit = new JmsRequestThreadsLimit(true, 0.5, Duration.ofMillis(500));
 		limit.setMeterRegistry(registry);
-		limit.size(4);
+		limit.sizeFromRequestThreads(4);
 		final List<FutureTask<Object>> requests = new ArrayList<>();
 		try (FreezableProxy proxy = new FreezableProxy(port);
 				ActiveMQConnectionFactory artemisFactory = new ActiveMQConnectionFactory(
 						"tcp://127.0.0.1:" + proxy.getPort() + "?" + EmbeddedBrokerTestHelper.CLIENT_QUERY)) {
-			final MeteredJmsPoolConnectionFactory pool = JmsRequestThreadsLimitBrokerUnitTest.createPool(artemisFactory, limit);
+			final MeteredJmsPoolConnectionFactory pool = JmsRequestThreadsLimitBrokerTest.createPool(artemisFactory, limit);
 			final JmsTemplate template = new JmsTemplate(pool);
 			// Not a request thread: not limited.
 			template.convertAndSend("limit-frozen", "before the freeze");
@@ -119,14 +130,17 @@ public class JmsRequestThreadsLimitBrokerUnitTest {
 
 			// Once the broker answers, the two finish and give their permits back.
 			proxy.thaw();
+			int finishedRequests = 0;
 			for (final FutureTask<Object> request : requests) {
 				try {
 					request.get(15, TimeUnit.SECONDS);
+					finishedRequests++;
 				}
 				catch (final ExecutionException exception) {
 					// Refused above.
 				}
 			}
+			Assertions.assertEquals(2, finishedRequests);
 			Assertions.assertEquals(0, limit.getHeldPermits());
 			pool.stop();
 		}
@@ -151,7 +165,7 @@ public class JmsRequestThreadsLimitBrokerUnitTest {
 		final int port = EmbeddedBrokerTestHelper.freePort();
 		final EmbeddedActiveMQ broker = EmbeddedBrokerTestHelper.startBroker(port);
 		final JmsRequestThreadsLimit limit = new JmsRequestThreadsLimit(true, 0.5, Duration.ofMillis(500));
-		limit.size(4);
+		limit.sizeFromRequestThreads(4);
 		final TransactionTemplate transactionTemplate = new TransactionTemplate(new AbstractPlatformTransactionManager() {
 
 			private static final long serialVersionUID = 1L;
@@ -180,7 +194,7 @@ public class JmsRequestThreadsLimitBrokerUnitTest {
 		});
 		try (ActiveMQConnectionFactory artemisFactory = new ActiveMQConnectionFactory(
 				"tcp://127.0.0.1:" + port + "?" + EmbeddedBrokerTestHelper.CLIENT_QUERY)) {
-			final MeteredJmsPoolConnectionFactory pool = JmsRequestThreadsLimitBrokerUnitTest.createPool(artemisFactory, limit);
+			final MeteredJmsPoolConnectionFactory pool = JmsRequestThreadsLimitBrokerTest.createPool(artemisFactory, limit);
 			final JmsTemplate template = new JmsTemplate(pool);
 			RequestContextHolder.setRequestAttributes(new ServletRequestAttributes(new MockHttpServletRequest()));
 			try {
@@ -218,7 +232,7 @@ public class JmsRequestThreadsLimitBrokerUnitTest {
 	@DisplayName("A connection that cannot be made gives its permit back")
 	public void testPermitReturnedWhenConnectionFails() throws Exception {
 		final JmsRequestThreadsLimit limit = new JmsRequestThreadsLimit(true, 0.5, Duration.ofMillis(500));
-		limit.size(4);
+		limit.sizeFromRequestThreads(4);
 		final ConnectionFactory failingFactory = (ConnectionFactory) Proxy.newProxyInstance(ConnectionFactory.class.getClassLoader(),
 				new Class<?>[] { ConnectionFactory.class }, (proxy, method, arguments) -> switch (method.getName()) {
 					case "hashCode" -> System.identityHashCode(proxy);
@@ -226,7 +240,7 @@ public class JmsRequestThreadsLimitBrokerUnitTest {
 					case "toString" -> "failing connection factory";
 					default -> throw new JMSException("The broker is gone.");
 				});
-		final MeteredJmsPoolConnectionFactory pool = JmsRequestThreadsLimitBrokerUnitTest.createPool(failingFactory, limit);
+		final MeteredJmsPoolConnectionFactory pool = JmsRequestThreadsLimitBrokerTest.createPool(failingFactory, limit);
 		JmsRequestThreadsLimitUnitTest.startOnRequestThread(() -> {
 			Assertions.assertThrows(JMSException.class, pool::createConnection);
 			Assertions.assertEquals(0, limit.getHeldPermits());

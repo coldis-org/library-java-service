@@ -64,14 +64,14 @@ public class PropertiesService implements ApplicationContextAware {
 
 	/**
 	 * Whether the current update came from the service's own host or container:
-	 * a request that arrived on a loopback address, or a call from within the
-	 * process. Judged by the local address of the connection, which no forwarded
-	 * header changes.
+	 * a request that arrived on a loopback address, judged by the local address
+	 * of the connection, which no forwarded header changes. A call outside a
+	 * request is not taken as local.
 	 *
 	 * @return Whether the update is local.
 	 */
 	private static Boolean isLocalUpdate() {
-		Boolean isLocal = true;
+		Boolean isLocal = false;
 		if (RequestContextHolder.getRequestAttributes() instanceof final ServletRequestAttributes requestAttributes) {
 			try {
 				final String localAddress = requestAttributes.getRequest().getLocalAddr();

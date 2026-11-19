@@ -50,6 +50,13 @@ import org.springframework.stereotype.Component;
  * connection (it is reconnecting) is left alone: it reads the new address on
  * its next attempt.
  * </p>
+ * <p>
+ * The live session factories come from the Artemis client's own server
+ * locator ({@code ServerLocatorImpl.getFactories()}), which is not public API
+ * (checked against the 2.44 client). A client without it logs a warning or an
+ * error at each move, and its connections move only once it finds the broker
+ * gone.
+ * </p>
  */
 @Component
 public class ArtemisBrokerAddressChange implements DisposableBean {
@@ -165,6 +172,53 @@ public class ArtemisBrokerAddressChange implements DisposableBean {
 	}
 
 	/**
+	 * Fails every live connection of a connection factory, each in a thread of
+	 * its own, since the client reconnects in the thread that fails the
+	 * connection and keeps trying while the new address does not answer.
+	 *
+	 * @param beanName          Name of the bean the factory belongs to (for the
+	 *                              log).
+	 * @param connectionFactory Artemis connection factory.
+	 */
+	private void moveConnections(
+			final String beanName,
+			final ActiveMQConnectionFactory connectionFactory) {
+		final List<ClientSessionFactoryInternal> sessionFactories = new ArrayList<>();
+		if (connectionFactory.getServerLocator() instanceof final ServerLocatorImpl serverLocator) {
+			final Set<ClientSessionFactoryInternal> liveSessionFactories = serverLocator.getFactories();
+			// The locator guards this set with its own monitor.
+			synchronized (liveSessionFactories) {
+				sessionFactories.addAll(liveSessionFactories);
+			}
+			ArtemisBrokerAddressChange.LOGGER.info("The broker address of bean " + beanName + " changed: failing the live connections of its "
+					+ sessionFactories.size() + " session factories, so they reconnect to it.");
+		}
+		else {
+			ArtemisBrokerAddressChange.LOGGER.warn("The broker address of bean " + beanName + " changed, but its server locator is not the Artemis client's own: "
+					+ "its live connections move when the client finds the broker gone.");
+		}
+		final ActiveMQNotConnectedException cause = new ActiveMQNotConnectedException("The broker address of bean " + beanName + " changed.");
+		for (final ClientSessionFactoryInternal sessionFactory : sessionFactories) {
+			Thread.ofVirtual().name("artemis-broker-address-change-" + beanName).start(() -> {
+				try {
+					// Getting the connection of a factory that has none opens one, so a factory that is
+					// reconnecting is left to read the new address on its next attempt.
+					final RemotingConnection connection = (sessionFactory.numConnections() > 0) ? sessionFactory.getConnection() : null;
+					if (connection != null) {
+						connection.fail(cause);
+					}
+				}
+				// A factory closed in the meantime has nothing to fail.
+				catch (final IllegalStateException exception) {
+				}
+				catch (final RuntimeException | LinkageError exception) {
+					ArtemisBrokerAddressChange.LOGGER.error("Could not move a live connection of bean " + beanName + " to its new broker address.", exception);
+				}
+			});
+		}
+	}
+
+	/**
 	 * Moves the live connections of a factory whose broker address changed
 	 * since it was noted, after the delay. An update that came from another host
 	 * changes the address but moves nothing: its connections move when the
@@ -190,7 +244,7 @@ public class ArtemisBrokerAddressChange implements DisposableBean {
 						try {
 							this.moveConnections(beanName, connectionFactory);
 						}
-						catch (final RuntimeException exception) {
+						catch (final RuntimeException | LinkageError exception) {
 							ArtemisBrokerAddressChange.LOGGER.error("Could not move the live connections of bean " + beanName + " to its new broker address.",
 									exception);
 						}
@@ -199,52 +253,20 @@ public class ArtemisBrokerAddressChange implements DisposableBean {
 			}
 			else {
 				ArtemisBrokerAddressChange.LOGGER.info("The broker address of bean " + beanName + " changed. Its live connections move when the client finds "
-						+ "the broker gone: " + (Boolean.TRUE.equals(this.isEnabled) ? "the update came from another host." : "moving them is off ("
+						+ "the broker gone: " + (Boolean.TRUE.equals(this.isEnabled) ? "the update did not come from the service's own host." : "moving them is off ("
 								+ ArtemisBrokerAddressChange.PROPERTY_PREFIX + ".enabled)."));
 			}
 		}
 	}
 
 	/**
-	 * Fails every live connection of a connection factory, each in a thread of
-	 * its own, since the client reconnects in the thread that fails the
-	 * connection and keeps trying while the new address does not answer.
+	 * Whether a move is scheduled or running. The connections a move fails
+	 * reconnect on threads of their own, after it.
 	 *
-	 * @param beanName          Name of the bean the factory belongs to (for the
-	 *                              log).
-	 * @param connectionFactory Artemis connection factory.
+	 * @return Whether a move is pending.
 	 */
-	private void moveConnections(
-			final String beanName,
-			final ActiveMQConnectionFactory connectionFactory) {
-		final List<ClientSessionFactoryInternal> sessionFactories = new ArrayList<>();
-		if (connectionFactory.getServerLocator() instanceof final ServerLocatorImpl serverLocator) {
-			final Set<ClientSessionFactoryInternal> liveSessionFactories = serverLocator.getFactories();
-			// The locator guards this set with its own monitor.
-			synchronized (liveSessionFactories) {
-				sessionFactories.addAll(liveSessionFactories);
-			}
-		}
-		ArtemisBrokerAddressChange.LOGGER.info("The broker address of bean " + beanName + " changed: failing the live connections of its "
-				+ sessionFactories.size() + " session factories, so they reconnect to it.");
-		final ActiveMQNotConnectedException cause = new ActiveMQNotConnectedException("The broker address of bean " + beanName + " changed.");
-		for (final ClientSessionFactoryInternal sessionFactory : sessionFactories) {
-			Thread.ofVirtual().name("artemis-broker-address-change-" + beanName).start(() -> {
-				// Getting the connection of a factory that has none opens one, so a factory that is
-				// reconnecting is left to read the new address on its next attempt.
-				if (sessionFactory.numConnections() > 0) {
-					try {
-						final RemotingConnection connection = sessionFactory.getConnection();
-						if (connection != null) {
-							connection.fail(cause);
-						}
-					}
-					// A factory closed in the meantime has nothing to fail.
-					catch (final IllegalStateException exception) {
-					}
-				}
-			});
-		}
+	public Boolean isMoving() {
+		return this.scheduledMoves.values().stream().anyMatch(scheduledMove -> !scheduledMove.isDone());
 	}
 
 	/**

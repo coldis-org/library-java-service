@@ -8,10 +8,15 @@ import java.util.concurrent.ExecutionException;
 import java.util.concurrent.FutureTask;
 import java.util.concurrent.TimeUnit;
 
+import org.apache.tomcat.util.threads.VirtualThreadExecutor;
 import org.coldis.library.service.jms.JmsRequestThreadsLimit;
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.springframework.boot.web.embedded.tomcat.TomcatServletWebServerFactory;
+import org.springframework.boot.web.embedded.tomcat.TomcatWebServer;
+import org.springframework.boot.web.servlet.context.ServletWebServerApplicationContext;
+import org.springframework.boot.web.servlet.context.ServletWebServerInitializedEvent;
 import org.springframework.core.io.ClassPathResource;
 import org.springframework.core.io.support.PropertiesLoaderUtils;
 import org.springframework.mock.web.MockHttpServletRequest;
@@ -39,9 +44,89 @@ public class JmsRequestThreadsLimitUnitTest {
 		Assertions.assertEquals(50, JmsRequestThreadsLimit.getMaxPermits(100, 0.5));
 		Assertions.assertEquals(12, JmsRequestThreadsLimit.getMaxPermits(25, 0.5));
 		Assertions.assertEquals(1, JmsRequestThreadsLimit.getMaxPermits(1, 0.5));
+		Assertions.assertEquals(29, JmsRequestThreadsLimit.getMaxPermits(100, 0.29));
+		Assertions.assertEquals(100, JmsRequestThreadsLimit.getMaxPermits(100, 1.0));
 		Assertions.assertNull(JmsRequestThreadsLimit.getMaxPermits(-1, 0.5));
 		Assertions.assertNull(JmsRequestThreadsLimit.getMaxPermits(0, 0.5));
 		Assertions.assertNull(JmsRequestThreadsLimit.getMaxPermits(null, 0.5));
+	}
+
+	/**
+	 * A share that is not above 0 and at most 1 stops the service from starting,
+	 * instead of turning into a single permit or into no limit.
+	 */
+	@Test
+	@DisplayName("Refuses a share that is not above 0 and at most 1")
+	public void testShareOutOfRangeRefused() {
+		for (final Double maxShare : new Double[] { null, 0.0, -0.5, 1.5, Double.NaN }) {
+			Assertions.assertThrows(IllegalArgumentException.class, () -> new JmsRequestThreadsLimit(true, maxShare, Duration.ofSeconds(2)), "share " + maxShare);
+		}
+		Assertions.assertDoesNotThrow(() -> new JmsRequestThreadsLimit(true, 1.0, Duration.ofSeconds(2)));
+	}
+
+	/**
+	 * Starts a web server on a free port.
+	 *
+	 * @param  isOnVirtualThreads Whether requests run on virtual threads.
+	 * @return                    The server, started.
+	 */
+	private static TomcatWebServer startServer(
+			final Boolean isOnVirtualThreads) {
+		final TomcatServletWebServerFactory serverFactory = new TomcatServletWebServerFactory(0);
+		if (isOnVirtualThreads) {
+			// As Spring Boot sets it with spring.threads.virtual.enabled.
+			serverFactory.addProtocolHandlerCustomizers(protocol -> protocol.setExecutor(new VirtualThreadExecutor("jms-limit-test-")));
+		}
+		final TomcatWebServer server = (TomcatWebServer) serverFactory.getWebServer();
+		server.start();
+		return server;
+	}
+
+	/**
+	 * Tells the limit a web server started.
+	 *
+	 * @param limit           Limit.
+	 * @param server          Server.
+	 * @param serverNamespace Namespace of its context: null for the main server,
+	 *                            "management" for a separate management server.
+	 */
+	private static void serverStarted(
+			final JmsRequestThreadsLimit limit,
+			final TomcatWebServer server,
+			final String serverNamespace) {
+		final ServletWebServerApplicationContext context = new ServletWebServerApplicationContext();
+		context.setServerNamespace(serverNamespace);
+		limit.onApplicationEvent(new ServletWebServerInitializedEvent(server, context));
+	}
+
+	/**
+	 * The limit is sized from the main server's request threads, and left off by
+	 * a separate management server and by a main server whose requests run on
+	 * virtual threads, which has no thread count.
+	 */
+	@Test
+	@DisplayName("Is sized by the main server, and not by a management server or one on virtual threads")
+	public void testSizedByTheMainServerOnly() {
+		final TomcatWebServer platformThreadsServer = JmsRequestThreadsLimitUnitTest.startServer(false);
+		final TomcatWebServer virtualThreadsServer = JmsRequestThreadsLimitUnitTest.startServer(true);
+		try {
+			final JmsRequestThreadsLimit managementLimit = new JmsRequestThreadsLimit(true, 0.5, Duration.ofSeconds(2));
+			JmsRequestThreadsLimitUnitTest.serverStarted(managementLimit, platformThreadsServer, "management");
+			Assertions.assertNull(managementLimit.getMaxPermits());
+
+			final JmsRequestThreadsLimit virtualThreadsLimit = new JmsRequestThreadsLimit(true, 0.5, Duration.ofSeconds(2));
+			JmsRequestThreadsLimitUnitTest.serverStarted(virtualThreadsLimit, virtualThreadsServer, null);
+			Assertions.assertNull(virtualThreadsLimit.getMaxPermits());
+
+			// Tomcat's default of 200 request threads.
+			final JmsRequestThreadsLimit mainLimit = new JmsRequestThreadsLimit(true, 0.5, Duration.ofSeconds(2));
+			JmsRequestThreadsLimitUnitTest.serverStarted(mainLimit, platformThreadsServer, null);
+			Assertions.assertEquals(100, mainLimit.getMaxPermits());
+		}
+		finally {
+			platformThreadsServer.destroy();
+			virtualThreadsServer.destroy();
+		}
 	}
 
 	/**
@@ -54,11 +139,11 @@ public class JmsRequestThreadsLimitUnitTest {
 	@DisplayName("Applies only when on, and only to request threads")
 	public void testAppliesWhenOnAndOnRequestThreads() throws Exception {
 		final JmsRequestThreadsLimit disabledLimit = new JmsRequestThreadsLimit(false, 0.5, Duration.ofSeconds(2));
-		disabledLimit.size(20);
+		disabledLimit.sizeFromRequestThreads(20);
 		Assertions.assertNull(disabledLimit.getMaxPermits());
 		Assertions.assertNull(disabledLimit.acquire());
 		final JmsRequestThreadsLimit enabledLimit = new JmsRequestThreadsLimit(true, 0.5, Duration.ofSeconds(2));
-		enabledLimit.size(20);
+		enabledLimit.sizeFromRequestThreads(20);
 		Assertions.assertEquals(10, enabledLimit.getMaxPermits());
 		// This test thread serves no request.
 		Assertions.assertNull(enabledLimit.acquire());
@@ -115,7 +200,7 @@ public class JmsRequestThreadsLimitUnitTest {
 		final SimpleMeterRegistry registry = new SimpleMeterRegistry();
 		final JmsRequestThreadsLimit limit = new JmsRequestThreadsLimit(true, 0.5, Duration.ofMillis(500));
 		limit.setMeterRegistry(registry);
-		limit.size(4);
+		limit.sizeFromRequestThreads(4);
 		// Two requests take the two permits without waiting.
 		final JmsRequestThreadsLimit.Permit firstPermit = JmsRequestThreadsLimitUnitTest.startOnRequestThread(limit::acquire).get(5, TimeUnit.SECONDS);
 		final JmsRequestThreadsLimit.Permit secondPermit = JmsRequestThreadsLimitUnitTest.startOnRequestThread(limit::acquire).get(5, TimeUnit.SECONDS);
@@ -162,7 +247,7 @@ public class JmsRequestThreadsLimitUnitTest {
 	@DisplayName("A request thread holds one permit for all its connections")
 	public void testOnePermitPerThread() throws Exception {
 		final JmsRequestThreadsLimit limit = new JmsRequestThreadsLimit(true, 0.5, Duration.ofMillis(500));
-		limit.size(2);
+		limit.sizeFromRequestThreads(2);
 		Assertions.assertEquals(1, limit.getMaxPermits());
 		JmsRequestThreadsLimitUnitTest.startOnRequestThread(() -> {
 			// With a single permit, a second connection of the same request would wait for the

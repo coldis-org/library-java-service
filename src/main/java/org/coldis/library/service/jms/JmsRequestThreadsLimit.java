@@ -1,5 +1,6 @@
 package org.coldis.library.service.jms;
 
+import java.math.BigDecimal;
 import java.time.Duration;
 import java.util.concurrent.Semaphore;
 import java.util.concurrent.TimeUnit;
@@ -48,7 +49,10 @@ import jakarta.jms.ResourceAllocationException;
  * pools of their own. The limit is sized when the main web server starts, from
  * its request threads. A server on an external executor (virtual threads) has
  * no such count and is not limited. One limit covers every pooled factory, so
- * two brokers failing together still leave the other threads free.
+ * two brokers failing together still leave the other threads free. The limit
+ * covers the connections the pooled factory hands out through
+ * {@code createConnection}, as {@code JmsTemplate} takes them; a
+ * {@code JMSContext} created from it takes no permit.
  * <p>
  * Once sized, and when the service has a meter registry, the limit reports how
  * close requests come to it: the permits in all ({@link #PERMITS_MAX}) and held
@@ -223,7 +227,7 @@ public class JmsRequestThreadsLimit implements ApplicationListener<WebServerInit
 	 *
 	 * @param isEnabled   Whether the limit applies.
 	 * @param maxShare    Share of the request threads that may hold a pooled JMS
-	 *                        connection at once.
+	 *                        connection at once: above 0 and at most 1.
 	 * @param maximumWait Longest a request past the limit waits for a holder to
 	 *                        finish.
 	 */
@@ -231,6 +235,9 @@ public class JmsRequestThreadsLimit implements ApplicationListener<WebServerInit
 			@Value("${" + JmsRequestThreadsLimit.PROPERTY_PREFIX + ".enabled:true}") final Boolean isEnabled,
 			@Value("${" + JmsRequestThreadsLimit.PROPERTY_PREFIX + ".max-share:0.5}") final Double maxShare,
 			@Value("${" + JmsRequestThreadsLimit.PROPERTY_PREFIX + ".maximum-wait:2s}") final Duration maximumWait) {
+		if (!((maxShare != null) && (maxShare > 0) && (maxShare <= 1))) {
+			throw new IllegalArgumentException(JmsRequestThreadsLimit.PROPERTY_PREFIX + ".max-share must be above 0 and at most 1, not " + maxShare + ".");
+		}
 		this.isEnabled = isEnabled;
 		this.maxShare = maxShare;
 		this.maximumWait = maximumWait;
@@ -260,7 +267,9 @@ public class JmsRequestThreadsLimit implements ApplicationListener<WebServerInit
 	public static Integer getMaxPermits(
 			final Integer maxThreads,
 			final Double maxShare) {
-		return ((maxThreads == null) || (maxThreads <= 0)) ? null : Math.max(1, (int) Math.floor(maxThreads * maxShare));
+		// As a decimal, so 0.29 of 100 threads gives 29 permits, not 28.
+		return ((maxThreads == null) || (maxThreads <= 0)) ? null
+				: Math.max(1, BigDecimal.valueOf(maxShare).multiply(BigDecimal.valueOf(maxThreads)).intValue());
 	}
 
 	/**
@@ -290,7 +299,7 @@ public class JmsRequestThreadsLimit implements ApplicationListener<WebServerInit
 	 * @param maxThreads Request threads of the server; 0 or less when it has no
 	 *                       such count.
 	 */
-	public void size(
+	public void sizeFromRequestThreads(
 			final Integer maxThreads) {
 		final Integer newMaxPermits = JmsRequestThreadsLimit.getMaxPermits(maxThreads, this.maxShare);
 		if (Boolean.TRUE.equals(this.isEnabled) && (newMaxPermits != null)) {
@@ -313,7 +322,7 @@ public class JmsRequestThreadsLimit implements ApplicationListener<WebServerInit
 			final WebServerInitializedEvent event) {
 		if ((event.getApplicationContext().getServerNamespace() == null) && (event.getWebServer() instanceof final TomcatWebServer tomcatWebServer)
 				&& (tomcatWebServer.getTomcat().getConnector().getProtocolHandler() instanceof final AbstractProtocol<?> protocol)) {
-			this.size(protocol.getMaxThreads());
+			this.sizeFromRequestThreads(protocol.getMaxThreads());
 		}
 	}
 
