@@ -21,7 +21,7 @@ import org.apache.activemq.artemis.jms.client.ActiveMQConnection;
 import org.apache.activemq.artemis.jms.client.ActiveMQConnectionFactory;
 import org.apache.activemq.artemis.spi.core.protocol.RemotingConnection;
 import org.coldis.library.helper.ReflectionHelper;
-import org.coldis.library.service.jms.ArtemisBrokerAddressChange;
+import org.coldis.library.service.jms.ArtemisReconnectOnAddressChange;
 import org.coldis.library.service.jms.MeteredJmsPoolConnectionFactory;
 import org.coldis.library.service.properties.PropertiesService;
 import org.coldis.library.test.StartTestWithContainerExtension;
@@ -66,8 +66,8 @@ import jakarta.jms.TextMessage;
  */
 @TestWithContainer(reuse = true)
 @ExtendWith(StartTestWithContainerExtension.class)
-@DisplayName("ArtemisBrokerAddressChange — live connections follow a changed broker address")
-public class ArtemisBrokerAddressChangeMoveTest extends ContainerTestHelper {
+@DisplayName("ArtemisReconnectOnAddressChange — live connections follow a changed broker address")
+public class ArtemisReconnectOnAddressChangeTest extends ContainerTestHelper {
 
 	/**
 	 * Host property, as java_spring_properties_artemis sends it.
@@ -115,19 +115,19 @@ public class ArtemisBrokerAddressChangeMoveTest extends ContainerTestHelper {
 	@Test
 	@DisplayName("Notes the address of a pool or a factory and compares it by value")
 	public void testSnapshot() throws Exception {
-		final ArtemisBrokerAddressChange change = new ArtemisBrokerAddressChange(true, ArtemisBrokerAddressChangeMoveTest.DELAY);
+		final ArtemisReconnectOnAddressChange change = new ArtemisReconnectOnAddressChange(true, ArtemisReconnectOnAddressChangeTest.DELAY);
 		try (ActiveMQConnectionFactory artemisFactory = new ActiveMQConnectionFactory("tcp://127.0.0.1:61616")) {
 			final JmsPoolConnectionFactory pool = new JmsPoolConnectionFactory();
 			pool.setConnectionFactory(artemisFactory);
 			Assertions.assertNull(change.snapshot(new Object()));
 			Assertions.assertNotNull(change.snapshot(artemisFactory));
-			final ArtemisBrokerAddressChange.Snapshot snapshot = change.snapshot(pool);
+			final ArtemisReconnectOnAddressChange.Snapshot snapshot = change.snapshot(pool);
 			Assertions.assertFalse(snapshot.toString().contains("61616"));
 
-			ReflectionHelper.setAttribute(pool, true, ArtemisBrokerAddressChangeMoveTest.HOST_PROPERTY, "127.0.0.1");
-			ReflectionHelper.setAttribute(pool, true, ArtemisBrokerAddressChangeMoveTest.PORT_PROPERTY, "61616");
+			ReflectionHelper.setAttribute(pool, true, ArtemisReconnectOnAddressChangeTest.HOST_PROPERTY, "127.0.0.1");
+			ReflectionHelper.setAttribute(pool, true, ArtemisReconnectOnAddressChangeTest.PORT_PROPERTY, "61616");
 			Assertions.assertFalse(snapshot.isChanged());
-			ReflectionHelper.setAttribute(pool, true, ArtemisBrokerAddressChangeMoveTest.PORT_PROPERTY, "61617");
+			ReflectionHelper.setAttribute(pool, true, ArtemisReconnectOnAddressChangeTest.PORT_PROPERTY, "61617");
 			Assertions.assertTrue(snapshot.isChanged());
 			pool.stop();
 		}
@@ -154,7 +154,7 @@ public class ArtemisBrokerAddressChangeMoveTest extends ContainerTestHelper {
 		final EmbeddedActiveMQ oldBroker = EmbeddedBrokerTestHelper.startBroker(oldPort);
 		EmbeddedActiveMQ newBroker = null;
 		final ExecutorService sender = Executors.newSingleThreadExecutor();
-		final ArtemisBrokerAddressChange change = new ArtemisBrokerAddressChange(true, ArtemisBrokerAddressChangeMoveTest.DELAY);
+		final ArtemisReconnectOnAddressChange change = new ArtemisReconnectOnAddressChange(true, ArtemisReconnectOnAddressChangeTest.DELAY);
 		try (FreezableProxy proxy = new FreezableProxy(oldPort);
 				ActiveMQConnectionFactory artemisFactory = new ActiveMQConnectionFactory(
 						"tcp://127.0.0.1:" + proxy.getPort() + "?" + EmbeddedBrokerTestHelper.CLIENT_QUERY);
@@ -163,7 +163,7 @@ public class ArtemisBrokerAddressChangeMoveTest extends ContainerTestHelper {
 			// One connection, so every send after the freeze gets the frozen one.
 			poolProperties.setMaxConnections(1);
 			final MeteredJmsPoolConnectionFactory pool = MeteredJmsPoolConnectionFactory.create(new SimpleMeterRegistry(), poolProperties, artemisFactory);
-			final PropertiesService propertiesService = ArtemisBrokerAddressChangeMoveTest.propertiesService(context, pool, change);
+			final PropertiesService propertiesService = ArtemisReconnectOnAddressChangeTest.propertiesService(context, pool, change);
 			final JmsTemplate template = new JmsTemplate(pool);
 			template.convertAndSend(queue, "before the freeze");
 
@@ -177,11 +177,12 @@ public class ArtemisBrokerAddressChangeMoveTest extends ContainerTestHelper {
 			// return at once: the move runs apart from them.
 			newBroker = EmbeddedBrokerTestHelper.startBroker(newPort);
 			final long changed = System.nanoTime();
-			propertiesService.setStringProperty(ArtemisBrokerAddressChangeMoveTest.BEAN_NAME, true, ArtemisBrokerAddressChangeMoveTest.HOST_PROPERTY,
+			propertiesService.setStringProperty(ArtemisReconnectOnAddressChangeTest.BEAN_NAME, true, ArtemisReconnectOnAddressChangeTest.HOST_PROPERTY,
 					"127.0.0.1", true);
-			propertiesService.setStringProperty(ArtemisBrokerAddressChangeMoveTest.BEAN_NAME, true, ArtemisBrokerAddressChangeMoveTest.PORT_PROPERTY,
+			propertiesService.setStringProperty(ArtemisReconnectOnAddressChangeTest.BEAN_NAME, true, ArtemisReconnectOnAddressChangeTest.PORT_PROPERTY,
 					String.valueOf(newPort), true);
-			Assertions.assertTrue(TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - changed) < 1000, "the updates must not wait for the move");
+			Assertions.assertTrue(TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - changed) < ArtemisReconnectOnAddressChangeTest.DELAY.toMillis(),
+					"the updates must not wait for the reconnection");
 
 			// The held send is released, well before its 20 s call timeout.
 			try {
@@ -234,13 +235,15 @@ public class ArtemisBrokerAddressChangeMoveTest extends ContainerTestHelper {
 		final EmbeddedActiveMQ newBroker = EmbeddedBrokerTestHelper.startBroker(newPort);
 		// A long delay of its own, so a slow test thread between the two updates stays well within it.
 		final Duration delay = Duration.ofSeconds(2);
-		final ArtemisBrokerAddressChange change = new ArtemisBrokerAddressChange(true, delay);
+		final ArtemisReconnectOnAddressChange change = new ArtemisReconnectOnAddressChange(true, delay);
+		final SimpleMeterRegistry registry = new SimpleMeterRegistry();
+		change.setMeterRegistry(registry);
 		try (ActiveMQConnectionFactory artemisFactory = new ActiveMQConnectionFactory(
 				"tcp://127.0.0.1:" + oldPort + "?" + EmbeddedBrokerTestHelper.CLIENT_QUERY);
 				GenericApplicationContext context = new GenericApplicationContext()) {
 			final MeteredJmsPoolConnectionFactory pool = MeteredJmsPoolConnectionFactory.create(new SimpleMeterRegistry(),
 					new JmsPoolConnectionFactoryProperties(), artemisFactory);
-			final PropertiesService propertiesService = ArtemisBrokerAddressChangeMoveTest.propertiesService(context, pool, change);
+			final PropertiesService propertiesService = ArtemisReconnectOnAddressChangeTest.propertiesService(context, pool, change);
 			// A connection of the factory itself: it reconnects in place, so a second move would fail it
 			// again (the pool closes a failed connection and opens the next one only when asked).
 			try (ActiveMQConnection connection = (ActiveMQConnection) artemisFactory.createConnection()) {
@@ -256,10 +259,10 @@ public class ArtemisBrokerAddressChangeMoveTest extends ContainerTestHelper {
 
 				// Apart, as the update script sends them, and within the delay: without the restart of the
 				// delay, the host alone would move the connection, and the port would move it again.
-				propertiesService.setStringProperty(ArtemisBrokerAddressChangeMoveTest.BEAN_NAME, true, ArtemisBrokerAddressChangeMoveTest.HOST_PROPERTY,
+				propertiesService.setStringProperty(ArtemisReconnectOnAddressChangeTest.BEAN_NAME, true, ArtemisReconnectOnAddressChangeTest.HOST_PROPERTY,
 						"localhost", true);
 				Thread.sleep(150);
-				propertiesService.setStringProperty(ArtemisBrokerAddressChangeMoveTest.BEAN_NAME, true, ArtemisBrokerAddressChangeMoveTest.PORT_PROPERTY,
+				propertiesService.setStringProperty(ArtemisReconnectOnAddressChangeTest.BEAN_NAME, true, ArtemisReconnectOnAddressChangeTest.PORT_PROPERTY,
 						String.valueOf(newPort), true);
 				// Nothing moved yet: the move waits for the delay.
 				Assertions.assertSame(liveConnection, sessionFactory.getConnection());
@@ -276,6 +279,9 @@ public class ArtemisBrokerAddressChangeMoveTest extends ContainerTestHelper {
 				}
 				Assertions.assertEquals("moved once", EmbeddedBrokerTestHelper.receive(newPort, "address-change-once"));
 				Assertions.assertEquals(oldBrokerConnections, oldBroker.getActiveMQServer().getTotalConnectionCount());
+				Assertions.assertEquals(1.0,
+						registry.get(ArtemisReconnectOnAddressChange.RECONNECTIONS).tag("bean", ArtemisReconnectOnAddressChangeTest.BEAN_NAME)
+								.tag("outcome", "reconnected").counter().count());
 			}
 			pool.stop();
 		}
@@ -297,25 +303,25 @@ public class ArtemisBrokerAddressChangeMoveTest extends ContainerTestHelper {
 	public void testSameAddressKeepsConnections() throws Exception {
 		final int port = EmbeddedBrokerTestHelper.freePort();
 		final EmbeddedActiveMQ broker = EmbeddedBrokerTestHelper.startBroker(port);
-		final ArtemisBrokerAddressChange change = new ArtemisBrokerAddressChange(true, ArtemisBrokerAddressChangeMoveTest.DELAY);
+		final ArtemisReconnectOnAddressChange change = new ArtemisReconnectOnAddressChange(true, ArtemisReconnectOnAddressChangeTest.DELAY);
 		try (ActiveMQConnectionFactory artemisFactory = new ActiveMQConnectionFactory(
 				"tcp://127.0.0.1:" + port + "?" + EmbeddedBrokerTestHelper.CLIENT_QUERY);
 				GenericApplicationContext context = new GenericApplicationContext()) {
 			final MeteredJmsPoolConnectionFactory pool = MeteredJmsPoolConnectionFactory.create(new SimpleMeterRegistry(),
 					new JmsPoolConnectionFactoryProperties(), artemisFactory);
-			final PropertiesService propertiesService = ArtemisBrokerAddressChangeMoveTest.propertiesService(context, pool, change);
+			final PropertiesService propertiesService = ArtemisReconnectOnAddressChangeTest.propertiesService(context, pool, change);
 			try (Connection connection = pool.createConnection()) {
-				final RemotingConnection liveConnection = ArtemisBrokerAddressChangeMoveTest.remotingConnection(connection);
+				final RemotingConnection liveConnection = ArtemisReconnectOnAddressChangeTest.remotingConnection(connection);
 				Assertions.assertNotNull(liveConnection);
 
-				propertiesService.setStringProperty(ArtemisBrokerAddressChangeMoveTest.BEAN_NAME, true, ArtemisBrokerAddressChangeMoveTest.HOST_PROPERTY,
+				propertiesService.setStringProperty(ArtemisReconnectOnAddressChangeTest.BEAN_NAME, true, ArtemisReconnectOnAddressChangeTest.HOST_PROPERTY,
 						"127.0.0.1", true);
-				propertiesService.setStringProperty(ArtemisBrokerAddressChangeMoveTest.BEAN_NAME, true, ArtemisBrokerAddressChangeMoveTest.PORT_PROPERTY,
+				propertiesService.setStringProperty(ArtemisReconnectOnAddressChangeTest.BEAN_NAME, true, ArtemisReconnectOnAddressChangeTest.PORT_PROPERTY,
 						String.valueOf(port), true);
-				Thread.sleep(ArtemisBrokerAddressChangeMoveTest.DELAY.toMillis() * 4);
+				Thread.sleep(ArtemisReconnectOnAddressChangeTest.DELAY.toMillis() * 4);
 
 				// A failed connection would have been replaced by a reconnect.
-				Assertions.assertSame(liveConnection, ArtemisBrokerAddressChangeMoveTest.remotingConnection(connection));
+				Assertions.assertSame(liveConnection, ArtemisReconnectOnAddressChangeTest.remotingConnection(connection));
 				new JmsTemplate(pool).convertAndSend("address-change-same", "same address");
 			}
 			pool.stop();
@@ -339,48 +345,48 @@ public class ArtemisBrokerAddressChangeMoveTest extends ContainerTestHelper {
 		final int newPort = EmbeddedBrokerTestHelper.freePort();
 		final EmbeddedActiveMQ oldBroker = EmbeddedBrokerTestHelper.startBroker(oldPort);
 		final EmbeddedActiveMQ newBroker = EmbeddedBrokerTestHelper.startBroker(newPort);
-		final ArtemisBrokerAddressChange change = new ArtemisBrokerAddressChange(true, ArtemisBrokerAddressChangeMoveTest.DELAY);
-		final ArtemisBrokerAddressChange changeOff = new ArtemisBrokerAddressChange(false, ArtemisBrokerAddressChangeMoveTest.DELAY);
+		final ArtemisReconnectOnAddressChange change = new ArtemisReconnectOnAddressChange(true, ArtemisReconnectOnAddressChangeTest.DELAY);
+		final ArtemisReconnectOnAddressChange changeOff = new ArtemisReconnectOnAddressChange(false, ArtemisReconnectOnAddressChangeTest.DELAY);
 		try (ActiveMQConnectionFactory artemisFactory = new ActiveMQConnectionFactory(
 				"tcp://127.0.0.1:" + oldPort + "?" + EmbeddedBrokerTestHelper.CLIENT_QUERY);
 				GenericApplicationContext context = new GenericApplicationContext()) {
 			final MeteredJmsPoolConnectionFactory pool = MeteredJmsPoolConnectionFactory.create(new SimpleMeterRegistry(),
 					new JmsPoolConnectionFactoryProperties(), artemisFactory);
-			final PropertiesService propertiesService = ArtemisBrokerAddressChangeMoveTest.propertiesService(context, pool, change);
+			final PropertiesService propertiesService = ArtemisReconnectOnAddressChangeTest.propertiesService(context, pool, change);
 			try (Connection connection = pool.createConnection()) {
-				final RemotingConnection liveConnection = ArtemisBrokerAddressChangeMoveTest.remotingConnection(connection);
+				final RemotingConnection liveConnection = ArtemisReconnectOnAddressChangeTest.remotingConnection(connection);
 
 				// From another host: the request arrived on an address that is not loopback.
 				final MockHttpServletRequest remoteRequest = new MockHttpServletRequest();
 				remoteRequest.setLocalAddr("10.1.2.3");
 				RequestContextHolder.setRequestAttributes(new ServletRequestAttributes(remoteRequest));
 				try {
-					propertiesService.setStringProperty(ArtemisBrokerAddressChangeMoveTest.BEAN_NAME, true, ArtemisBrokerAddressChangeMoveTest.PORT_PROPERTY,
+					propertiesService.setStringProperty(ArtemisReconnectOnAddressChangeTest.BEAN_NAME, true, ArtemisReconnectOnAddressChangeTest.PORT_PROPERTY,
 							String.valueOf(newPort), true);
 				}
 				finally {
 					RequestContextHolder.resetRequestAttributes();
 				}
 				// From outside a request.
-				propertiesService.setStringProperty(ArtemisBrokerAddressChangeMoveTest.BEAN_NAME, true, ArtemisBrokerAddressChangeMoveTest.HOST_PROPERTY,
+				propertiesService.setStringProperty(ArtemisReconnectOnAddressChangeTest.BEAN_NAME, true, ArtemisReconnectOnAddressChangeTest.HOST_PROPERTY,
 						"localhost", true);
-				Thread.sleep(ArtemisBrokerAddressChangeMoveTest.DELAY.toMillis() * 4);
-				Assertions.assertSame(liveConnection, ArtemisBrokerAddressChangeMoveTest.remotingConnection(connection));
+				Thread.sleep(ArtemisReconnectOnAddressChangeTest.DELAY.toMillis() * 4);
+				Assertions.assertSame(liveConnection, ArtemisReconnectOnAddressChangeTest.remotingConnection(connection));
 
 				// With the move off, from the service's own host.
-				propertiesService.setArtemisBrokerAddressChange(changeOff);
+				propertiesService.setArtemisReconnectOnAddressChange(changeOff);
 				final MockHttpServletRequest localRequest = new MockHttpServletRequest();
 				localRequest.setLocalAddr("127.0.0.1");
 				RequestContextHolder.setRequestAttributes(new ServletRequestAttributes(localRequest));
 				try {
-					propertiesService.setStringProperty(ArtemisBrokerAddressChangeMoveTest.BEAN_NAME, true, ArtemisBrokerAddressChangeMoveTest.PORT_PROPERTY,
+					propertiesService.setStringProperty(ArtemisReconnectOnAddressChangeTest.BEAN_NAME, true, ArtemisReconnectOnAddressChangeTest.PORT_PROPERTY,
 							String.valueOf(oldPort), true);
 				}
 				finally {
 					RequestContextHolder.resetRequestAttributes();
 				}
-				Thread.sleep(ArtemisBrokerAddressChangeMoveTest.DELAY.toMillis() * 4);
-				Assertions.assertSame(liveConnection, ArtemisBrokerAddressChangeMoveTest.remotingConnection(connection));
+				Thread.sleep(ArtemisReconnectOnAddressChangeTest.DELAY.toMillis() * 4);
+				Assertions.assertSame(liveConnection, ArtemisReconnectOnAddressChangeTest.remotingConnection(connection));
 			}
 			pool.stop();
 		}
@@ -389,6 +395,60 @@ public class ArtemisBrokerAddressChangeMoveTest extends ContainerTestHelper {
 			changeOff.destroy();
 			oldBroker.stop();
 			newBroker.stop();
+		}
+	}
+
+	/**
+	 * An update from another host while a reconnection waits for its delay
+	 * cancels it, so it does not choose where the live connections go.
+	 *
+	 * @throws Exception If the test fails.
+	 */
+	@Test
+	@DisplayName("An update from another host during the delay cancels the pending reconnection")
+	public void testRemoteUpdateDuringDelayCancelsReconnect() throws Exception {
+		final int port = EmbeddedBrokerTestHelper.freePort();
+		final EmbeddedActiveMQ broker = EmbeddedBrokerTestHelper.startBroker(port);
+		final ArtemisReconnectOnAddressChange change = new ArtemisReconnectOnAddressChange(true, ArtemisReconnectOnAddressChangeTest.DELAY);
+		final SimpleMeterRegistry registry = new SimpleMeterRegistry();
+		change.setMeterRegistry(registry);
+		try (ActiveMQConnectionFactory artemisFactory = new ActiveMQConnectionFactory(
+				"tcp://127.0.0.1:" + port + "?" + EmbeddedBrokerTestHelper.CLIENT_QUERY);
+				GenericApplicationContext context = new GenericApplicationContext()) {
+			final MeteredJmsPoolConnectionFactory pool = MeteredJmsPoolConnectionFactory.create(new SimpleMeterRegistry(),
+					new JmsPoolConnectionFactoryProperties(), artemisFactory);
+			final PropertiesService propertiesService = ArtemisReconnectOnAddressChangeTest.propertiesService(context, pool, change);
+			try (Connection connection = pool.createConnection()) {
+				final RemotingConnection liveConnection = ArtemisReconnectOnAddressChangeTest.remotingConnection(connection);
+
+				// A local update schedules a reconnection, and another host changes the address before it runs.
+				propertiesService.setStringProperty(ArtemisReconnectOnAddressChangeTest.BEAN_NAME, true, ArtemisReconnectOnAddressChangeTest.PORT_PROPERTY,
+						String.valueOf(EmbeddedBrokerTestHelper.freePort()), true);
+				Assertions.assertTrue(change.isReconnectPending());
+				final MockHttpServletRequest remoteRequest = new MockHttpServletRequest();
+				remoteRequest.setLocalAddr("10.1.2.3");
+				RequestContextHolder.setRequestAttributes(new ServletRequestAttributes(remoteRequest));
+				try {
+					propertiesService.setStringProperty(ArtemisReconnectOnAddressChangeTest.BEAN_NAME, true, ArtemisReconnectOnAddressChangeTest.PORT_PROPERTY,
+							String.valueOf(EmbeddedBrokerTestHelper.freePort()), true);
+				}
+				finally {
+					RequestContextHolder.resetRequestAttributes();
+				}
+
+				// The reconnection is skipped, and the live connection stays.
+				Assertions.assertTrue(TestHelper.waitUntilValid(change::isReconnectPending, isPending -> !isPending, TestHelper.LONG_WAIT,
+						TestHelper.VERY_SHORT_WAIT));
+				Assertions.assertSame(liveConnection, ArtemisReconnectOnAddressChangeTest.remotingConnection(connection));
+				Assertions.assertEquals(1.0,
+						registry.get(ArtemisReconnectOnAddressChange.RECONNECTIONS).tag("bean", ArtemisReconnectOnAddressChangeTest.BEAN_NAME)
+								.tag("outcome", "skipped").counter().count());
+			}
+			pool.stop();
+		}
+		finally {
+			change.destroy();
+			broker.stop();
 		}
 	}
 
@@ -438,7 +498,7 @@ public class ArtemisBrokerAddressChangeMoveTest extends ContainerTestHelper {
 		final String queue = "address-change-listener";
 		final EmbeddedActiveMQ oldBroker = EmbeddedBrokerTestHelper.startBroker(oldPort);
 		final EmbeddedActiveMQ newBroker = EmbeddedBrokerTestHelper.startBroker(newPort);
-		final ArtemisBrokerAddressChange change = new ArtemisBrokerAddressChange(true, ArtemisBrokerAddressChangeMoveTest.DELAY);
+		final ArtemisReconnectOnAddressChange change = new ArtemisReconnectOnAddressChange(true, ArtemisReconnectOnAddressChangeTest.DELAY);
 		final BlockingQueue<String> received = new LinkedBlockingQueue<>();
 		DefaultMessageListenerContainer listener = null;
 		try (ActiveMQConnectionFactory artemisFactory = new ActiveMQConnectionFactory(
@@ -446,13 +506,13 @@ public class ArtemisBrokerAddressChangeMoveTest extends ContainerTestHelper {
 				GenericApplicationContext context = new GenericApplicationContext()) {
 			final MeteredJmsPoolConnectionFactory pool = MeteredJmsPoolConnectionFactory.create(new SimpleMeterRegistry(),
 					new JmsPoolConnectionFactoryProperties(), artemisFactory);
-			final PropertiesService propertiesService = ArtemisBrokerAddressChangeMoveTest.propertiesService(context, pool, change);
-			listener = ArtemisBrokerAddressChangeMoveTest.startListener(artemisFactory, queue, received);
+			final PropertiesService propertiesService = ArtemisReconnectOnAddressChangeTest.propertiesService(context, pool, change);
+			listener = ArtemisReconnectOnAddressChangeTest.startListener(artemisFactory, queue, received);
 			EmbeddedBrokerTestHelper.send(oldPort, queue, "before the move");
 			Assertions.assertEquals("before the move", received.poll(TestHelper.LONG_WAIT, TimeUnit.MILLISECONDS));
 
 			// The listener stays on the old broker until the move, and consumes from the new one after it.
-			propertiesService.setStringProperty(ArtemisBrokerAddressChangeMoveTest.BEAN_NAME, true, ArtemisBrokerAddressChangeMoveTest.PORT_PROPERTY,
+			propertiesService.setStringProperty(ArtemisReconnectOnAddressChangeTest.BEAN_NAME, true, ArtemisReconnectOnAddressChangeTest.PORT_PROPERTY,
 					String.valueOf(newPort), true);
 			EmbeddedBrokerTestHelper.send(newPort, queue, "after the move");
 			Assertions.assertEquals("after the move", received.poll(TestHelper.LONG_WAIT, TimeUnit.MILLISECONDS));
@@ -482,7 +542,7 @@ public class ArtemisBrokerAddressChangeMoveTest extends ContainerTestHelper {
 		final int deadPort = EmbeddedBrokerTestHelper.freePort();
 		final String queue = "address-change-listener-dead";
 		final EmbeddedActiveMQ broker = EmbeddedBrokerTestHelper.startBroker(port);
-		final ArtemisBrokerAddressChange change = new ArtemisBrokerAddressChange(true, ArtemisBrokerAddressChangeMoveTest.DELAY);
+		final ArtemisReconnectOnAddressChange change = new ArtemisReconnectOnAddressChange(true, ArtemisReconnectOnAddressChangeTest.DELAY);
 		final BlockingQueue<String> received = new LinkedBlockingQueue<>();
 		DefaultMessageListenerContainer listener = null;
 		try (ActiveMQConnectionFactory artemisFactory = new ActiveMQConnectionFactory(
@@ -490,13 +550,13 @@ public class ArtemisBrokerAddressChangeMoveTest extends ContainerTestHelper {
 				GenericApplicationContext context = new GenericApplicationContext()) {
 			final MeteredJmsPoolConnectionFactory pool = MeteredJmsPoolConnectionFactory.create(new SimpleMeterRegistry(),
 					new JmsPoolConnectionFactoryProperties(), artemisFactory);
-			final PropertiesService propertiesService = ArtemisBrokerAddressChangeMoveTest.propertiesService(context, pool, change);
-			listener = ArtemisBrokerAddressChangeMoveTest.startListener(artemisFactory, queue, received);
+			final PropertiesService propertiesService = ArtemisReconnectOnAddressChangeTest.propertiesService(context, pool, change);
+			listener = ArtemisReconnectOnAddressChangeTest.startListener(artemisFactory, queue, received);
 
 			// To a port where nothing listens: once moved, the listener keeps trying it.
-			propertiesService.setStringProperty(ArtemisBrokerAddressChangeMoveTest.BEAN_NAME, true, ArtemisBrokerAddressChangeMoveTest.PORT_PROPERTY,
+			propertiesService.setStringProperty(ArtemisReconnectOnAddressChangeTest.BEAN_NAME, true, ArtemisReconnectOnAddressChangeTest.PORT_PROPERTY,
 					String.valueOf(deadPort), true);
-			Assertions.assertTrue(change.isMoving());
+			Assertions.assertTrue(change.isReconnectPending());
 			final ServerLocatorImpl serverLocator = (ServerLocatorImpl) artemisFactory.getServerLocator();
 			Assertions.assertTrue(TestHelper.waitUntilValid(() -> {
 				synchronized (serverLocator.getFactories()) {
@@ -504,10 +564,10 @@ public class ArtemisBrokerAddressChangeMoveTest extends ContainerTestHelper {
 				}
 			}, isReconnecting -> isReconnecting, TestHelper.LONG_WAIT, TestHelper.VERY_SHORT_WAIT));
 			EmbeddedBrokerTestHelper.send(port, queue, "while moved away");
-			Assertions.assertNull(received.poll(ArtemisBrokerAddressChangeMoveTest.DELAY.toMillis() * 2, TimeUnit.MILLISECONDS));
+			Assertions.assertNull(received.poll(ArtemisReconnectOnAddressChangeTest.DELAY.toMillis() * 2, TimeUnit.MILLISECONDS));
 
 			// Back to the broker: the listener reconnects at its next attempt and consumes again.
-			propertiesService.setStringProperty(ArtemisBrokerAddressChangeMoveTest.BEAN_NAME, true, ArtemisBrokerAddressChangeMoveTest.PORT_PROPERTY,
+			propertiesService.setStringProperty(ArtemisReconnectOnAddressChangeTest.BEAN_NAME, true, ArtemisReconnectOnAddressChangeTest.PORT_PROPERTY,
 					String.valueOf(port), true);
 			Assertions.assertEquals("while moved away", received.poll(TestHelper.LONG_WAIT, TimeUnit.MILLISECONDS));
 			pool.stop();
@@ -527,8 +587,8 @@ public class ArtemisBrokerAddressChangeMoveTest extends ContainerTestHelper {
 	@Test
 	@DisplayName("Refuses a missing or negative delay")
 	public void testInvalidDelayRefused() {
-		Assertions.assertThrows(IllegalArgumentException.class, () -> new ArtemisBrokerAddressChange(true, null));
-		Assertions.assertThrows(IllegalArgumentException.class, () -> new ArtemisBrokerAddressChange(true, Duration.ofSeconds(-1)));
+		Assertions.assertThrows(IllegalArgumentException.class, () -> new ArtemisReconnectOnAddressChange(true, null));
+		Assertions.assertThrows(IllegalArgumentException.class, () -> new ArtemisReconnectOnAddressChange(true, Duration.ofSeconds(-1)));
 	}
 
 	/**
@@ -540,8 +600,8 @@ public class ArtemisBrokerAddressChangeMoveTest extends ContainerTestHelper {
 	@DisplayName("Ships the move on, one second after the last change")
 	public void testShippedDefaults() throws IOException {
 		final Properties libraryDefaults = PropertiesLoaderUtils.loadProperties(new ClassPathResource("service.properties"));
-		Assertions.assertEquals("true", libraryDefaults.getProperty(ArtemisBrokerAddressChange.PROPERTY_PREFIX + ".enabled"));
-		Assertions.assertEquals("1s", libraryDefaults.getProperty(ArtemisBrokerAddressChange.PROPERTY_PREFIX + ".delay"));
+		Assertions.assertEquals("true", libraryDefaults.getProperty(ArtemisReconnectOnAddressChange.PROPERTY_PREFIX + ".enabled"));
+		Assertions.assertEquals("1s", libraryDefaults.getProperty(ArtemisReconnectOnAddressChange.PROPERTY_PREFIX + ".delay"));
 	}
 
 	/**
@@ -555,12 +615,12 @@ public class ArtemisBrokerAddressChangeMoveTest extends ContainerTestHelper {
 	private static PropertiesService propertiesService(
 			final GenericApplicationContext context,
 			final JmsPoolConnectionFactory pool,
-			final ArtemisBrokerAddressChange change) {
-		context.getBeanFactory().registerSingleton(ArtemisBrokerAddressChangeMoveTest.BEAN_NAME, pool);
+			final ArtemisReconnectOnAddressChange change) {
+		context.getBeanFactory().registerSingleton(ArtemisReconnectOnAddressChangeTest.BEAN_NAME, pool);
 		context.refresh();
 		final PropertiesService propertiesService = new PropertiesService();
 		propertiesService.setApplicationContext(context);
-		propertiesService.setArtemisBrokerAddressChange(change);
+		propertiesService.setArtemisReconnectOnAddressChange(change);
 		return propertiesService;
 	}
 

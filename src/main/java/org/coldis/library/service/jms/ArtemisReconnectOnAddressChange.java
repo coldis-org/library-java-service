@@ -24,12 +24,17 @@ import org.messaginghub.pooled.jms.JmsPoolConnectionFactory;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.DisposableBean;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
+import io.micrometer.core.instrument.Counter;
+import io.micrometer.core.instrument.MeterRegistry;
+
 /**
- * Moves the live connections of an Artemis connection factory to its broker
- * address once that address changes.
+ * Reconnects the live connections of an Artemis connection factory to its
+ * broker address once that address changes: it fails them, and the client
+ * reconnects them to the new address.
  *
  * <p>
  * A connection reads the address from the locator's initial connectors only
@@ -41,55 +46,72 @@ import org.springframework.stereotype.Component;
  * send pile up behind it. Failing the connections releases the waiting calls
  * at once and makes the client reconnect them, to the new address, the way it
  * does when it notices a lost broker by itself. Listener connections come from
- * the same locator and move with them.
+ * the same locator and reconnect with them.
  * </p>
  * <p>
- * The move runs apart from the update, after a short delay that each further
- * change of the same factory restarts, so a host and a port sent one after the
- * other move the connections once, to both. A session factory that has no
- * connection (it is reconnecting) is left alone: it reads the new address on
- * its next attempt.
+ * The reconnection runs apart from the update, after a short delay that each
+ * further change of the same factory restarts, so a host and a port sent one
+ * after the other reconnect the connections once, to both. It runs only while
+ * the address is the one the last local update left, so an update from another
+ * host in the meantime cancels it. A session factory that has no connection (it
+ * is reconnecting) is left alone: it reads the new address on its next
+ * attempt.
+ * </p>
+ * <p>
+ * When the service has a meter registry, each scheduled reconnection is counted
+ * ({@link #RECONNECTIONS}) by bean and outcome: reconnected, skipped (the
+ * address changed again) or failed.
  * </p>
  * <p>
  * The live session factories come from the Artemis client's own server
  * locator ({@code ServerLocatorImpl.getFactories()}), which is not public API
  * (checked against the 2.44 client). A client without it logs a warning or an
- * error at each move, and its connections move only once it finds the broker
- * gone.
+ * error at each reconnection, and its connections reconnect only once it finds
+ * the broker gone.
  * </p>
  */
 @Component
-public class ArtemisBrokerAddressChange implements DisposableBean {
+public class ArtemisReconnectOnAddressChange implements DisposableBean {
 
 	/**
 	 * Logger.
 	 */
-	private static final Logger LOGGER = LoggerFactory.getLogger(ArtemisBrokerAddressChange.class);
+	private static final Logger LOGGER = LoggerFactory.getLogger(ArtemisReconnectOnAddressChange.class);
 
 	/**
 	 * Property prefix.
 	 */
-	public static final String PROPERTY_PREFIX = "org.coldis.library.service.jms.broker-address-change";
+	public static final String PROPERTY_PREFIX = "org.coldis.library.service.jms.reconnect-on-address-change";
 
 	/**
-	 * Whether the live connections move.
+	 * Counter: scheduled reconnections, by bean and outcome.
+	 */
+	public static final String RECONNECTIONS = "jms.reconnect.on.address.change";
+
+	/**
+	 * Whether the live connections reconnect.
 	 */
 	private final Boolean isEnabled;
 
 	/**
-	 * Delay between the last change of a factory and the move.
+	 * Delay between the last change of a factory and the reconnection.
 	 */
 	private final Duration delay;
 
 	/**
-	 * Runs the moves, apart from the updates.
+	 * Runs the reconnections, apart from the updates.
 	 */
 	private final ScheduledExecutorService scheduler;
 
 	/**
-	 * Move scheduled for each factory.
+	 * Reconnection scheduled for each factory.
 	 */
-	private final Map<ActiveMQConnectionFactory, ScheduledFuture<?>> scheduledMoves = new ConcurrentHashMap<>();
+	private final Map<ActiveMQConnectionFactory, ScheduledFuture<?>> scheduledReconnects = new ConcurrentHashMap<>();
+
+	/**
+	 * Meter registry, or null when the service has none.
+	 */
+	private MeterRegistry meterRegistry;
 
 	/**
 	 * Broker address of an Artemis connection factory, noted before an update.
@@ -147,18 +169,47 @@ public class ArtemisBrokerAddressChange implements DisposableBean {
 	/**
 	 * Constructor.
 	 *
-	 * @param isEnabled Whether the live connections move.
-	 * @param delay     Delay between the last change of a factory and the move.
+	 * @param isEnabled Whether the live connections reconnect.
+	 * @param delay     Delay between the last change of a factory and the
+	 *                      reconnection.
 	 */
-	public ArtemisBrokerAddressChange(
-			@Value("${" + ArtemisBrokerAddressChange.PROPERTY_PREFIX + ".enabled:true}") final Boolean isEnabled,
-			@Value("${" + ArtemisBrokerAddressChange.PROPERTY_PREFIX + ".delay:1s}") final Duration delay) {
+	public ArtemisReconnectOnAddressChange(
+			@Value("${" + ArtemisReconnectOnAddressChange.PROPERTY_PREFIX + ".enabled:true}") final Boolean isEnabled,
+			@Value("${" + ArtemisReconnectOnAddressChange.PROPERTY_PREFIX + ".delay:1s}") final Duration delay) {
 		if ((delay == null) || delay.isNegative()) {
-			throw new IllegalArgumentException(ArtemisBrokerAddressChange.PROPERTY_PREFIX + ".delay must be set and not negative, not " + delay + ".");
+			throw new IllegalArgumentException(ArtemisReconnectOnAddressChange.PROPERTY_PREFIX + ".delay must be set and not negative, not " + delay + ".");
 		}
 		this.isEnabled = isEnabled;
 		this.delay = delay;
-		this.scheduler = Executors.newSingleThreadScheduledExecutor(Thread.ofPlatform().daemon().name("artemis-broker-address-change").factory());
+		this.scheduler = Executors.newSingleThreadScheduledExecutor(Thread.ofPlatform().daemon().name("artemis-reconnect-on-address-change").factory());
+	}
+
+	/**
+	 * Sets the meter registry the reconnections are counted in.
+	 *
+	 * @param meterRegistry Meter registry.
+	 */
+	@Autowired(required = false)
+	public void setMeterRegistry(
+			final MeterRegistry meterRegistry) {
+		this.meterRegistry = meterRegistry;
+	}
+
+	/**
+	 * Counts a scheduled reconnection, when there is a registry.
+	 *
+	 * @param beanName Name of the bean the factory belongs to.
+	 * @param outcome  Outcome: reconnected, skipped or failed.
+	 */
+	private void count(
+			final String beanName,
+			final String outcome) {
+		final MeterRegistry registry = this.meterRegistry;
+		if (registry != null) {
+			Counter.builder(ArtemisReconnectOnAddressChange.RECONNECTIONS)
+					.description("Reconnections of the live connections of an Artemis factory after a change of its broker address.").tag("bean", beanName)
+					.tag("outcome", outcome).register(registry).increment();
+		}
 	}
 
 	/**
@@ -179,30 +230,33 @@ public class ArtemisBrokerAddressChange implements DisposableBean {
 	 * its own, since the client reconnects in the thread that fails the
 	 * connection and keeps trying while the new address does not answer.
 	 *
-	 * @param beanName          Name of the bean the factory belongs to (for the
-	 *                              log).
-	 * @param connectionFactory Artemis connection factory.
+	 * @param  beanName          Name of the bean the factory belongs to (for the
+	 *                               log).
+	 * @param  connectionFactory Artemis connection factory.
+	 * @return                   Whether its live connections could be read.
 	 */
-	private void moveConnections(
+	private Boolean reconnectLiveConnections(
 			final String beanName,
 			final ActiveMQConnectionFactory connectionFactory) {
 		final List<ClientSessionFactoryInternal> sessionFactories = new ArrayList<>();
+		Boolean isRead = false;
 		if (connectionFactory.getServerLocator() instanceof final ServerLocatorImpl serverLocator) {
+			isRead = true;
 			final Set<ClientSessionFactoryInternal> liveSessionFactories = serverLocator.getFactories();
 			// The locator guards this set with its own monitor.
 			synchronized (liveSessionFactories) {
 				sessionFactories.addAll(liveSessionFactories);
 			}
-			ArtemisBrokerAddressChange.LOGGER.info("The broker address of bean " + beanName + " changed: failing the live connections of its "
+			ArtemisReconnectOnAddressChange.LOGGER.info("The broker address of bean " + beanName + " changed: failing the live connections of its "
 					+ sessionFactories.size() + " session factories, so they reconnect to it.");
 		}
 		else {
-			ArtemisBrokerAddressChange.LOGGER.warn("The broker address of bean " + beanName + " changed, but its server locator is not the Artemis client's own: "
-					+ "its live connections move when the client finds the broker gone.");
+			ArtemisReconnectOnAddressChange.LOGGER.warn("The broker address of bean " + beanName + " changed, but its server locator is not the Artemis client's own: "
+					+ "its live connections reconnect when the client finds the broker gone.");
 		}
 		final ActiveMQNotConnectedException cause = new ActiveMQNotConnectedException("The broker address of bean " + beanName + " changed.");
 		for (final ClientSessionFactoryInternal sessionFactory : sessionFactories) {
-			Thread.ofVirtual().name("artemis-broker-address-change-" + beanName).start(() -> {
+			Thread.ofVirtual().name("artemis-reconnect-on-address-change-" + beanName).start(() -> {
 				try {
 					// Getting the connection of a factory that has none opens one, so a factory that is
 					// reconnecting is left to read the new address on its next attempt.
@@ -215,65 +269,78 @@ public class ArtemisBrokerAddressChange implements DisposableBean {
 				catch (final IllegalStateException exception) {
 				}
 				catch (final RuntimeException | LinkageError exception) {
-					ArtemisBrokerAddressChange.LOGGER.error("Could not move a live connection of bean " + beanName + " to its new broker address.", exception);
+					ArtemisReconnectOnAddressChange.LOGGER.error("Could not reconnect a live connection of bean " + beanName + " to its new broker address.",
+							exception);
 				}
 			});
 		}
+		return isRead;
 	}
 
 	/**
-	 * Moves the live connections of a factory whose broker address changed
-	 * since it was noted, after the delay. An update that came from another host
-	 * changes the address but moves nothing: its connections move when the
-	 * client finds the broker gone.
+	 * Reconnects the live connections of a factory whose broker address changed
+	 * since it was noted, after the delay, while the address stays the one this
+	 * update left. An update that came from another host changes the address but
+	 * reconnects nothing: its connections reconnect when the client finds the
+	 * broker gone.
 	 *
-	 * @param beanName      Name of the bean the factory belongs to (for the
-	 *                          log).
+	 * @param beanName      Name of the bean the factory belongs to (for the log
+	 *                          and the counter).
 	 * @param snapshot      Address noted before the update (may be null).
 	 * @param isLocalUpdate Whether the update came from the service's own host
 	 *                          or container.
 	 */
-	public void moveConnectionsIfChanged(
+	public void reconnectIfChanged(
 			final String beanName,
 			final Snapshot snapshot,
 			final Boolean isLocalUpdate) {
 		if ((snapshot != null) && snapshot.isChanged()) {
 			if (Boolean.TRUE.equals(this.isEnabled) && Boolean.TRUE.equals(isLocalUpdate)) {
-				this.scheduledMoves.compute(snapshot.connectionFactory, (connectionFactory, scheduledMove) -> {
-					if (scheduledMove != null) {
-						scheduledMove.cancel(false);
+				final Snapshot localAddress = new Snapshot(snapshot.connectionFactory);
+				this.scheduledReconnects.compute(snapshot.connectionFactory, (connectionFactory, scheduledReconnect) -> {
+					if (scheduledReconnect != null) {
+						scheduledReconnect.cancel(false);
 					}
 					return this.scheduler.schedule(() -> {
+						String outcome = "failed";
 						try {
-							this.moveConnections(beanName, connectionFactory);
+							if (localAddress.isChanged()) {
+								outcome = "skipped";
+								ArtemisReconnectOnAddressChange.LOGGER.warn("The broker address of bean " + beanName + " changed again, by an update that did not "
+										+ "come from the service's own host: its live connections do not reconnect.");
+							}
+							else if (this.reconnectLiveConnections(beanName, connectionFactory)) {
+								outcome = "reconnected";
+							}
 						}
 						catch (final RuntimeException | LinkageError exception) {
-							ArtemisBrokerAddressChange.LOGGER.error("Could not move the live connections of bean " + beanName + " to its new broker address.",
+							ArtemisReconnectOnAddressChange.LOGGER.error("Could not reconnect the live connections of bean " + beanName + " to its new broker address.",
 									exception);
 						}
+						this.count(beanName, outcome);
 					}, this.delay.toMillis(), TimeUnit.MILLISECONDS);
 				});
 			}
 			else {
-				ArtemisBrokerAddressChange.LOGGER.info("The broker address of bean " + beanName + " changed. Its live connections move when the client finds "
-						+ "the broker gone: " + (Boolean.TRUE.equals(this.isEnabled) ? "the update did not come from the service's own host." : "moving them is off ("
-								+ ArtemisBrokerAddressChange.PROPERTY_PREFIX + ".enabled)."));
+				ArtemisReconnectOnAddressChange.LOGGER.info("The broker address of bean " + beanName + " changed. Its live connections reconnect when the client "
+						+ "finds the broker gone: " + (Boolean.TRUE.equals(this.isEnabled) ? "the update did not come from the service's own host."
+								: "reconnecting them is off (" + ArtemisReconnectOnAddressChange.PROPERTY_PREFIX + ".enabled)."));
 			}
 		}
 	}
 
 	/**
-	 * Whether a move is scheduled or running. The connections a move fails
+	 * Whether a reconnection is scheduled or running. The connections it fails
 	 * reconnect on threads of their own, after it.
 	 *
-	 * @return Whether a move is pending.
+	 * @return Whether a reconnection is pending.
 	 */
-	public Boolean isMoving() {
-		return this.scheduledMoves.values().stream().anyMatch(scheduledMove -> !scheduledMove.isDone());
+	public Boolean isReconnectPending() {
+		return this.scheduledReconnects.values().stream().anyMatch(scheduledReconnect -> !scheduledReconnect.isDone());
 	}
 
 	/**
-	 * Stops the moves.
+	 * Stops the reconnections.
 	 *
 	 * @see org.springframework.beans.factory.DisposableBean#destroy()
 	 */

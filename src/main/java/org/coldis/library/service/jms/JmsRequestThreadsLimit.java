@@ -43,12 +43,16 @@ import jakarta.jms.ResourceAllocationException;
  * A permit belongs to the request thread, not to the connection: a thread that
  * opens a second connection while it holds one (a nested transaction, a second
  * broker) holds the same permit, and gives it back when its last connection
- * closes. So requests never wait on each other for a second permit.
+ * closes. So requests never wait on each other for a second permit. A
+ * connection a request keeps open past its end (a shared connection cached over
+ * the pool, a listener started from a request) holds its permit while it stays
+ * open.
  * <p>
  * Only request threads count: listeners, schedulers and other executors have
  * pools of their own. The limit is sized when the main web server starts, from
  * its request threads. A server on an external executor (virtual threads) has
- * no such count and is not limited. One limit covers every pooled factory, so
+ * no such count and is not limited. A separate management server does not size
+ * it, but its requests take permits like the others. One limit covers every pooled factory, so
  * two brokers failing together still leave the other threads free. The limit
  * covers the connections the pooled factory hands out through
  * {@code createConnection}, as {@code JmsTemplate} takes them; a

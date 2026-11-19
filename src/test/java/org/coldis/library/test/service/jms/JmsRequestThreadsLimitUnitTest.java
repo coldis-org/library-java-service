@@ -3,7 +3,10 @@ package org.coldis.library.test.service.jms;
 import java.io.IOException;
 import java.time.Duration;
 import java.util.Properties;
+import java.util.concurrent.Callable;
 import java.util.concurrent.ExecutionException;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 import java.util.concurrent.FutureTask;
 import java.util.concurrent.TimeUnit;
 
@@ -18,6 +21,9 @@ import org.springframework.boot.web.servlet.context.ServletWebServerApplicationC
 import org.springframework.boot.web.servlet.context.ServletWebServerInitializedEvent;
 import org.springframework.core.io.ClassPathResource;
 import org.springframework.core.io.support.PropertiesLoaderUtils;
+import org.springframework.mock.web.MockHttpServletRequest;
+import org.springframework.web.context.request.RequestContextHolder;
+import org.springframework.web.context.request.ServletRequestAttributes;
 
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import jakarta.jms.ResourceAllocationException;
@@ -161,7 +167,7 @@ public class JmsRequestThreadsLimitUnitTest {
 	@DisplayName("Reports how close requests come to the limit")
 	public void testMeters() throws Exception {
 		final SimpleMeterRegistry registry = new SimpleMeterRegistry();
-		final JmsRequestThreadsLimit limit = new JmsRequestThreadsLimit(true, 0.5, Duration.ofMillis(500));
+		final JmsRequestThreadsLimit limit = new JmsRequestThreadsLimit(true, 0.5, Duration.ofSeconds(2));
 		limit.setMeterRegistry(registry);
 		limit.sizeFromRequestThreads(4);
 		// Two requests take the two permits without waiting.
@@ -179,7 +185,7 @@ public class JmsRequestThreadsLimitUnitTest {
 		Assertions.assertInstanceOf(ResourceAllocationException.class, refusal.getCause());
 		Assertions.assertEquals(JmsRequestThreadsLimit.REFUSED_MESSAGE, refusal.getCause().getMessage());
 		Assertions.assertEquals(1, registry.get(JmsRequestThreadsLimit.WAIT).timer().count());
-		Assertions.assertTrue(registry.get(JmsRequestThreadsLimit.WAIT).timer().max(TimeUnit.MILLISECONDS) >= 500);
+		Assertions.assertTrue(registry.get(JmsRequestThreadsLimit.WAIT).timer().max(TimeUnit.MILLISECONDS) >= 2000);
 		Assertions.assertEquals(1.0, registry.get(JmsRequestThreadsLimit.REFUSED).counter().count());
 
 		// A fourth waits until a holder gives its permit back, and takes it.
@@ -231,6 +237,52 @@ public class JmsRequestThreadsLimitUnitTest {
 			Assertions.assertEquals(0, limit.getHeldPermits());
 			return null;
 		}).get(5, TimeUnit.SECONDS);
+	}
+
+	/**
+	 * A permit the request thread still remembers is not reused once it went back
+	 * from another thread, nor once the limit was sized again: the thread takes a
+	 * new one, and the count stays right.
+	 *
+	 * @throws Exception If the test fails.
+	 */
+	@Test
+	@DisplayName("A permit given back elsewhere, or from before a new sizing, is not reused")
+	public void testStalePermitsNotReused() throws Exception {
+		final JmsRequestThreadsLimit limit = new JmsRequestThreadsLimit(true, 0.5, Duration.ofMillis(500));
+		limit.sizeFromRequestThreads(4);
+		// One thread serves every request here, as a pool thread serves one after the other.
+		final ExecutorService requestThread = Executors.newSingleThreadExecutor();
+		try {
+			final Callable<JmsRequestThreadsLimit.Permit> acquire = () -> {
+				RequestContextHolder.setRequestAttributes(new ServletRequestAttributes(new MockHttpServletRequest()));
+				try {
+					return limit.acquire();
+				}
+				finally {
+					RequestContextHolder.resetRequestAttributes();
+				}
+			};
+			// Given back from another thread: the request thread still remembers it.
+			final JmsRequestThreadsLimit.Permit firstPermit = requestThread.submit(acquire).get(5, TimeUnit.SECONDS);
+			firstPermit.release();
+			Assertions.assertEquals(0, limit.getHeldPermits());
+			final JmsRequestThreadsLimit.Permit secondPermit = requestThread.submit(acquire).get(5, TimeUnit.SECONDS);
+			Assertions.assertNotSame(firstPermit, secondPermit);
+			Assertions.assertEquals(1, limit.getHeldPermits());
+
+			// Sized again while held: the next connection takes a permit of the new size.
+			limit.sizeFromRequestThreads(4);
+			Assertions.assertEquals(0, limit.getHeldPermits());
+			final JmsRequestThreadsLimit.Permit thirdPermit = requestThread.submit(acquire).get(5, TimeUnit.SECONDS);
+			Assertions.assertNotSame(secondPermit, thirdPermit);
+			Assertions.assertEquals(1, limit.getHeldPermits());
+			thirdPermit.release();
+			Assertions.assertEquals(0, limit.getHeldPermits());
+		}
+		finally {
+			requestThread.shutdownNow();
+		}
 	}
 
 	/**

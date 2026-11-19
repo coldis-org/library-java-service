@@ -9,7 +9,7 @@ import org.apache.activemq.artemis.jms.client.ActiveMQConnectionFactory;
 import org.coldis.library.exception.IntegrationException;
 import org.coldis.library.helper.ReflectionHelper;
 import org.coldis.library.model.SimpleMessage;
-import org.coldis.library.service.jms.ArtemisBrokerAddressChange;
+import org.coldis.library.service.jms.ArtemisReconnectOnAddressChange;
 import org.messaginghub.pooled.jms.JmsPoolConnectionFactory;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -45,21 +45,21 @@ public class PropertiesService implements ApplicationContextAware {
 	private ApplicationContext applicationContext;
 
 	/**
-	 * Moves the live connections of an Artemis factory whose broker address
+	 * Reconnects the live connections of an Artemis factory whose broker address
 	 * changed, or null for none.
 	 */
-	private ArtemisBrokerAddressChange artemisBrokerAddressChange;
+	private ArtemisReconnectOnAddressChange artemisReconnectOnAddressChange;
 
 	/**
-	 * Sets what moves the live connections of an Artemis factory whose broker
-	 * address changed.
+	 * Sets what reconnects the live connections of an Artemis factory whose
+	 * broker address changed.
 	 *
-	 * @param artemisBrokerAddressChange Broker address change.
+	 * @param artemisReconnectOnAddressChange Reconnection on an address change.
 	 */
 	@Autowired(required = false)
-	public void setArtemisBrokerAddressChange(
-			final ArtemisBrokerAddressChange artemisBrokerAddressChange) {
-		this.artemisBrokerAddressChange = artemisBrokerAddressChange;
+	public void setArtemisReconnectOnAddressChange(
+			final ArtemisReconnectOnAddressChange artemisReconnectOnAddressChange) {
+		this.artemisReconnectOnAddressChange = artemisReconnectOnAddressChange;
 	}
 
 	/**
@@ -121,18 +121,18 @@ public class PropertiesService implements ApplicationContextAware {
 			}
 
 			// Notes the broker address of an Artemis connection factory before the change.
-			final ArtemisBrokerAddressChange.Snapshot brokerAddress = (this.artemisBrokerAddressChange == null) ? null
-					: this.artemisBrokerAddressChange.snapshot(bean);
+			final ArtemisReconnectOnAddressChange.Snapshot brokerAddress = (this.artemisReconnectOnAddressChange == null) ? null
+					: this.artemisReconnectOnAddressChange.snapshot(bean);
 
 			// Sets the property.
 			PropertiesService.LOGGER.info("Setting property " + name + " to " + PropertiesLogHelper.getLoggedValue(name, value) + " in bean " + beanName + ".");
 			ReflectionHelper.setAttribute(bean, fieldAccess, name, value);
 
-			// Moves the live connections to a broker address that really changed, when the update
-			// came from the service's own host. The same address sent again (as after a restart,
+			// Reconnects the live connections to a broker address that really changed, when the
+			// update came from the service's own host. The same address sent again (as after a restart,
 			// which clears the update scripts' state) leaves them alone.
 			if (brokerAddress != null) {
-				this.artemisBrokerAddressChange.moveConnectionsIfChanged(beanName, brokerAddress, PropertiesService.isLocalUpdate());
+				this.artemisReconnectOnAddressChange.reconnectIfChanged(beanName, brokerAddress, PropertiesService.isLocalUpdate());
 			}
 		}
 
