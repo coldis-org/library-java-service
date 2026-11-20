@@ -6,8 +6,10 @@ import org.coldis.library.service.cache.CacheHelper;
 import org.coldis.library.service.cache.CacheManagerFallbackAutoConfiguration;
 import org.coldis.library.service.cache.LocalCacheAutoConfiguration;
 import org.coldis.library.service.cache.RedisCacheAutoConfiguration;
+import org.coldis.library.service.cache.RedisConnectionPoolAutoConfiguration;
 import org.coldis.library.service.serialization.JsonMapperAutoConfiguration;
 import org.springframework.boot.autoconfigure.AutoConfigurations;
+import org.springframework.boot.autoconfigure.data.redis.RedisAutoConfiguration;
 import org.springframework.boot.autoconfigure.jackson.JacksonAutoConfiguration;
 import org.springframework.boot.test.context.FilteredClassLoader;
 import org.springframework.boot.test.context.runner.ApplicationContextRunner;
@@ -49,7 +51,8 @@ public final class IsolatedCacheContext {
 	private static ApplicationContextRunner withCacheConfigurationsButFallback() {
 		return new ApplicationContextRunner().withConfiguration(AutoConfigurations.of(JacksonAutoConfiguration.class))
 				.withPropertyValues("org.coldis.configuration.base-package=org.coldis")
-				.withUserConfiguration(JsonMapperAutoConfiguration.class, LocalCacheAutoConfiguration.class, RedisCacheAutoConfiguration.class)
+				.withUserConfiguration(JsonMapperAutoConfiguration.class, LocalCacheAutoConfiguration.class, RedisCacheAutoConfiguration.class,
+						RedisConnectionPoolAutoConfiguration.class)
 				.withBean(CacheClient.class).withBean(CacheHelper.class);
 	}
 
@@ -114,6 +117,17 @@ public final class IsolatedCacheContext {
 	 */
 	public static ApplicationContextRunner withRedis() {
 		return IsolatedCacheContext.withCacheConfigurations().withBean(RedisConnectionFactory.class, () -> new LettuceConnectionFactory("localhost", 1));
+	}
+
+	/**
+	 * Context of a service with Redis caching and Spring Boot's Redis connection factory (as services get it). The
+	 * connection factory never connects: no test here reads or writes a central cache.
+	 *
+	 * @return Context runner.
+	 */
+	public static ApplicationContextRunner withBootRedis() {
+		return IsolatedCacheContext.withCacheConfigurations().withConfiguration(AutoConfigurations.of(RedisAutoConfiguration.class))
+				.withPropertyValues("spring.data.redis.host=localhost", "spring.data.redis.port=1");
 	}
 
 }

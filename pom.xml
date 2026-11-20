@@ -175,6 +175,14 @@
 			<artifactId>pooled-jms</artifactId>
 			<optional>true</optional>
 		</dependency>
+		<!-- Central cache connection pool (org.coldis.configuration.cache.central.pool.enabled): the consumer that turns it
+		     on declares commons-pool2. Optional: with commons-pool2 on its class path, Spring Boot builds a pooling Lettuce
+		     configuration (unused while the native connection is shared, see RedisConnectionPoolAutoConfiguration). -->
+		<dependency>
+			<groupId>org.apache.commons</groupId>
+			<artifactId>commons-pool2</artifactId>
+			<optional>true</optional>
+		</dependency>
 
 		<dependency>
 			<groupId>com.github.ben-manes.caffeine</groupId>
