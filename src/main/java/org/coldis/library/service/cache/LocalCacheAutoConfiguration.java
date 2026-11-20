@@ -1,10 +1,12 @@
 package org.coldis.library.service.cache;
 
 import java.time.Duration;
+import java.util.function.Supplier;
 
 import org.coldis.library.service.serialization.JsonMapperAutoConfiguration;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnClass;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
@@ -31,11 +33,15 @@ import com.fasterxml.jackson.databind.introspect.AnnotatedClass;
 import com.fasterxml.jackson.databind.introspect.JacksonAnnotationIntrospector;
 import com.github.benmanes.caffeine.cache.Caffeine;
 
+import io.micrometer.core.instrument.MeterRegistry;
+
 import org.springframework.http.converter.json.Jackson2ObjectMapperBuilder;
 
 /**
  * Local (Caffeine) cache configuration. On by default; {@value #ENABLED_PROPERTY}=false turns it off, and the local
- * cache manager names then do not cache (see {@link CacheManagerFallbackRegistrar}).
+ * cache manager names then do not cache (see {@link CacheManagerFallbackRegistrar}). The local caches record stats
+ * ({@value #RECORD_STATS_PROPERTY}, on by default) and, when the context has a Micrometer meter registry, publish them
+ * per cache ({@value #METRICS_ENABLED_PROPERTY}, on by default; see {@link MeteredCaffeineCacheManager}).
  */
 @Configuration
 @EnableCaching(mode = AdviceMode.ASPECTJ)
@@ -92,13 +98,22 @@ public class LocalCacheAutoConfiguration {
 	/** Key converter. */
 	private final Converter<Object, String> keyConverter;
 
+	/** Meter registry provider. */
+	private final ObjectProvider<MeterRegistry> meterRegistryProvider;
+
 	/**
 	 * Default constructor.
 	 *
-	 * @throws JsonProcessingException
+	 * @param  jsonMapperAutoConfiguration JSON mapper configuration.
+	 * @param  builder                     Object mapper builder.
+	 * @param  meterRegistryProvider       Meter registry provider (the context may have no registry).
+	 * @throws JsonProcessingException     If the key mapper cannot be created.
 	 */
-	public LocalCacheAutoConfiguration(final JsonMapperAutoConfiguration jsonMapperAutoConfiguration, final Jackson2ObjectMapperBuilder builder)
-			throws JsonProcessingException {
+	public LocalCacheAutoConfiguration(
+			final JsonMapperAutoConfiguration jsonMapperAutoConfiguration,
+			final Jackson2ObjectMapperBuilder builder,
+			final ObjectProvider<MeterRegistry> meterRegistryProvider) throws JsonProcessingException {
+		this.meterRegistryProvider = meterRegistryProvider;
 		final ObjectMapper objectMapper = jsonMapperAutoConfiguration.genericMapper(builder);
 		objectMapper.configure(MapperFeature.SORT_PROPERTIES_ALPHABETICALLY, true);
 		objectMapper.configure(SerializationFeature.ORDER_MAP_ENTRIES_BY_KEYS, true);
@@ -120,13 +135,24 @@ public class LocalCacheAutoConfiguration {
 	private Long maximumSize;
 
 	/**
-	 * Property that turns local cache stats recording on.
+	 * Property that turns local cache stats recording on (the default) or off. Off, the local caches publish no metrics
+	 * and the stats debug log is not scheduled.
 	 */
 	public static final String RECORD_STATS_PROPERTY = "org.coldis.configuration.cache.local.record-stats";
 
-	/** If stats should be recoreded. */
-	@Value(value = "${" + LocalCacheAutoConfiguration.RECORD_STATS_PROPERTY + ":false}")
+	/** If stats should be recorded. */
+	@Value(value = "${" + LocalCacheAutoConfiguration.RECORD_STATS_PROPERTY + ":true}")
 	private Boolean stats;
+
+	/**
+	 * Property that turns the local cache metrics on (the default) or off. On, each local cache that records stats is
+	 * bound to the context's Micrometer meter registry, if there is one, when the cache is created.
+	 */
+	public static final String METRICS_ENABLED_PROPERTY = "org.coldis.configuration.cache.local.metrics-enabled";
+
+	/** If the local caches publish metrics. */
+	@Value(value = "${" + LocalCacheAutoConfiguration.METRICS_ENABLED_PROPERTY + ":true}")
+	private Boolean metricsEnabled;
 
 	/**
 	 * Cache manager.
@@ -161,16 +187,21 @@ public class LocalCacheAutoConfiguration {
 	/**
 	 * Creates a local cache manager.
 	 *
-	 * @param  expiration        Expiration after write.
-	 * @param  maximumSize       Maximum entries per cache (unbounded if null or not positive).
-	 * @param  shouldRecordStats If stats should be recorded.
-	 * @return                   Cache manager.
+	 * @param  cacheManagerName      Cache manager bean name (tags its caches' metrics).
+	 * @param  expiration            Expiration after write.
+	 * @param  maximumSize           Maximum entries per cache (unbounded if null or not positive).
+	 * @param  shouldRecordStats     If stats should be recorded.
+	 * @param  meterRegistrySupplier Meter registry supplier, read when each cache is created (null when there is no
+	 *                                   registry or metrics are off).
+	 * @return                       Cache manager.
 	 */
 	static CaffeineCacheManager createCacheManager(
+			final String cacheManagerName,
 			final Duration expiration,
 			final Long maximumSize,
-			final Boolean shouldRecordStats) {
-		final CaffeineCacheManager cacheManager = new CaffeineCacheManager();
+			final Boolean shouldRecordStats,
+			final Supplier<MeterRegistry> meterRegistrySupplier) {
+		final CaffeineCacheManager cacheManager = new MeteredCaffeineCacheManager(cacheManagerName, meterRegistrySupplier);
 		Caffeine<Object, Object> caffeine = Caffeine.newBuilder().expireAfterWrite(expiration);
 		if ((maximumSize != null) && (maximumSize > 0)) {
 			caffeine = caffeine.maximumSize(maximumSize);
@@ -183,14 +214,26 @@ public class LocalCacheAutoConfiguration {
 	}
 
 	/**
+	 * Gets the meter registry the local caches publish their metrics to.
+	 *
+	 * @return The meter registry, or null if metrics are off or the context has no single (or primary) registry.
+	 */
+	private MeterRegistry getMeterRegistry() {
+		return (Boolean.TRUE.equals(this.metricsEnabled) ? this.meterRegistryProvider.getIfUnique() : null);
+	}
+
+	/**
 	 * Creates a cache manager with the given expiration.
 	 *
-	 * @param  expiration Expiration.
-	 * @return            Cache manager.
+	 * @param  expiration  Expiration.
+	 * @param  environment Environment.
+	 * @return             Cache manager.
 	 */
 	private CaffeineCacheManager getCacheManager(
-			final Duration expiration) {
-		return LocalCacheAutoConfiguration.createCacheManager(expiration, this.maximumSize, this.stats);
+			final CacheManagerExpiration expiration,
+			final Environment environment) {
+		return LocalCacheAutoConfiguration.createCacheManager(expiration.getLocalCacheManagerName(), expiration.getExpiration(environment), this.maximumSize,
+				this.stats, this::getMeterRegistry);
 	}
 
 	/**
@@ -202,7 +245,7 @@ public class LocalCacheAutoConfiguration {
 	@Bean
 	public CacheManager millisExpirationLocalCacheManager(
 			final Environment environment) {
-		this.millisExpirationLocalCacheManager = this.getCacheManager(CacheManagerExpiration.MILLIS.getExpiration(environment));
+		this.millisExpirationLocalCacheManager = this.getCacheManager(CacheManagerExpiration.MILLIS, environment);
 		return this.millisExpirationLocalCacheManager;
 	}
 
@@ -215,7 +258,7 @@ public class LocalCacheAutoConfiguration {
 	@Bean
 	public CacheManager secondsExpirationLocalCacheManager(
 			final Environment environment) {
-		this.secondsExpirationLocalCacheManager = this.getCacheManager(CacheManagerExpiration.SECONDS.getExpiration(environment));
+		this.secondsExpirationLocalCacheManager = this.getCacheManager(CacheManagerExpiration.SECONDS, environment);
 		return this.secondsExpirationLocalCacheManager;
 	}
 
@@ -229,7 +272,7 @@ public class LocalCacheAutoConfiguration {
 	@Primary
 	public CacheManager minutesExpirationLocalCacheManager(
 			final Environment environment) {
-		this.minutesExpirationLocalCacheManager = this.getCacheManager(CacheManagerExpiration.MINUTES.getExpiration(environment));
+		this.minutesExpirationLocalCacheManager = this.getCacheManager(CacheManagerExpiration.MINUTES, environment);
 		return this.minutesExpirationLocalCacheManager;
 	}
 
@@ -242,7 +285,7 @@ public class LocalCacheAutoConfiguration {
 	@Bean
 	public CacheManager hoursExpirationLocalCacheManager(
 			final Environment environment) {
-		this.hoursExpirationLocalCacheManager = this.getCacheManager(CacheManagerExpiration.HOURS.getExpiration(environment));
+		this.hoursExpirationLocalCacheManager = this.getCacheManager(CacheManagerExpiration.HOURS, environment);
 		return this.hoursExpirationLocalCacheManager;
 	}
 
@@ -255,7 +298,7 @@ public class LocalCacheAutoConfiguration {
 	@Bean
 	public CacheManager dayExpirationLocalCacheManager(
 			final Environment environment) {
-		this.dayExpirationLocalCacheManager = this.getCacheManager(CacheManagerExpiration.DAY.getExpiration(environment));
+		this.dayExpirationLocalCacheManager = this.getCacheManager(CacheManagerExpiration.DAY, environment);
 		return this.dayExpirationLocalCacheManager;
 	}
 
@@ -268,7 +311,7 @@ public class LocalCacheAutoConfiguration {
 	@Bean
 	public CacheManager daysExpirationLocalCacheManager(
 			final Environment environment) {
-		this.daysExpirationLocalCacheManager = this.getCacheManager(CacheManagerExpiration.DAYS.getExpiration(environment));
+		this.daysExpirationLocalCacheManager = this.getCacheManager(CacheManagerExpiration.DAYS, environment);
 		return this.daysExpirationLocalCacheManager;
 	}
 

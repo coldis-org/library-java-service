@@ -1,0 +1,89 @@
+package org.coldis.library.service.cache;
+
+import java.util.function.Supplier;
+
+import org.springframework.cache.Cache;
+import org.springframework.cache.caffeine.CaffeineCacheManager;
+
+import io.micrometer.core.instrument.MeterRegistry;
+import io.micrometer.core.instrument.Tags;
+import io.micrometer.core.instrument.binder.cache.CaffeineCacheMetrics;
+
+/**
+ * Caffeine cache manager that publishes each cache's metrics (gets by hit and miss, puts, evictions, size) through
+ * Micrometer's vendor-neutral {@link CaffeineCacheMetrics} binder when the cache is created. The library's caches are
+ * created by name on first use, after Spring Boot's startup-time cache metrics registrar ran, so they are bound here
+ * instead. Meters are tagged with the cache name ({@code cache}) and the cache manager bean name
+ * ({@value #CACHE_MANAGER_TAG}, as Spring Boot tags them). A cache is bound only when it records stats and the meter
+ * registry supplier gives a registry; otherwise nothing is published.
+ */
+public class MeteredCaffeineCacheManager extends CaffeineCacheManager {
+
+	/**
+	 * Tag with the cache manager bean name (the same as Spring Boot's cache metrics).
+	 */
+	public static final String CACHE_MANAGER_TAG = "cache.manager";
+
+	/**
+	 * Cache manager bean name.
+	 */
+	private final String cacheManagerName;
+
+	/**
+	 * Meter registry supplier: gives null when there is no registry or metrics are off.
+	 */
+	private final Supplier<MeterRegistry> meterRegistrySupplier;
+
+	/**
+	 * Constructor.
+	 *
+	 * @param cacheManagerName      Cache manager bean name.
+	 * @param meterRegistrySupplier Meter registry supplier (gives null when there is no registry or metrics are off).
+	 */
+	public MeteredCaffeineCacheManager(final String cacheManagerName, final Supplier<MeterRegistry> meterRegistrySupplier) {
+		super();
+		this.cacheManagerName = cacheManagerName;
+		this.meterRegistrySupplier = meterRegistrySupplier;
+	}
+
+	/**
+	 * Gets the cache manager bean name.
+	 *
+	 * @return The cache manager bean name.
+	 */
+	public String getCacheManagerName() {
+		return this.cacheManagerName;
+	}
+
+	/**
+	 * Binds the cache metrics to the meter registry, if the cache records stats and there is a registry.
+	 *
+	 * @param name  Cache name.
+	 * @param cache Native cache.
+	 */
+	private void bindMetrics(
+			final String name,
+			final com.github.benmanes.caffeine.cache.Cache<Object, Object> cache) {
+		if (cache.policy().isRecordingStats()) {
+			final MeterRegistry meterRegistry = this.meterRegistrySupplier.get();
+			if (meterRegistry != null) {
+				CaffeineCacheMetrics.monitor(meterRegistry, cache, name, Tags.of(MeteredCaffeineCacheManager.CACHE_MANAGER_TAG, this.cacheManagerName));
+			}
+		}
+	}
+
+	/**
+	 * Binds the metrics of each cache as it is created.
+	 *
+	 * @see org.springframework.cache.caffeine.CaffeineCacheManager#adaptCaffeineCache(java.lang.String,
+	 *      com.github.benmanes.caffeine.cache.Cache)
+	 */
+	@Override
+	protected Cache adaptCaffeineCache(
+			final String name,
+			final com.github.benmanes.caffeine.cache.Cache<Object, Object> cache) {
+		this.bindMetrics(name, cache);
+		return super.adaptCaffeineCache(name, cache);
+	}
+
+}

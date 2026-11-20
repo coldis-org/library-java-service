@@ -6,13 +6,14 @@ import org.springframework.context.annotation.Configuration;
 import org.springframework.scheduling.annotation.Scheduled;
 
 /**
- * Local cache stats.
+ * Local cache stats debug log: every five minutes, each local cache's estimated size and stats, at debug level. On while
+ * the local caches record stats (the default).
  */
 @Configuration
 @ConditionalOnProperty(
 		value = LocalCacheAutoConfiguration.RECORD_STATS_PROPERTY,
 		havingValue = "true",
-		matchIfMissing = false
+		matchIfMissing = true
 )
 @ConditionalOnProperty(
 		name = LocalCacheAutoConfiguration.ENABLED_PROPERTY,
@@ -27,19 +28,23 @@ class LocalCacheStatsConfiguration {
 	private final LocalCacheAutoConfiguration localCacheAutoConfiguration;
 
 	/**
-	 * TODO Javadoc
+	 * Constructor.
 	 *
-	 * @param localCacheAutoConfiguration Javadoc
+	 * @param localCacheAutoConfiguration Local cache configuration.
 	 */
 	LocalCacheStatsConfiguration(final LocalCacheAutoConfiguration localCacheAutoConfiguration) {
 		this.localCacheAutoConfiguration = localCacheAutoConfiguration;
 	}
 
 	/**
-	 * Logs stats.
+	 * Logs stats, if debug logging is on (stats recording is now on by default, so the scheduled run costs nothing
+	 * otherwise).
 	 */
 	@Scheduled(cron = "0 */5 * * * *")
 	public void logStats() {
+		if (!LocalCacheAutoConfiguration.LOGGER.isDebugEnabled()) {
+			return;
+		}
 		this.localCacheAutoConfiguration.millisExpirationLocalCacheManager.getCacheNames().forEach(name -> LocalCacheAutoConfiguration.LOGGER.debug("Cache '"
 				+ name + "' estimated size in '"
 				+ ((CaffeineCache) this.localCacheAutoConfiguration.millisExpirationLocalCacheManager.getCache(name)).getNativeCache().estimatedSize()

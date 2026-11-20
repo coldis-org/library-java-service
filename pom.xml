@@ -201,6 +201,12 @@
 			<optional>true</optional>
 		</dependency>
 
+		<!-- Vendor-neutral metrics API the library publishes through (cache metrics); the version comes from the
+		     parent BOM. -->
+		<dependency>
+			<groupId>io.micrometer</groupId>
+			<artifactId>micrometer-core</artifactId>
+		</dependency>
 		<dependency>
 			<groupId>io.micrometer</groupId>
 			<artifactId>micrometer-registry-prometheus</artifactId>
