@@ -2,6 +2,7 @@ package org.coldis.library.test.service.cache;
 
 import java.math.BigDecimal;
 import java.util.Set;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import org.coldis.library.test.service.cache.CacheTest.TestData;
 import org.springframework.cache.annotation.Cacheable;
@@ -134,6 +135,26 @@ public class CachedService {
 	public CacheSimpleObject2 getFromLocalCache4() {
 		CachedService.ATTR_1++;
 		return new CacheSimpleObject2(new BigDecimal(CachedService.ATTR_1));
+	}
+
+	/**
+	 * Calls that reached the metered local cached method.
+	 */
+	private final AtomicInteger meteredLocalCalls = new AtomicInteger();
+
+	/**
+	 * Counts a call behind a local minutes cache of its own (for the cache metrics test).
+	 *
+	 * @param  key Key.
+	 * @return     How many calls reached the method so far.
+	 */
+	@Cacheable(
+			cacheManager = "minutesExpirationLocalCacheManager",
+			value = "cachedService-getFromMeteredLocalCache"
+	)
+	public Integer getFromMeteredLocalCache(
+			final String key) {
+		return this.meteredLocalCalls.incrementAndGet();
 	}
 
 }

@@ -9,6 +9,8 @@ import java.util.function.Supplier;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.BeansException;
+import org.springframework.beans.factory.BeanFactory;
+import org.springframework.beans.factory.BeanFactoryAware;
 import org.springframework.beans.factory.config.ConfigurableListableBeanFactory;
 import org.springframework.beans.factory.support.BeanDefinitionRegistry;
 import org.springframework.beans.factory.support.BeanDefinitionRegistryPostProcessor;
@@ -18,6 +20,8 @@ import org.springframework.cache.support.NoOpCacheManager;
 import org.springframework.core.Ordered;
 import org.springframework.core.env.Environment;
 
+import io.micrometer.core.instrument.MeterRegistry;
+
 /**
  * Registers a cache manager under each library cache manager name that has none once every configuration is read, so
  * a method cached with a manager the service does not configure is called through instead of failing. The cache aspect
@@ -26,7 +30,7 @@ import org.springframework.core.env.Environment;
  * service fails to start (no default cache manager among the six central ones). Names that have a bean (Redis or local
  * configured) are left as they are.
  */
-public class CacheManagerFallbackRegistrar implements BeanDefinitionRegistryPostProcessor, Ordered {
+public class CacheManagerFallbackRegistrar implements BeanDefinitionRegistryPostProcessor, BeanFactoryAware, Ordered {
 
 	/**
 	 * Logger.
@@ -42,6 +46,11 @@ public class CacheManagerFallbackRegistrar implements BeanDefinitionRegistryPost
 	 * Environment.
 	 */
 	private final Environment environment;
+
+	/**
+	 * Bean factory (looks the meter registry up when a local fallback cache is created).
+	 */
+	private BeanFactory beanFactory;
 
 	/**
 	 * Constructor.
@@ -69,17 +78,28 @@ public class CacheManagerFallbackRegistrar implements BeanDefinitionRegistryPost
 	}
 
 	/**
-	 * Creates a local cache manager with the central cache manager's expiration. It records no stats: the local cache
-	 * stats configuration logs only the local cache managers.
+	 * @see org.springframework.beans.factory.BeanFactoryAware#setBeanFactory(org.springframework.beans.factory.BeanFactory)
+	 */
+	@Override
+	public void setBeanFactory(
+			final BeanFactory beanFactory) throws BeansException {
+		this.beanFactory = beanFactory;
+	}
+
+	/**
+	 * Creates a local cache manager with the central cache manager's expiration. It records stats and publishes metrics
+	 * as the local cache managers do (tagged with the central cache manager name); the local cache stats debug log
+	 * covers only the local cache managers.
 	 *
 	 * @param  expiration Expiration.
 	 * @return            The local cache manager.
 	 */
 	private CacheManager createLocalCacheManager(
 			final CacheManagerExpiration expiration) {
-		return LocalCacheAutoConfiguration.createCacheManager(expiration.getExpiration(this.environment),
+		return LocalCacheAutoConfiguration.createCacheManager(expiration.getCentralCacheManagerName(), expiration.getExpiration(this.environment),
 				this.environment.getProperty(LocalCacheAutoConfiguration.MAXIMUM_SIZE_PROPERTY, Long.class),
-				false);
+				LocalCacheAutoConfiguration.shouldRecordStats(this.environment), LocalCacheAutoConfiguration.shouldPublishMetrics(this.environment),
+				this.beanFactory.getBeanProvider(MeterRegistry.class)::getIfUnique);
 	}
 
 	/**

@@ -4,6 +4,7 @@ import java.io.Serializable;
 
 import org.coldis.library.service.cache.CacheManagerExpiration;
 import org.coldis.library.service.cache.CacheManagerFallbackRegistrar;
+import org.coldis.library.service.cache.MeteredCaffeineCacheManager;
 import org.coldis.library.test.StartTestWithContainerExtension;
 import org.coldis.library.test.TestHelper;
 import org.coldis.library.test.TestWithContainer;
@@ -23,6 +24,9 @@ import org.springframework.context.ApplicationContext;
 import org.springframework.data.redis.cache.RedisCacheManager;
 import org.springframework.test.annotation.DirtiesContext;
 import org.testcontainers.containers.GenericContainer;
+
+import io.micrometer.core.instrument.FunctionCounter;
+import io.micrometer.core.instrument.MeterRegistry;
 
 /**
  * Test.
@@ -49,6 +53,12 @@ public class CacheTest extends ContainerTestHelper {
 	 */
 	@Autowired
 	private ApplicationContext applicationContext;
+
+	/**
+	 * Meter registry of the context.
+	 */
+	@Autowired
+	private MeterRegistry meterRegistry;
 
 	public class TestData implements Serializable {
 
@@ -197,6 +207,43 @@ public class CacheTest extends ContainerTestHelper {
 		}
 		Assertions.assertTrue(this.applicationContext.getBeansOfType(CacheManager.class).values().stream()
 				.noneMatch(cacheManager -> cacheManager instanceof NoOpCacheManager));
+	}
+
+	/**
+	 * Gets the gets of the metered local cache with a result.
+	 *
+	 * @param  result Result (hit or miss).
+	 * @return        The gets with the result.
+	 */
+	private double getMeteredLocalCacheGets(
+			final String result) {
+		final FunctionCounter gets = this.meterRegistry.find("cache.gets").tag("cache", "cachedService-getFromMeteredLocalCache")
+				.tag(MeteredCaffeineCacheManager.CACHE_MANAGER_TAG, "minutesExpirationLocalCacheManager").tag("result", result).functionCounter();
+		Assertions.assertNotNull(gets);
+		return gets.count();
+	}
+
+	/**
+	 * Tests that a local cache created on first use publishes its hits, misses and size to the context's meter
+	 * registry, tagged with the cache and cache manager names.
+	 */
+	@Test
+	@DisplayName("A local cache publishes hits, misses and size tagged with the cache and cache manager names")
+	public void testLocalCacheMetrics() {
+		final String key = "metrics-" + System.nanoTime();
+		final Integer firstValue = this.cachedService.getFromMeteredLocalCache(key);
+		final double hitsBefore = this.getMeteredLocalCacheGets("hit");
+		final double missesBefore = this.getMeteredLocalCacheGets("miss");
+		Assertions.assertTrue(missesBefore >= 1);
+		Assertions.assertEquals(firstValue, this.cachedService.getFromMeteredLocalCache(key));
+		Assertions.assertEquals(firstValue, this.cachedService.getFromMeteredLocalCache(key));
+		this.cachedService.getFromMeteredLocalCache(key + "-other");
+		Assertions.assertEquals(hitsBefore + 2, this.getMeteredLocalCacheGets("hit"));
+		Assertions.assertEquals(missesBefore + 1, this.getMeteredLocalCacheGets("miss"));
+		Assertions.assertTrue(this.meterRegistry.get("cache.size").tag("cache", "cachedService-getFromMeteredLocalCache")
+				.tag(MeteredCaffeineCacheManager.CACHE_MANAGER_TAG, "minutesExpirationLocalCacheManager").gauge().value() >= 2);
+		Assertions.assertNotNull(this.meterRegistry.find("cache.evictions").tag("cache", "cachedService-getFromMeteredLocalCache")
+				.tag(MeteredCaffeineCacheManager.CACHE_MANAGER_TAG, "minutesExpirationLocalCacheManager").functionCounter());
 	}
 
 }
