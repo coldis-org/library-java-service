@@ -10,13 +10,14 @@ import io.micrometer.core.instrument.Tags;
 import io.micrometer.core.instrument.binder.cache.CaffeineCacheMetrics;
 
 /**
- * Caffeine cache manager that publishes each cache's metrics (gets by hit and miss, puts, evictions, size) through
+ * Caffeine cache manager that publishes each cache's metrics (gets by hit and miss, evictions, size) through
  * Micrometer's vendor-neutral {@link CaffeineCacheMetrics} binder when the cache is created. The library's caches are
  * created by name on first use, after Spring Boot's startup-time cache metrics registrar ran, so they are bound here
  * instead. Meters are tagged with the cache name ({@code cache}) and the full cache manager bean name
  * ({@value #CACHE_MANAGER_TAG}: Spring Boot's tag key; Spring Boot's value drops a trailing "cacheManager", this one
  * keeps the whole bean name). A cache is bound only when metrics are on, it records stats and the meter registry
- * supplier gives a registry; otherwise nothing is published.
+ * supplier gives a registry; otherwise nothing is published. The binder's {@code cache.puts} counts Caffeine loads,
+ * which only synchronized cached methods ({@code @Cacheable(sync = true)}) make: plain cached methods leave it at zero.
  */
 public class MeteredCaffeineCacheManager extends CaffeineCacheManager {
 
