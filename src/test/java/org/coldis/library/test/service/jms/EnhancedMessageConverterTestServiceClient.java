@@ -9,14 +9,12 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 
-import org.apache.commons.collections4.CollectionUtils;
 import org.apache.commons.lang3.ArrayUtils;
 import org.apache.commons.lang3.StringUtils;
 import org.apache.commons.lang3.reflect.MethodUtils;
 import org.coldis.library.exception.BusinessException;
 import org.coldis.library.exception.IntegrationException;
 import org.coldis.library.helper.ObjectHelper;
-import org.coldis.library.helper.RandomHelper;
 import org.coldis.library.helper.ReflectionHelper;
 import org.coldis.library.model.SimpleMessage;
 import org.coldis.library.service.client.GenericRestServiceClient;
@@ -83,6 +81,15 @@ public class EnhancedMessageConverterTestServiceClient implements ApplicationCon
 	 */
 	@Value("${org.coldis.library.service-client.always-sync:false}")
 	private Boolean alwaysSync;
+
+	/**
+	 * Read timeout of this client's calls, in seconds:
+	 * org.coldis.library.service-client.timeout.EnhancedMessageConverterTestServiceClient (none, zero or negative: the template's).
+	 * Applies only to templates whose request factory is the library's (ServiceClientRequestFactory).
+	 * The key sits under the global timeout's, so in YAML it is written flat (quoted), not nested.
+	 */
+	@Value("${org.coldis.library.service-client.timeout.EnhancedMessageConverterTestServiceClient:#{null}}")
+	private Long readTimeoutSeconds;
 
 	/**
 	 * JMS template.
@@ -171,7 +178,7 @@ public class EnhancedMessageConverterTestServiceClient implements ApplicationCon
 	}
 
 	/**
-	 * Gets all available endpoints.
+	 * Gets all available endpoints (the operation fails over them).
 	 * @return All available endpoints.
 	 */
 	private List<String> getEndpoints() {
@@ -179,15 +186,6 @@ public class EnhancedMessageConverterTestServiceClient implements ApplicationCon
 		return (endpoints == null ? null : List.of(endpoints.split(",")));
 	}
 
-	/**
-	 * Gets one endpoint (balanced).
-	 * @return One endpoint (balanced).
-	 */
-	private String getEndpoint() {
-		List<String> endpoints = this.getEndpoints();
-		return (CollectionUtils.isEmpty(endpoints) ? "" : endpoints.get(RandomHelper.getPositiveRandomLong((long) (endpoints.size())).intValue()));
-	}
-	
 	/**
 	 * Gets the service path.
 	 * @return The service path.
@@ -224,7 +222,7 @@ java.lang.Long sessionAttrN
 		// Operation parameters.
 		String endpointPath = endpointPath1;
 		endpointPath = (StringUtils.isBlank(endpointPath) || endpointPath.startsWith("/") ? endpointPath : "/" + endpointPath);
-		StringBuilder url = new StringBuilder(this.getEndpoint() + this.getPath() + endpointPath + "?");
+		StringBuilder pathAndQuery = new StringBuilder(this.getPath() + endpointPath + "?");
 		final HttpMethod method = HttpMethod.POST;
 		final MultiValueMap<String, String> headers = new LinkedMultiValueMap<>();
 		Object body = null;
@@ -242,7 +240,7 @@ MediaType.APPLICATION_JSON_VALUE);
 			for (Integer parameterItemIndex = 0; parameterItemIndex < queues.size(); parameterItemIndex++) {
 				// Adds the URI parameter to the map.
 				uriParameters.put("queue" + parameterItemIndex, queues.get(parameterItemIndex));
-				url.append("queue={queue" + parameterItemIndex + "}&");
+				pathAndQuery.append("queue={queue" + parameterItemIndex + "}&");
 			}
 		}
 		// If the parameter is a collection.
@@ -252,14 +250,14 @@ MediaType.APPLICATION_JSON_VALUE);
 			for (Integer parameterItemIndex = 0; queues.hasNext(); parameterItemIndex++) {
 				// Adds the URI parameter to the map.
 				uriParameters.put("queue" + parameterItemIndex, queues.next());
-				url.append("queue={queue" + parameterItemIndex + "}&");
+				pathAndQuery.append("queue={queue" + parameterItemIndex + "}&");
 			}
 		}
 		// If the parameter is not a collection nor an array.
 		else if (queue != null) {
 			// Adds the URI parameter to the map.
 			uriParameters.put("queue", queue);
-			url.append("queue={queue}&");
+			pathAndQuery.append("queue={queue}&");
 		}
 		// Sets the operation body.
 		body = data;
@@ -276,7 +274,7 @@ MediaType.APPLICATION_JSON_VALUE);
 			for (Integer parameterItemIndex = 0; parameterItemIndex < testJmsAttr2s.size(); parameterItemIndex++) {
 				// Adds the URI parameter to the map.
 				uriParameters.put("testJmsAttr2" + parameterItemIndex, testJmsAttr2s.get(parameterItemIndex));
-				url.append("testJmsAttr2={testJmsAttr2" + parameterItemIndex + "}&");
+				pathAndQuery.append("testJmsAttr2={testJmsAttr2" + parameterItemIndex + "}&");
 			}
 		}
 		// If the parameter is a collection.
@@ -286,14 +284,14 @@ MediaType.APPLICATION_JSON_VALUE);
 			for (Integer parameterItemIndex = 0; testJmsAttr2s.hasNext(); parameterItemIndex++) {
 				// Adds the URI parameter to the map.
 				uriParameters.put("testJmsAttr2" + parameterItemIndex, testJmsAttr2s.next());
-				url.append("testJmsAttr2={testJmsAttr2" + parameterItemIndex + "}&");
+				pathAndQuery.append("testJmsAttr2={testJmsAttr2" + parameterItemIndex + "}&");
 			}
 		}
 		// If the parameter is not a collection nor an array.
 		else if (testJmsAttr2 != null) {
 			// Adds the URI parameter to the map.
 			uriParameters.put("testJmsAttr2", testJmsAttr2);
-			url.append("testJmsAttr2={testJmsAttr2}&");
+			pathAndQuery.append("testJmsAttr2={testJmsAttr2}&");
 		}
 		// If the parameter is an array.
 		if (sessionAttr3 != null && sessionAttr3.getClass().isArray()) {
@@ -302,7 +300,7 @@ MediaType.APPLICATION_JSON_VALUE);
 			for (Integer parameterItemIndex = 0; parameterItemIndex < sessionAttr3s.size(); parameterItemIndex++) {
 				// Adds the URI parameter to the map.
 				uriParameters.put("sessionAttr3" + parameterItemIndex, sessionAttr3s.get(parameterItemIndex));
-				url.append("sessionAttr3={sessionAttr3" + parameterItemIndex + "}&");
+				pathAndQuery.append("sessionAttr3={sessionAttr3" + parameterItemIndex + "}&");
 			}
 		}
 		// If the parameter is a collection.
@@ -312,14 +310,14 @@ MediaType.APPLICATION_JSON_VALUE);
 			for (Integer parameterItemIndex = 0; sessionAttr3s.hasNext(); parameterItemIndex++) {
 				// Adds the URI parameter to the map.
 				uriParameters.put("sessionAttr3" + parameterItemIndex, sessionAttr3s.next());
-				url.append("sessionAttr3={sessionAttr3" + parameterItemIndex + "}&");
+				pathAndQuery.append("sessionAttr3={sessionAttr3" + parameterItemIndex + "}&");
 			}
 		}
 		// If the parameter is not a collection nor an array.
 		else if (sessionAttr3 != null) {
 			// Adds the URI parameter to the map.
 			uriParameters.put("sessionAttr3", sessionAttr3);
-			url.append("sessionAttr3={sessionAttr3}&");
+			pathAndQuery.append("sessionAttr3={sessionAttr3}&");
 		}
 		// If the parameter is an array.
 		if (sessionAttr4 != null && sessionAttr4.getClass().isArray()) {
@@ -328,7 +326,7 @@ MediaType.APPLICATION_JSON_VALUE);
 			for (Integer parameterItemIndex = 0; parameterItemIndex < sessionAttr4s.size(); parameterItemIndex++) {
 				// Adds the URI parameter to the map.
 				uriParameters.put("sessionAttr4" + parameterItemIndex, sessionAttr4s.get(parameterItemIndex));
-				url.append("sessionAttr4={sessionAttr4" + parameterItemIndex + "}&");
+				pathAndQuery.append("sessionAttr4={sessionAttr4" + parameterItemIndex + "}&");
 			}
 		}
 		// If the parameter is a collection.
@@ -338,14 +336,14 @@ MediaType.APPLICATION_JSON_VALUE);
 			for (Integer parameterItemIndex = 0; sessionAttr4s.hasNext(); parameterItemIndex++) {
 				// Adds the URI parameter to the map.
 				uriParameters.put("sessionAttr4" + parameterItemIndex, sessionAttr4s.next());
-				url.append("sessionAttr4={sessionAttr4" + parameterItemIndex + "}&");
+				pathAndQuery.append("sessionAttr4={sessionAttr4" + parameterItemIndex + "}&");
 			}
 		}
 		// If the parameter is not a collection nor an array.
 		else if (sessionAttr4 != null) {
 			// Adds the URI parameter to the map.
 			uriParameters.put("sessionAttr4", sessionAttr4);
-			url.append("sessionAttr4={sessionAttr4}&");
+			pathAndQuery.append("sessionAttr4={sessionAttr4}&");
 		}
 		// If the parameter is an array.
 		if (sessionAttr5 != null && sessionAttr5.getClass().isArray()) {
@@ -354,7 +352,7 @@ MediaType.APPLICATION_JSON_VALUE);
 			for (Integer parameterItemIndex = 0; parameterItemIndex < sessionAttr5s.size(); parameterItemIndex++) {
 				// Adds the URI parameter to the map.
 				uriParameters.put("sessionAttr5" + parameterItemIndex, sessionAttr5s.get(parameterItemIndex));
-				url.append("sessionAttr5={sessionAttr5" + parameterItemIndex + "}&");
+				pathAndQuery.append("sessionAttr5={sessionAttr5" + parameterItemIndex + "}&");
 			}
 		}
 		// If the parameter is a collection.
@@ -364,14 +362,14 @@ MediaType.APPLICATION_JSON_VALUE);
 			for (Integer parameterItemIndex = 0; sessionAttr5s.hasNext(); parameterItemIndex++) {
 				// Adds the URI parameter to the map.
 				uriParameters.put("sessionAttr5" + parameterItemIndex, sessionAttr5s.next());
-				url.append("sessionAttr5={sessionAttr5" + parameterItemIndex + "}&");
+				pathAndQuery.append("sessionAttr5={sessionAttr5" + parameterItemIndex + "}&");
 			}
 		}
 		// If the parameter is not a collection nor an array.
 		else if (sessionAttr5 != null) {
 			// Adds the URI parameter to the map.
 			uriParameters.put("sessionAttr5", sessionAttr5);
-			url.append("sessionAttr5={sessionAttr5}&");
+			pathAndQuery.append("sessionAttr5={sessionAttr5}&");
 		}
 		// If the parameter is an array.
 		if (testJmsAttr6 != null && testJmsAttr6.getClass().isArray()) {
@@ -380,7 +378,7 @@ MediaType.APPLICATION_JSON_VALUE);
 			for (Integer parameterItemIndex = 0; parameterItemIndex < testJmsAttr6s.size(); parameterItemIndex++) {
 				// Adds the URI parameter to the map.
 				uriParameters.put("testJmsAttr6" + parameterItemIndex, testJmsAttr6s.get(parameterItemIndex));
-				url.append("testJmsAttr6={testJmsAttr6" + parameterItemIndex + "}&");
+				pathAndQuery.append("testJmsAttr6={testJmsAttr6" + parameterItemIndex + "}&");
 			}
 		}
 		// If the parameter is a collection.
@@ -390,14 +388,14 @@ MediaType.APPLICATION_JSON_VALUE);
 			for (Integer parameterItemIndex = 0; testJmsAttr6s.hasNext(); parameterItemIndex++) {
 				// Adds the URI parameter to the map.
 				uriParameters.put("testJmsAttr6" + parameterItemIndex, testJmsAttr6s.next());
-				url.append("testJmsAttr6={testJmsAttr6" + parameterItemIndex + "}&");
+				pathAndQuery.append("testJmsAttr6={testJmsAttr6" + parameterItemIndex + "}&");
 			}
 		}
 		// If the parameter is not a collection nor an array.
 		else if (testJmsAttr6 != null) {
 			// Adds the URI parameter to the map.
 			uriParameters.put("testJmsAttr6", testJmsAttr6);
-			url.append("testJmsAttr6={testJmsAttr6}&");
+			pathAndQuery.append("testJmsAttr6={testJmsAttr6}&");
 		}
 		// If the parameter is an array.
 		if (sessionAttrN != null && sessionAttrN.getClass().isArray()) {
@@ -406,7 +404,7 @@ MediaType.APPLICATION_JSON_VALUE);
 			for (Integer parameterItemIndex = 0; parameterItemIndex < sessionAttrNs.size(); parameterItemIndex++) {
 				// Adds the URI parameter to the map.
 				uriParameters.put("sessionAttrN" + parameterItemIndex, sessionAttrNs.get(parameterItemIndex));
-				url.append("sessionAttrN={sessionAttrN" + parameterItemIndex + "}&");
+				pathAndQuery.append("sessionAttrN={sessionAttrN" + parameterItemIndex + "}&");
 			}
 		}
 		// If the parameter is a collection.
@@ -416,19 +414,20 @@ MediaType.APPLICATION_JSON_VALUE);
 			for (Integer parameterItemIndex = 0; sessionAttrNs.hasNext(); parameterItemIndex++) {
 				// Adds the URI parameter to the map.
 				uriParameters.put("sessionAttrN" + parameterItemIndex, sessionAttrNs.next());
-				url.append("sessionAttrN={sessionAttrN" + parameterItemIndex + "}&");
+				pathAndQuery.append("sessionAttrN={sessionAttrN" + parameterItemIndex + "}&");
 			}
 		}
 		// If the parameter is not a collection nor an array.
 		else if (sessionAttrN != null) {
 			// Adds the URI parameter to the map.
 			uriParameters.put("sessionAttrN", sessionAttrN);
-			url.append("sessionAttrN={sessionAttrN}&");
+			pathAndQuery.append("sessionAttrN={sessionAttrN}&");
 		}
-		// Executes the operation and returns the response.
-this.serviceClient.executeOperation(url.toString(), method, headers,
+		// Executes the operation (failing over the endpoints) and returns the response.
+this.serviceClient.executeOperation(this.getEndpoints(), pathAndQuery.toString(), method, headers,
 				partParameters.isEmpty() ? body : partParameters,
-				uriParameters, returnType);
+				uriParameters, returnType, null,
+				(this.readTimeoutSeconds == null ? null : java.time.Duration.ofSeconds(this.readTimeoutSeconds)), "EnhancedMessageConverterTestServiceClient");
 				
 	}
 	
