@@ -87,17 +87,6 @@ public class CacheManagerFallbackRegistrar implements BeanDefinitionRegistryPost
 	}
 
 	/**
-	 * Gets the meter registry the local fallback caches publish their metrics to.
-	 *
-	 * @return The meter registry, or null if metrics are off or the context has no single (or primary) registry.
-	 */
-	private MeterRegistry getMeterRegistry() {
-		return (this.environment.getProperty(LocalCacheAutoConfiguration.METRICS_ENABLED_PROPERTY, Boolean.class, true)
-				? this.beanFactory.getBeanProvider(MeterRegistry.class).getIfUnique()
-				: null);
-	}
-
-	/**
 	 * Creates a local cache manager with the central cache manager's expiration. It records stats and publishes metrics
 	 * as the local cache managers do (tagged with the central cache manager name); the local cache stats debug log
 	 * covers only the local cache managers.
@@ -109,7 +98,8 @@ public class CacheManagerFallbackRegistrar implements BeanDefinitionRegistryPost
 			final CacheManagerExpiration expiration) {
 		return LocalCacheAutoConfiguration.createCacheManager(expiration.getCentralCacheManagerName(), expiration.getExpiration(this.environment),
 				this.environment.getProperty(LocalCacheAutoConfiguration.MAXIMUM_SIZE_PROPERTY, Long.class),
-				this.environment.getProperty(LocalCacheAutoConfiguration.RECORD_STATS_PROPERTY, Boolean.class, true), this::getMeterRegistry);
+				LocalCacheAutoConfiguration.shouldRecordStats(this.environment), LocalCacheAutoConfiguration.shouldPublishMetrics(this.environment),
+				this.beanFactory.getBeanProvider(MeterRegistry.class)::getIfUnique);
 	}
 
 	/**

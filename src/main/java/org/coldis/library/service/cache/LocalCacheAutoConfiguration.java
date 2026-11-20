@@ -140,9 +140,10 @@ public class LocalCacheAutoConfiguration {
 	 */
 	public static final String RECORD_STATS_PROPERTY = "org.coldis.configuration.cache.local.record-stats";
 
-	/** If stats should be recorded. */
-	@Value(value = "${" + LocalCacheAutoConfiguration.RECORD_STATS_PROPERTY + ":true}")
-	private Boolean stats;
+	/**
+	 * Default of {@value #RECORD_STATS_PROPERTY}.
+	 */
+	static final boolean RECORD_STATS_DEFAULT = true;
 
 	/**
 	 * Property that turns the local cache metrics on (the default) or off. On, each local cache that records stats is
@@ -150,9 +151,33 @@ public class LocalCacheAutoConfiguration {
 	 */
 	public static final String METRICS_ENABLED_PROPERTY = "org.coldis.configuration.cache.local.metrics-enabled";
 
-	/** If the local caches publish metrics. */
-	@Value(value = "${" + LocalCacheAutoConfiguration.METRICS_ENABLED_PROPERTY + ":true}")
-	private Boolean metricsEnabled;
+	/**
+	 * Default of {@value #METRICS_ENABLED_PROPERTY}.
+	 */
+	static final boolean METRICS_ENABLED_DEFAULT = true;
+
+	/**
+	 * Gets whether the local caches (local cache managers and the local central fallback) record stats.
+	 *
+	 * @param  environment Environment.
+	 * @return             Whether the local caches record stats.
+	 */
+	static Boolean shouldRecordStats(
+			final Environment environment) {
+		return environment.getProperty(LocalCacheAutoConfiguration.RECORD_STATS_PROPERTY, Boolean.class, LocalCacheAutoConfiguration.RECORD_STATS_DEFAULT);
+	}
+
+	/**
+	 * Gets whether the local caches (local cache managers and the local central fallback) publish metrics.
+	 *
+	 * @param  environment Environment.
+	 * @return             Whether the local caches publish metrics.
+	 */
+	static Boolean shouldPublishMetrics(
+			final Environment environment) {
+		return environment.getProperty(LocalCacheAutoConfiguration.METRICS_ENABLED_PROPERTY, Boolean.class,
+				LocalCacheAutoConfiguration.METRICS_ENABLED_DEFAULT);
+	}
 
 	/**
 	 * Cache manager.
@@ -191,8 +216,9 @@ public class LocalCacheAutoConfiguration {
 	 * @param  expiration            Expiration after write.
 	 * @param  maximumSize           Maximum entries per cache (unbounded if null or not positive).
 	 * @param  shouldRecordStats     If stats should be recorded.
+	 * @param  shouldPublishMetrics  If the caches publish metrics.
 	 * @param  meterRegistrySupplier Meter registry supplier, read when each cache is created (null when there is no
-	 *                                   registry or metrics are off).
+	 *                                   single or primary registry).
 	 * @return                       Cache manager.
 	 */
 	static CaffeineCacheManager createCacheManager(
@@ -200,8 +226,10 @@ public class LocalCacheAutoConfiguration {
 			final Duration expiration,
 			final Long maximumSize,
 			final Boolean shouldRecordStats,
+			final Boolean shouldPublishMetrics,
 			final Supplier<MeterRegistry> meterRegistrySupplier) {
-		final CaffeineCacheManager cacheManager = new MeteredCaffeineCacheManager(cacheManagerName, meterRegistrySupplier);
+		final CaffeineCacheManager cacheManager = new MeteredCaffeineCacheManager(cacheManagerName, Boolean.TRUE.equals(shouldPublishMetrics),
+				meterRegistrySupplier);
 		Caffeine<Object, Object> caffeine = Caffeine.newBuilder().expireAfterWrite(expiration);
 		if ((maximumSize != null) && (maximumSize > 0)) {
 			caffeine = caffeine.maximumSize(maximumSize);
@@ -211,15 +239,6 @@ public class LocalCacheAutoConfiguration {
 		}
 		cacheManager.setCaffeine(caffeine);
 		return cacheManager;
-	}
-
-	/**
-	 * Gets the meter registry the local caches publish their metrics to.
-	 *
-	 * @return The meter registry, or null if metrics are off or the context has no single (or primary) registry.
-	 */
-	private MeterRegistry getMeterRegistry() {
-		return (Boolean.TRUE.equals(this.metricsEnabled) ? this.meterRegistryProvider.getIfUnique() : null);
 	}
 
 	/**
@@ -233,7 +252,8 @@ public class LocalCacheAutoConfiguration {
 			final CacheManagerExpiration expiration,
 			final Environment environment) {
 		return LocalCacheAutoConfiguration.createCacheManager(expiration.getLocalCacheManagerName(), expiration.getExpiration(environment), this.maximumSize,
-				this.stats, this::getMeterRegistry);
+				LocalCacheAutoConfiguration.shouldRecordStats(environment), LocalCacheAutoConfiguration.shouldPublishMetrics(environment),
+				this.meterRegistryProvider::getIfUnique);
 	}
 
 	/**

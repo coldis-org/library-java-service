@@ -13,14 +13,15 @@ import io.micrometer.core.instrument.binder.cache.CaffeineCacheMetrics;
  * Caffeine cache manager that publishes each cache's metrics (gets by hit and miss, puts, evictions, size) through
  * Micrometer's vendor-neutral {@link CaffeineCacheMetrics} binder when the cache is created. The library's caches are
  * created by name on first use, after Spring Boot's startup-time cache metrics registrar ran, so they are bound here
- * instead. Meters are tagged with the cache name ({@code cache}) and the cache manager bean name
- * ({@value #CACHE_MANAGER_TAG}, as Spring Boot tags them). A cache is bound only when it records stats and the meter
- * registry supplier gives a registry; otherwise nothing is published.
+ * instead. Meters are tagged with the cache name ({@code cache}) and the full cache manager bean name
+ * ({@value #CACHE_MANAGER_TAG}: Spring Boot's tag key; Spring Boot's value drops a trailing "cacheManager", this one
+ * keeps the whole bean name). A cache is bound only when metrics are on, it records stats and the meter registry
+ * supplier gives a registry; otherwise nothing is published.
  */
 public class MeteredCaffeineCacheManager extends CaffeineCacheManager {
 
 	/**
-	 * Tag with the cache manager bean name (the same as Spring Boot's cache metrics).
+	 * Tag with the cache manager bean name (Spring Boot's cache metrics tag key).
 	 */
 	public static final String CACHE_MANAGER_TAG = "cache.manager";
 
@@ -30,7 +31,12 @@ public class MeteredCaffeineCacheManager extends CaffeineCacheManager {
 	private final String cacheManagerName;
 
 	/**
-	 * Meter registry supplier: gives null when there is no registry or metrics are off.
+	 * If the caches publish metrics.
+	 */
+	private final boolean shouldPublishMetrics;
+
+	/**
+	 * Meter registry supplier: gives null when there is no single (or primary) registry.
 	 */
 	private final Supplier<MeterRegistry> meterRegistrySupplier;
 
@@ -38,11 +44,16 @@ public class MeteredCaffeineCacheManager extends CaffeineCacheManager {
 	 * Constructor.
 	 *
 	 * @param cacheManagerName      Cache manager bean name.
-	 * @param meterRegistrySupplier Meter registry supplier (gives null when there is no registry or metrics are off).
+	 * @param shouldPublishMetrics  If the caches publish metrics.
+	 * @param meterRegistrySupplier Meter registry supplier (gives null when there is no single or primary registry).
 	 */
-	public MeteredCaffeineCacheManager(final String cacheManagerName, final Supplier<MeterRegistry> meterRegistrySupplier) {
+	public MeteredCaffeineCacheManager(
+			final String cacheManagerName,
+			final boolean shouldPublishMetrics,
+			final Supplier<MeterRegistry> meterRegistrySupplier) {
 		super();
 		this.cacheManagerName = cacheManagerName;
+		this.shouldPublishMetrics = shouldPublishMetrics;
 		this.meterRegistrySupplier = meterRegistrySupplier;
 	}
 
@@ -56,7 +67,7 @@ public class MeteredCaffeineCacheManager extends CaffeineCacheManager {
 	}
 
 	/**
-	 * Binds the cache metrics to the meter registry, if the cache records stats and there is a registry.
+	 * Binds the cache metrics to the meter registry, if metrics are on, the cache records stats and there is a registry.
 	 *
 	 * @param name  Cache name.
 	 * @param cache Native cache.
@@ -64,7 +75,7 @@ public class MeteredCaffeineCacheManager extends CaffeineCacheManager {
 	private void bindMetrics(
 			final String name,
 			final com.github.benmanes.caffeine.cache.Cache<Object, Object> cache) {
-		if (cache.policy().isRecordingStats()) {
+		if (this.shouldPublishMetrics && cache.policy().isRecordingStats()) {
 			final MeterRegistry meterRegistry = this.meterRegistrySupplier.get();
 			if (meterRegistry != null) {
 				CaffeineCacheMetrics.monitor(meterRegistry, cache, name, Tags.of(MeteredCaffeineCacheManager.CACHE_MANAGER_TAG, this.cacheManagerName));

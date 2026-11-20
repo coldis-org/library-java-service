@@ -13,7 +13,7 @@ import org.springframework.scheduling.annotation.Scheduled;
 @ConditionalOnProperty(
 		value = LocalCacheAutoConfiguration.RECORD_STATS_PROPERTY,
 		havingValue = "true",
-		matchIfMissing = true
+		matchIfMissing = LocalCacheAutoConfiguration.RECORD_STATS_DEFAULT
 )
 @ConditionalOnProperty(
 		name = LocalCacheAutoConfiguration.ENABLED_PROPERTY,

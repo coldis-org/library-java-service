@@ -43,12 +43,13 @@ public class RequestLatencyHistogramTest extends ContainerTestHelper {
 
 	/**
 	 * Tests that, after a request, the server requests timer of its URI has the default service level objective buckets
-	 * and counts the request in them, while no client requests timer has buckets.
+	 * and counts the request (client requests, which get no buckets, are checked in
+	 * {@link RequestLatencyHistogramPropertiesTest}).
 	 *
 	 * @throws Exception If the test fails.
 	 */
 	@Test
-	@DisplayName("After a request, the server requests timer has the default buckets; client request timers have none")
+	@DisplayName("After a request, the server requests timer has the default buckets")
 	public void testServerRequestHistogram() throws Exception {
 		this.healthCheckServiceClient.check();
 		final List<Timer> serverTimers = this.meterRegistry.find("http.server.requests").timers().stream()
@@ -59,8 +60,6 @@ public class RequestLatencyHistogramTest extends ContainerTestHelper {
 					Arrays.stream(serverTimer.takeSnapshot().histogramCounts()).mapToDouble(bucket -> bucket.bucket(TimeUnit.MILLISECONDS)).toArray());
 			Assertions.assertTrue(serverTimer.count() > 0);
 		}
-		this.meterRegistry.find("http.client.requests").timers()
-				.forEach(clientTimer -> Assertions.assertEquals(0, clientTimer.takeSnapshot().histogramCounts().length));
 	}
 
 }
