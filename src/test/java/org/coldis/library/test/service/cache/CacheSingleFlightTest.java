@@ -1,11 +1,18 @@
 package org.coldis.library.test.service.cache;
 
+import java.lang.reflect.InvocationTargetException;
+import java.lang.reflect.Proxy;
+import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.ArrayList;
+import java.util.Collections;
+import java.util.IdentityHashMap;
 import java.util.List;
 import java.util.Locale;
+import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.Callable;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
@@ -13,6 +20,7 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.function.BiConsumer;
 import java.util.function.BiFunction;
 import java.util.function.Function;
 import java.util.function.IntFunction;
@@ -39,6 +47,7 @@ import org.springframework.cache.caffeine.CaffeineCache;
 import org.springframework.data.redis.cache.RedisCacheConfiguration;
 import org.springframework.data.redis.cache.RedisCacheManager;
 import org.springframework.data.redis.cache.RedisCacheWriter;
+import org.springframework.data.redis.connection.RedisConnection;
 import org.springframework.data.redis.connection.RedisConnectionFactory;
 import org.springframework.data.redis.connection.lettuce.LettuceConnectionFactory;
 
@@ -47,7 +56,8 @@ import com.github.benmanes.caffeine.cache.Caffeine;
 /**
  * Single-flight loads of synchronized cached methods ({@code @Cacheable(sync = true)}) on the central (Redis) and the
  * local (Caffeine) cache managers, through the AspectJ cache aspect and a Redis container, plus the central
- * cross-instance lock (two cache managers on the same Redis) and the hit path cost against the plain caches.
+ * cross-instance lock (two cache managers on the same Redis), evictions during loads, the hit path structure (one
+ * delegate read) and the hit path cost against the plain caches (logged only).
  */
 @TestWithContainer(reuse = true)
 @ExtendWith(StartTestWithContainerExtension.class)
@@ -238,7 +248,9 @@ public class CacheSingleFlightTest extends ContainerTestHelper {
 		}
 		CacheSingleFlightTest.LOGGER.info("{} distinct keys loaded in {}ms (one load takes {}ms).", CacheSingleFlightTest.CONCURRENT_CALLS, wallMillis,
 				CacheSingleFlightTest.SLOW_LOAD_MILLIS);
-		Assertions.assertTrue(wallMillis < (3 * CacheSingleFlightTest.SLOW_LOAD_MILLIS), "Distinct keys took " + wallMillis + "ms.");
+		// Loaded one after the other, the keys would take CONCURRENT_CALLS loads: half of that proves they ran in parallel.
+		Assertions.assertTrue(wallMillis < ((CacheSingleFlightTest.CONCURRENT_CALLS * CacheSingleFlightTest.SLOW_LOAD_MILLIS) / 2),
+				"Distinct keys took " + wallMillis + "ms.");
 	}
 
 	/**
@@ -299,9 +311,10 @@ public class CacheSingleFlightTest extends ContainerTestHelper {
 		slowLoadsExecutor.shutdownNow();
 		CacheSingleFlightTest.LOGGER.info("During slow loads: synchronized hit {}ms, plain cached call {}ms, synchronized load of a new key {}ms.", hitMillis,
 				plainMillis, newKeyMillis);
-		Assertions.assertTrue(hitMillis < 500, "Synchronized hit took " + hitMillis + "ms.");
-		Assertions.assertTrue(plainMillis < 500, "Plain cached call took " + plainMillis + "ms.");
-		Assertions.assertTrue(newKeyMillis < 500, "Synchronized load of a new key took " + newKeyMillis + "ms.");
+		// A call blocked by the slow loads would take most of a slow load: half of one proves it was not.
+		Assertions.assertTrue(hitMillis < (slowLoadMillis / 2), "Synchronized hit took " + hitMillis + "ms.");
+		Assertions.assertTrue(plainMillis < (slowLoadMillis / 2), "Plain cached call took " + plainMillis + "ms.");
+		Assertions.assertTrue(newKeyMillis < (slowLoadMillis / 2), "Synchronized load of a new key took " + newKeyMillis + "ms.");
 	}
 
 	/**
@@ -412,7 +425,9 @@ public class CacheSingleFlightTest extends ContainerTestHelper {
 	}
 
 	/**
-	 * Makes concurrent synchronized loads of one key on two central cache managers (instances) on the same Redis.
+	 * Makes concurrent synchronized loads of one key on two central cache managers (instances) on the same Redis, and
+	 * checks every caller's value (the load number): with the lock, every caller gets the one load's; without it, the
+	 * callers of each instance get their instance's load.
 	 *
 	 * @param  isLockOn  If the cross-instance lock is on.
 	 * @return           The number of loads.
@@ -431,8 +446,17 @@ public class CacheSingleFlightTest extends ContainerTestHelper {
 		};
 		final List<CallOutcome> outcomes = this.callConcurrently(CacheSingleFlightTest.CONCURRENT_CALLS,
 				callIndex -> () -> ((callIndex % 2) == 0 ? firstInstanceCache : secondInstanceCache).get("key", loader));
-		for (final CallOutcome outcome : outcomes) {
+		for (int callIndex = 0; callIndex < outcomes.size(); callIndex++) {
+			final CallOutcome outcome = outcomes.get(callIndex);
 			Assertions.assertNull(outcome.exception());
+			if (isLockOn) {
+				Assertions.assertEquals(1, outcome.value());
+			}
+			else {
+				Assertions.assertTrue(Integer.valueOf(1).equals(outcome.value()) || Integer.valueOf(2).equals(outcome.value()), "Value " + outcome.value() + ".");
+				// The first two calls are one per instance (even indexes on the first, odd ones on the second).
+				Assertions.assertEquals(outcomes.get(callIndex % 2).value(), outcome.value());
+			}
 		}
 		return loads.get();
 	}
@@ -494,6 +518,221 @@ public class CacheSingleFlightTest extends ContainerTestHelper {
 		Assertions.assertTrue(outcomes.get(1).elapsedMillis() < (2 * CacheSingleFlightTest.SLOW_LOAD_MILLIS),
 				"Waited " + outcomes.get(1).elapsedMillis() + "ms.");
 		Assertions.assertEquals(2, loads.get());
+	}
+
+	/**
+	 * Tests that, with the cross-instance lock, a load that fails on one instance reaches its caller, and another
+	 * instance waiting on the lock loads right after (well before the wait timeout), leaving no lock behind.
+	 *
+	 * @throws Exception If the test fails.
+	 */
+	@Test
+	@DisplayName("Central: with the cross-instance lock, a failed load reaches its caller and the waiting instance loads right after")
+	public void testCentralCrossInstanceLockLoadFailure() throws Exception {
+		final String cacheName = "cross-instance-failure-" + UUID.randomUUID();
+		final Duration waitTimeout = Duration.ofSeconds(30);
+		final Cache failingInstanceCache = this.createCentralCacheManager(waitTimeout, true, Duration.ofSeconds(30)).getCache(cacheName);
+		final Cache waitingInstanceCache = this.createCentralCacheManager(waitTimeout, true, Duration.ofSeconds(30)).getCache(cacheName);
+		final AtomicInteger loads = new AtomicInteger();
+		final IllegalStateException failure = new IllegalStateException("Load failed.");
+		final Callable<Integer> failingLoader = () -> {
+			loads.incrementAndGet();
+			Thread.sleep(CacheSingleFlightTest.SLOW_LOAD_MILLIS);
+			throw failure;
+		};
+		final Callable<Integer> loader = () -> {
+			loads.incrementAndGet();
+			return 2;
+		};
+		final List<CallOutcome> outcomes = this.callConcurrently(2, callIndex -> (callIndex == 0) ? () -> failingInstanceCache.get("key", failingLoader) : () -> {
+			Thread.sleep(200);
+			return waitingInstanceCache.get("key", loader);
+		});
+		final Cache.ValueRetrievalException exception = Assertions.assertInstanceOf(Cache.ValueRetrievalException.class, outcomes.get(0).exception());
+		Assertions.assertSame(failure, exception.getCause());
+		Assertions.assertNull(outcomes.get(1).exception());
+		Assertions.assertEquals(2, outcomes.get(1).value());
+		Assertions.assertTrue(outcomes.get(1).elapsedMillis() < (5 * CacheSingleFlightTest.SLOW_LOAD_MILLIS), "Waited " + outcomes.get(1).elapsedMillis() + "ms.");
+		Assertions.assertEquals(2, loads.get());
+		try (RedisConnection connection = this.redisConnectionFactory.getConnection()) {
+			Assertions.assertFalse(connection.keyCommands().exists((cacheName + "::key" + SingleFlightRedisCache.LOCK_KEY_SUFFIX).getBytes(StandardCharsets.UTF_8)));
+			Assertions.assertTrue(connection.keyCommands().exists((cacheName + "::key").getBytes(StandardCharsets.UTF_8)));
+		}
+	}
+
+	/**
+	 * Tests that a central synchronized load that gives null is cached (as the null placeholder) and loaded once.
+	 */
+	@Test
+	@DisplayName("Central: a synchronized load that gives null is loaded once and returns null")
+	public void testCentralNullValueLoadsOnce() {
+		final Cache cache = this.createCentralCacheManager(Duration.ofSeconds(30), false, Duration.ofSeconds(30)).getCache("null-value-" + UUID.randomUUID());
+		final AtomicInteger loads = new AtomicInteger();
+		final Callable<Object> nullLoader = () -> {
+			loads.incrementAndGet();
+			return null;
+		};
+		Assertions.assertNull(cache.get("key", nullLoader));
+		Assertions.assertNull(cache.get("key", nullLoader));
+		Assertions.assertEquals(1, loads.get());
+		final Cache.ValueWrapper storedValue = cache.get("key");
+		Assertions.assertNotNull(storedValue);
+		Assertions.assertNull(storedValue.get());
+	}
+
+	/**
+	 * Tests that concurrent central callers of one load each get a copy of their own of the value.
+	 *
+	 * @throws Exception If the test fails.
+	 */
+	@Test
+	@DisplayName("Central: the callers of one synchronized load each get a copy of their own of the value")
+	public void testCentralCallersGetOwnCopies() throws Exception {
+		final Cache cache = this.createCentralCacheManager(Duration.ofSeconds(30), false, Duration.ofSeconds(30)).getCache("copies-" + UUID.randomUUID());
+		final AtomicInteger loads = new AtomicInteger();
+		final Callable<ArrayList<String>> loader = () -> {
+			loads.incrementAndGet();
+			Thread.sleep(CacheSingleFlightTest.SLOW_LOAD_MILLIS / 2);
+			return new ArrayList<>(List.of("first", "second"));
+		};
+		final List<CallOutcome> outcomes = this.callConcurrently(CacheSingleFlightTest.CONCURRENT_CALLS, callIndex -> () -> cache.get("key", loader));
+		Assertions.assertEquals(1, loads.get());
+		final Set<Object> distinctValues = Collections.newSetFromMap(new IdentityHashMap<>());
+		for (final CallOutcome outcome : outcomes) {
+			Assertions.assertNull(outcome.exception());
+			Assertions.assertEquals(List.of("first", "second"), outcome.value());
+			distinctValues.add(outcome.value());
+		}
+		Assertions.assertEquals(CacheSingleFlightTest.CONCURRENT_CALLS, distinctValues.size());
+	}
+
+	/**
+	 * Tests that an invalidation (an eviction or a clear) during a slow synchronized load wins: the load's caller and
+	 * waiter get its value, but the value is not kept, so the next call loads again.
+	 *
+	 * @param  cache        Cache.
+	 * @param  invalidation Invalidation (cache, key).
+	 * @throws Exception    If the test fails.
+	 */
+	private void testInvalidationDuringLoadWins(
+			final Cache cache,
+			final BiConsumer<Cache, String> invalidation) throws Exception {
+		final String key = "invalidated-" + UUID.randomUUID();
+		final AtomicInteger loads = new AtomicInteger();
+		final CountDownLatch loadStarted = new CountDownLatch(1);
+		final Callable<Integer> slowLoader = () -> {
+			final Integer load = loads.incrementAndGet();
+			loadStarted.countDown();
+			Thread.sleep(CacheSingleFlightTest.SLOW_LOAD_MILLIS / 2);
+			return load;
+		};
+		final ExecutorService executor = Executors.newFixedThreadPool(2);
+		final Future<Integer> slowLoad = executor.submit(() -> cache.get(key, slowLoader));
+		Assertions.assertTrue(loadStarted.await(10, TimeUnit.SECONDS));
+		final Future<Integer> waiter = executor.submit(() -> cache.get(key, slowLoader));
+		Thread.sleep(50);
+		invalidation.accept(cache, key);
+		Assertions.assertEquals(1, slowLoad.get(1, TimeUnit.MINUTES));
+		Assertions.assertEquals(1, waiter.get(1, TimeUnit.MINUTES));
+		executor.shutdownNow();
+		Assertions.assertNull(cache.get(key));
+		Assertions.assertEquals(2, cache.get(key, slowLoader));
+		Assertions.assertEquals(2, cache.get(key, slowLoader));
+		Assertions.assertEquals(2, loads.get());
+		Assertions.assertEquals(0, CacheSingleFlightTest.getInFlightLoadCount(cache));
+	}
+
+	/**
+	 * Tests that an eviction or a clear during a slow local synchronized load wins.
+	 *
+	 * @throws Exception If the test fails.
+	 */
+	@Test
+	@DisplayName("Local: an eviction or a clear during a slow synchronized load wins (the next call loads again)")
+	public void testLocalInvalidationDuringLoadWins() throws Exception {
+		final Cache cache = new SingleFlightCaffeineCache("invalidation", Caffeine.newBuilder().build(), true, Duration.ofSeconds(30));
+		this.testInvalidationDuringLoadWins(cache, Cache::evict);
+		this.testInvalidationDuringLoadWins(cache, Cache::evictIfPresent);
+		this.testInvalidationDuringLoadWins(cache, (invalidatedCache, key) -> invalidatedCache.clear());
+		this.testInvalidationDuringLoadWins(cache, (invalidatedCache, key) -> invalidatedCache.invalidate());
+	}
+
+	/**
+	 * Tests that an eviction or a clear during a slow central synchronized load wins.
+	 *
+	 * @throws Exception If the test fails.
+	 */
+	@Test
+	@DisplayName("Central: an eviction or a clear during a slow synchronized load wins (the next call loads again)")
+	public void testCentralInvalidationDuringLoadWins() throws Exception {
+		final Cache cache = this.createCentralCacheManager(Duration.ofSeconds(30), false, Duration.ofSeconds(30)).getCache("invalidation-" + UUID.randomUUID());
+		this.testInvalidationDuringLoadWins(cache, Cache::evict);
+		this.testInvalidationDuringLoadWins(cache, Cache::evictIfPresent);
+		this.testInvalidationDuringLoadWins(cache, (invalidatedCache, key) -> invalidatedCache.clear());
+		this.testInvalidationDuringLoadWins(cache, (invalidatedCache, key) -> invalidatedCache.invalidate());
+	}
+
+	/**
+	 * Wraps an object in a proxy of one of its interfaces that records the name of every method called on it.
+	 *
+	 * @param  type     Interface.
+	 * @param  delegate Object.
+	 * @param  calls    Called method names.
+	 * @return          The proxy.
+	 */
+	private static Object recordCalls(
+			final Class<?> type,
+			final Object delegate,
+			final List<String> calls) {
+		return Proxy.newProxyInstance(type.getClassLoader(), new Class<?>[] { type }, (proxy, method, arguments) -> {
+			calls.add(method.getName());
+			try {
+				return method.invoke(delegate, arguments);
+			}
+			catch (final InvocationTargetException exception) {
+				throw exception.getCause();
+			}
+		});
+	}
+
+	/**
+	 * Tests that a single-flight hit (synchronized or not) is one read of the delegate cache: no load and no in-flight
+	 * registration (a registered load would read the delegate again or call the loader).
+	 */
+	@Test
+	@DisplayName("A single-flight hit is one read of the delegate cache (synchronized and not), with no load")
+	@SuppressWarnings("unchecked")
+	public void testHitIsOneDelegateRead() {
+		final Callable<Integer> loader = () -> {
+			throw new IllegalStateException("A hit must not load.");
+		};
+		final List<String> localCalls = new CopyOnWriteArrayList<>();
+		final SingleFlightCaffeineCache localCache = new SingleFlightCaffeineCache("hit-structure",
+				(com.github.benmanes.caffeine.cache.Cache<Object, Object>) CacheSingleFlightTest.recordCalls(com.github.benmanes.caffeine.cache.Cache.class,
+						Caffeine.newBuilder().build(), localCalls),
+				true, Duration.ofSeconds(30));
+		localCache.put("key", 42);
+		localCalls.clear();
+		Assertions.assertEquals(42, localCache.get("key", loader));
+		Assertions.assertEquals(List.of("getIfPresent"), localCalls);
+		localCalls.clear();
+		Assertions.assertEquals(42, localCache.get("key").get());
+		Assertions.assertEquals(List.of("getIfPresent"), localCalls);
+		Assertions.assertEquals(0, localCache.getSingleFlightLoader().getInFlightLoadCount());
+		final List<String> centralCalls = new CopyOnWriteArrayList<>();
+		final SingleFlightRedisCache centralCache = (SingleFlightRedisCache) new SingleFlightRedisCacheManager(
+				(RedisCacheWriter) CacheSingleFlightTest.recordCalls(RedisCacheWriter.class, RedisCacheWriter.nonLockingRedisCacheWriter(this.redisConnectionFactory),
+						centralCalls),
+				RedisCacheConfiguration.defaultCacheConfig().entryTtl(Duration.ofMinutes(5)), Duration.ofSeconds(30), null, Duration.ofSeconds(30),
+				Duration.ofMillis(50)).getCache("hit-structure-" + UUID.randomUUID());
+		centralCache.put("key", 42);
+		centralCalls.clear();
+		Assertions.assertEquals(42, centralCache.get("key", loader));
+		Assertions.assertEquals(List.of("get"), centralCalls);
+		centralCalls.clear();
+		Assertions.assertEquals(42, centralCache.get("key").get());
+		Assertions.assertEquals(List.of("get"), centralCalls);
+		Assertions.assertEquals(0, centralCache.getSingleFlightLoader().getInFlightLoadCount());
 	}
 
 	/**
@@ -562,27 +801,22 @@ public class CacheSingleFlightTest extends ContainerTestHelper {
 	}
 
 	/**
-	 * Tests that the single-flight hit path (synchronized and not) costs about the same as the plain caches'.
+	 * Measures and logs the hit path of the single-flight caches (synchronized and not) against the plain caches'. Log
+	 * only: timing does not decide the build ({@link #testHitIsOneDelegateRead()} checks the hit path structurally).
 	 *
-	 * @throws Exception If the test fails.
+	 * @throws Exception If a read fails.
 	 */
 	@Test
-	@DisplayName("The single-flight hit path costs about the same as the plain caches' (synchronized and not)")
+	@DisplayName("The single-flight hit path cost against the plain caches' (synchronized and not) is measured and logged")
 	public void testHitPathOverhead() throws Exception {
-		final double[] localNanos = CacheSingleFlightTest.measureHitPath("local",
+		CacheSingleFlightTest.measureHitPath("local",
 				new CaffeineCache("hit-path-plain", Caffeine.newBuilder().recordStats().build(), true),
 				new SingleFlightCaffeineCache("hit-path-single-flight", Caffeine.newBuilder().recordStats().build(), true, Duration.ofSeconds(60)), 1_000_000, 7);
 		final String cacheName = "hit-path-" + UUID.randomUUID();
-		final double[] centralNanos = CacheSingleFlightTest.measureHitPath("central",
+		CacheSingleFlightTest.measureHitPath("central",
 				RedisCacheManager.builder(this.redisConnectionFactory).cacheDefaults(RedisCacheConfiguration.defaultCacheConfig().entryTtl(Duration.ofMinutes(5)))
 						.build().getCache(cacheName + "-plain"),
 				this.createCentralCacheManager(Duration.ofSeconds(60), false, Duration.ofSeconds(60)).getCache(cacheName + "-single-flight"), 1_000, 15);
-		// Generous bounds (shared machines are noisy): the single-flight hit is one delegate read, as the plain one.
-		Assertions.assertTrue(localNanos[1] < ((2 * localNanos[0]) + 100), "Local synchronized hit: " + localNanos[1] + "ns vs " + localNanos[0] + "ns.");
-		Assertions.assertTrue(localNanos[3] < ((2 * localNanos[2]) + 100), "Local hit: " + localNanos[3] + "ns vs " + localNanos[2] + "ns.");
-		Assertions.assertTrue(centralNanos[1] < ((1.5 * centralNanos[0]) + 50_000),
-				"Central synchronized hit: " + centralNanos[1] + "ns vs " + centralNanos[0] + "ns.");
-		Assertions.assertTrue(centralNanos[3] < ((1.5 * centralNanos[2]) + 50_000), "Central hit: " + centralNanos[3] + "ns vs " + centralNanos[2] + "ns.");
 	}
 
 }

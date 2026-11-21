@@ -1,8 +1,18 @@
 package org.coldis.library.test.service.cache;
 
 import java.time.Duration;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.IdentityHashMap;
+import java.util.List;
+import java.util.Set;
 import java.util.concurrent.Callable;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 
@@ -15,7 +25,7 @@ import com.github.benmanes.caffeine.cache.Caffeine;
 
 /**
  * Single-flight loads of a local cache, without a Spring context: the wait timeout fallback, a recursive load of the
- * same key and null values.
+ * same key, null values and failed loads.
  */
 public class CacheSingleFlightLoaderTest {
 
@@ -95,6 +105,63 @@ public class CacheSingleFlightLoaderTest {
 		final SingleFlightCaffeineCache cacheWithoutNulls = CacheSingleFlightLoaderTest.createCache(Duration.ofSeconds(30), false);
 		Assertions.assertThrows(org.springframework.cache.Cache.ValueRetrievalException.class, () -> cacheWithoutNulls.get("key", nullLoader));
 		Assertions.assertEquals(0, cacheWithoutNulls.getSingleFlightLoader().getInFlightLoadCount());
+	}
+
+	/**
+	 * Throws a throwable without declaring it.
+	 *
+	 * @param  <ThrowableType> Type the compiler sees thrown.
+	 * @param  throwable       Throwable.
+	 * @throws ThrowableType   Always.
+	 */
+	@SuppressWarnings("unchecked")
+	private static <ThrowableType extends Throwable> void throwUndeclared(
+			final Throwable throwable) throws ThrowableType {
+		throw (ThrowableType) throwable;
+	}
+
+	/**
+	 * Tests that a failed load, even with an undeclared checked throwable, reaches its waiters right away, each with an
+	 * exception of its own whose cause is the failure.
+	 *
+	 * @throws Exception If the test fails.
+	 */
+	@Test
+	@DisplayName("A failed load (even an undeclared throwable) reaches each waiter right away, with an exception of its own")
+	public void testLoadFailureReachesEachWaiter() throws Exception {
+		final SingleFlightCaffeineCache cache = CacheSingleFlightLoaderTest.createCache(Duration.ofSeconds(30), true);
+		final Throwable failure = new Throwable("Undeclared failure.");
+		final CountDownLatch loadStarted = new CountDownLatch(1);
+		final int waiterCount = 3;
+		final ExecutorService executor = Executors.newFixedThreadPool(waiterCount + 1);
+		final Future<Object> failingLoad = executor.submit(() -> cache.get("key", () -> {
+			loadStarted.countDown();
+			Thread.sleep(500);
+			CacheSingleFlightLoaderTest.throwUndeclared(failure);
+			return "never";
+		}));
+		Assertions.assertTrue(loadStarted.await(10, TimeUnit.SECONDS));
+		final long start = System.nanoTime();
+		final Callable<Object> waiterLoader = () -> "waiter";
+		final List<Future<org.springframework.cache.Cache.ValueRetrievalException>> waiters = new ArrayList<>();
+		for (int waiterIndex = 0; waiterIndex < waiterCount; waiterIndex++) {
+			waiters.add(executor.submit(
+					() -> Assertions.assertThrows(org.springframework.cache.Cache.ValueRetrievalException.class, () -> cache.get("key", waiterLoader))));
+		}
+		final Set<Throwable> waiterExceptions = Collections.newSetFromMap(new IdentityHashMap<>());
+		for (final Future<org.springframework.cache.Cache.ValueRetrievalException> waiter : waiters) {
+			final org.springframework.cache.Cache.ValueRetrievalException waiterException = waiter.get(10, TimeUnit.SECONDS);
+			Assertions.assertSame(failure, waiterException.getCause());
+			waiterExceptions.add(waiterException);
+		}
+		final long elapsedMillis = (System.nanoTime() - start) / 1_000_000;
+		// Well before the 30s wait timeout.
+		Assertions.assertTrue(elapsedMillis < 5000, "Waited " + elapsedMillis + "ms.");
+		Assertions.assertEquals(waiterCount, waiterExceptions.size());
+		final ExecutionException loadException = Assertions.assertThrows(ExecutionException.class, () -> failingLoad.get(10, TimeUnit.SECONDS));
+		Assertions.assertSame(failure, loadException.getCause());
+		executor.shutdownNow();
+		Assertions.assertEquals(0, cache.getSingleFlightLoader().getInFlightLoadCount());
 	}
 
 }
