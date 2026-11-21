@@ -9,7 +9,9 @@ import java.util.List;
 import java.util.concurrent.atomic.AtomicReference;
 
 import org.coldis.library.service.client.ServiceClientRequestDeadline;
+import org.coldis.library.service.http.RequestDeadlineAutoConfiguration;
 import org.coldis.library.service.http.RequestDeadlineFilter;
+import org.coldis.library.test.TestHelper;
 import org.coldis.library.test.StartTestWithContainerExtension;
 import org.coldis.library.test.TestWithContainer;
 import org.coldis.library.test.service.ContainerTestHelper;
@@ -21,8 +23,10 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.boot.test.context.runner.WebApplicationContextRunner;
 import org.springframework.boot.test.context.SpringBootTest.WebEnvironment;
 import org.springframework.boot.test.web.server.LocalServerPort;
+import org.springframework.boot.web.servlet.FilterRegistrationBean;
 import org.springframework.mock.web.MockFilterChain;
 import org.springframework.mock.web.MockHttpServletRequest;
 import org.springframework.mock.web.MockHttpServletResponse;
@@ -134,6 +138,12 @@ public class RequestDeadlineTest extends ContainerTestHelper {
 		Assertions.assertTrue((deadlineInChain.get() - beforeNanos) <= Duration.ofMillis(3000).plusNanos(afterNanos - beforeNanos).toNanos());
 		Assertions.assertTrue((deadlineInChain.get() - afterNanos) >= Duration.ofMillis(3000).minusNanos(afterNanos - beforeNanos).toNanos());
 		Assertions.assertNull(ServiceClientRequestDeadline.getDeadlineNanos());
+		// A deadline the thread already had is put back, not cleared.
+		final long earlierDeadlineNanos = ServiceClientRequestDeadline.getDeadlineNanosIn(60_000);
+		ServiceClientRequestDeadline.setDeadlineNanos(earlierDeadlineNanos);
+		filter.doFilter(request, new MockHttpServletResponse(), new MockFilterChain());
+		Assertions.assertEquals(earlierDeadlineNanos, ServiceClientRequestDeadline.getDeadlineNanos());
+		ServiceClientRequestDeadline.setDeadlineNanos(null);
 		// On the running server.
 		final HttpResponse<String> response = this.get("/request-deadline/remaining", "5000");
 		Assertions.assertEquals(200, response.statusCode());
@@ -235,11 +245,32 @@ public class RequestDeadlineTest extends ContainerTestHelper {
 		// Without the header, the call carries none.
 		Assertions.assertEquals(RequestDeadlineTestService.NONE, this.get("/request-deadline/forward-header", null).body());
 		// The slow answer (2 s) is cut by the deadline (700 ms), not the 9 s read timeout.
+		// The downstream request is sent (both controllers run), then cut.
+		final int controllerCalls = RequestDeadlineTestService.CONTROLLER_CALLS.get();
 		final long startNanos = System.nanoTime();
 		final HttpResponse<String> slowResponse = this.get("/request-deadline/forward-slow", "700");
 		final Duration elapsed = Duration.ofNanos(System.nanoTime() - startNanos);
 		Assertions.assertTrue(slowResponse.statusCode() >= 500, slowResponse::body);
-		Assertions.assertTrue(elapsed.compareTo(Duration.ofMillis(1500)) < 0, elapsed::toString);
+		Assertions.assertTrue(elapsed.compareTo(Duration.ofMillis(400)) > 0, elapsed::toString);
+		Assertions.assertTrue(elapsed.compareTo(Duration.ofMillis(1900)) < 0, elapsed::toString);
+		TestHelper.waitUntilValid(RequestDeadlineTestService.CONTROLLER_CALLS::get, calls -> calls >= (controllerCalls + 2), TestHelper.SHORT_WAIT,
+				TestHelper.SHORT_WAIT / 10);
+		Assertions.assertEquals(controllerCalls + 2, RequestDeadlineTestService.CONTROLLER_CALLS.get());
+	}
+
+	/**
+	 * The switch: the filter is registered by default and when on, and not when
+	 * off (a context runner of its own, so the shared context is not split).
+	 */
+	@Test
+	@DisplayName("the switch registers the filter or not")
+	public void testSwitch() {
+		final WebApplicationContextRunner runner = new WebApplicationContextRunner().withUserConfiguration(RequestDeadlineAutoConfiguration.class);
+		runner.run(context -> Assertions.assertEquals(1, context.getBeansOfType(FilterRegistrationBean.class).size()));
+		runner.withPropertyValues(RequestDeadlineAutoConfiguration.ENABLED_PROPERTY + "=true")
+				.run(context -> Assertions.assertEquals(1, context.getBeansOfType(FilterRegistrationBean.class).size()));
+		runner.withPropertyValues(RequestDeadlineAutoConfiguration.ENABLED_PROPERTY + "=false")
+				.run(context -> Assertions.assertTrue(context.getBeansOfType(FilterRegistrationBean.class).isEmpty()));
 	}
 
 }
