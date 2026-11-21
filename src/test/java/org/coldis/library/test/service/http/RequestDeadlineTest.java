@@ -9,6 +9,7 @@ import java.util.List;
 import java.util.concurrent.atomic.AtomicReference;
 
 import org.coldis.library.service.client.ServiceClientRequestDeadline;
+import org.coldis.library.service.client.ServiceClientRequestDeadlinePolicy;
 import org.coldis.library.service.http.RequestDeadlineAutoConfiguration;
 import org.coldis.library.service.http.RequestDeadlineFilter;
 import org.coldis.library.test.TestHelper;
@@ -16,6 +17,7 @@ import org.coldis.library.test.StartTestWithContainerExtension;
 import org.coldis.library.test.TestWithContainer;
 import org.coldis.library.test.service.ContainerTestHelper;
 import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -71,11 +73,37 @@ public class RequestDeadlineTest extends ContainerTestHelper {
 	private MeterRegistry meterRegistry;
 
 	/**
-	 * Clears the test thread's deadline (the unit tests set none, but a failure
-	 * must not leak one).
+	 * Request deadline filter registration of the context.
+	 */
+	@Autowired
+	private FilterRegistrationBean<RequestDeadlineFilter> requestDeadlineFilter;
+
+	/**
+	 * Request deadline policy of the generated clients of the context.
+	 */
+	@Autowired
+	private ServiceClientRequestDeadlinePolicy serviceClientRequestDeadlinePolicy;
+
+	/**
+	 * Turns the request deadline on, on both sides, for the tests of this class
+	 * (it is off by default; the shared context is not split, and
+	 * {@link #clearDeadline()} turns it back off).
+	 */
+	@BeforeEach
+	public void turnDeadlineOn() {
+		this.requestDeadlineFilter.getFilter().setEnabled(true);
+		this.serviceClientRequestDeadlinePolicy.setEnabled(true);
+	}
+
+	/**
+	 * Turns the request deadline back off (its default) and clears the test
+	 * thread's deadline (the unit tests set none, but a failure must not leak
+	 * one).
 	 */
 	@AfterEach
 	public void clearDeadline() {
+		this.requestDeadlineFilter.getFilter().setEnabled(false);
+		this.serviceClientRequestDeadlinePolicy.setEnabled(false);
 		ServiceClientRequestDeadline.setDeadlineNanos(null);
 	}
 
@@ -116,7 +144,7 @@ public class RequestDeadlineTest extends ContainerTestHelper {
 	@Test
 	@DisplayName("a header becomes the request's deadline, cleared after the request")
 	public void testDeadlineStoredAndCleared() throws Exception {
-		final RequestDeadlineFilter filter = new RequestDeadlineFilter("/health-check", null);
+		final RequestDeadlineFilter filter = new RequestDeadlineFilter(true, "/health-check", null);
 		final AtomicReference<Long> deadlineInChain = new AtomicReference<>();
 		final MockHttpServletRequest request = new MockHttpServletRequest("GET", "/any");
 		request.addHeader(ServiceClientRequestDeadline.HEADER, "3000");
@@ -173,12 +201,12 @@ public class RequestDeadlineTest extends ContainerTestHelper {
 		final MockHttpServletRequest request = new MockHttpServletRequest("GET", "/any");
 		request.addHeader(ServiceClientRequestDeadline.HEADER, "0");
 		final MockFilterChain chain = new MockFilterChain();
-		new RequestDeadlineFilter("/health-check", null).doFilter(request, response, chain);
+		new RequestDeadlineFilter(true, "/health-check", null).doFilter(request, response, chain);
 		Assertions.assertEquals(504, response.getStatus());
 		Assertions.assertNull(chain.getRequest());
 		// A registry of its own counts it.
 		final SimpleMeterRegistry ownRegistry = new SimpleMeterRegistry();
-		new RequestDeadlineFilter("/health-check", ownRegistry).doFilter(request, new MockHttpServletResponse(), new MockFilterChain());
+		new RequestDeadlineFilter(true, "/health-check", ownRegistry).doFilter(request, new MockHttpServletResponse(), new MockFilterChain());
 		Assertions.assertEquals(1, ownRegistry.get(RequestDeadlineFilter.EXPIRED_COUNTER).counter().count());
 	}
 
@@ -219,12 +247,12 @@ public class RequestDeadlineTest extends ContainerTestHelper {
 		final MockHttpServletRequest healthRequest = new MockHttpServletRequest("GET", "/health-check");
 		healthRequest.addHeader(ServiceClientRequestDeadline.HEADER, "0");
 		final MockFilterChain healthChain = new MockFilterChain();
-		new RequestDeadlineFilter("/health-check", null).doFilter(healthRequest, new MockHttpServletResponse(), healthChain);
+		new RequestDeadlineFilter(true, "/health-check", null).doFilter(healthRequest, new MockHttpServletResponse(), healthChain);
 		Assertions.assertNotNull(healthChain.getRequest());
 		final MockHttpServletRequest otherRequest = new MockHttpServletRequest("GET", "/health-check-other");
 		otherRequest.addHeader(ServiceClientRequestDeadline.HEADER, "0");
 		final MockFilterChain otherChain = new MockFilterChain();
-		new RequestDeadlineFilter("/health-check", null).doFilter(otherRequest, new MockHttpServletResponse(), otherChain);
+		new RequestDeadlineFilter(true, "/health-check", null).doFilter(otherRequest, new MockHttpServletResponse(), otherChain);
 		Assertions.assertNull(otherChain.getRequest());
 	}
 
@@ -259,18 +287,31 @@ public class RequestDeadlineTest extends ContainerTestHelper {
 	}
 
 	/**
-	 * The switch: the filter is registered by default and when on, and not when
-	 * off (a context runner of its own, so the shared context is not split).
+	 * The switch: the filter is always registered, off by default and when the
+	 * property is false, on when it is true (a context runner of its own, so the
+	 * shared context is not split); off on the running server, nothing changes.
+	 *
+	 * @throws Exception If the test fails.
 	 */
 	@Test
 	@DisplayName("the switch registers the filter or not")
-	public void testSwitch() {
+	@SuppressWarnings("unchecked")
+	public void testSwitch() throws Exception {
 		final WebApplicationContextRunner runner = new WebApplicationContextRunner().withUserConfiguration(RequestDeadlineAutoConfiguration.class);
-		runner.run(context -> Assertions.assertEquals(1, context.getBeansOfType(FilterRegistrationBean.class).size()));
+		runner.run(context -> Assertions.assertFalse(context.getBean(FilterRegistrationBean.class).getFilter() instanceof final RequestDeadlineFilter filter
+				&& filter.isEnabled()));
 		runner.withPropertyValues(RequestDeadlineAutoConfiguration.ENABLED_PROPERTY + "=true")
-				.run(context -> Assertions.assertEquals(1, context.getBeansOfType(FilterRegistrationBean.class).size()));
+				.run(context -> Assertions.assertTrue(((FilterRegistrationBean<RequestDeadlineFilter>) context.getBean(FilterRegistrationBean.class)).getFilter().isEnabled()));
 		runner.withPropertyValues(RequestDeadlineAutoConfiguration.ENABLED_PROPERTY + "=false")
-				.run(context -> Assertions.assertTrue(context.getBeansOfType(FilterRegistrationBean.class).isEmpty()));
+				.run(context -> Assertions.assertFalse(((FilterRegistrationBean<RequestDeadlineFilter>) context.getBean(FilterRegistrationBean.class)).getFilter().isEnabled()));
+		// Off on the running server (as by default): a passed deadline goes through,
+		// with no deadline, and the generated clients send none.
+		this.requestDeadlineFilter.getFilter().setEnabled(false);
+		this.serviceClientRequestDeadlinePolicy.setEnabled(false);
+		final HttpResponse<String> offResponse = this.get("/request-deadline/remaining", "0");
+		Assertions.assertEquals(200, offResponse.statusCode());
+		Assertions.assertEquals(RequestDeadlineTestService.NONE, offResponse.body());
+		Assertions.assertEquals(RequestDeadlineTestService.NONE, this.get("/request-deadline/forward-header", "3000").body());
 	}
 
 }

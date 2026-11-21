@@ -33,7 +33,12 @@ import jakarta.servlet.http.HttpServletResponse;
  * and cleared after it; the generated clients called for it cap their calls to
  * what is left of it, and send it on.</li>
  * </ul>
- * The health check is never filtered. Nothing running is interrupted: the
+ * Off by default ({@code org.coldis.configuration.request-deadline.enabled},
+ * also a runtime switch: {@link #setEnabled(boolean)}): off, every request goes
+ * through as before. The header is taken from any caller (an accepted
+ * decision): a caller can shorten or skip its own request's downstream calls,
+ * which matters only where a check lets a request through when its downstream
+ * call fails. The health check is never filtered. Nothing running is interrupted: the
  * deadline is only checked when the request arrives and when a generated client
  * call starts. Work the request hands to another thread (asynchronous methods,
  * JMS, executors, asynchronous request processing) does not get it. Any failure
@@ -64,17 +69,46 @@ public class RequestDeadlineFilter extends OncePerRequestFilter {
 	private final Counter expiredCounter;
 
 	/**
+	 * If the request deadline is on (a runtime switch, read once per request; no
+	 * lock).
+	 */
+	private volatile boolean isEnabled;
+
+	/**
 	 * Constructor.
 	 *
+	 * @param isEnabled       If the request deadline is on.
 	 * @param healthCheckPath Health check path (not filtered).
 	 * @param meterRegistry   Meter registry ({@code null} for none).
 	 */
-	public RequestDeadlineFilter(final String healthCheckPath, final MeterRegistry meterRegistry) {
+	public RequestDeadlineFilter(final boolean isEnabled, final String healthCheckPath, final MeterRegistry meterRegistry) {
 		super();
+		this.isEnabled = isEnabled;
 		this.healthCheckPath = StringUtils.defaultString(healthCheckPath);
 		this.expiredCounter = (meterRegistry == null ? null
 				: Counter.builder(RequestDeadlineFilter.EXPIRED_COUNTER)
 						.description("Requests answered 504 on arrival: the caller's deadline had passed.").register(meterRegistry));
+	}
+
+	/**
+	 * Gets if the request deadline is on.
+	 *
+	 * @return If the request deadline is on.
+	 */
+	public boolean isEnabled() {
+		return this.isEnabled;
+	}
+
+	/**
+	 * Turns the request deadline on or off for the requests that arrive from now
+	 * on (what {@code org.coldis.configuration.request-deadline.enabled} sets at
+	 * start).
+	 *
+	 * @param isEnabled If the request deadline is on.
+	 */
+	public void setEnabled(
+			final boolean isEnabled) {
+		this.isEnabled = isEnabled;
 	}
 
 	/**
@@ -121,7 +155,7 @@ public class RequestDeadlineFilter extends OncePerRequestFilter {
 	}
 
 	/**
-	 * Skips the health check.
+	 * Skips every request while the deadline is off, and the health check.
 	 *
 	 * @see OncePerRequestFilter#shouldNotFilter(HttpServletRequest)
 	 */
@@ -130,8 +164,8 @@ public class RequestDeadlineFilter extends OncePerRequestFilter {
 			final HttpServletRequest request) {
 		final String requestUri = StringUtils.defaultString(request.getRequestURI());
 		final int contextPathLength = StringUtils.length(request.getContextPath());
-		return !this.healthCheckPath.isEmpty() && (requestUri.length() == (contextPathLength + this.healthCheckPath.length()))
-				&& requestUri.startsWith(this.healthCheckPath, contextPathLength);
+		return !this.isEnabled || (!this.healthCheckPath.isEmpty() && (requestUri.length() == (contextPathLength + this.healthCheckPath.length()))
+				&& requestUri.startsWith(this.healthCheckPath, contextPathLength));
 	}
 
 	/**

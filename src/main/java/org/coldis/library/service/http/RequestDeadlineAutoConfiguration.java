@@ -2,7 +2,6 @@ package org.coldis.library.service.http;
 
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Value;
-import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnWebApplication;
 import org.springframework.boot.web.servlet.FilterRegistrationBean;
 import org.springframework.context.annotation.Bean;
@@ -13,14 +12,12 @@ import io.micrometer.core.instrument.MeterRegistry;
 
 /**
  * Request deadline configuration (see {@link RequestDeadlineFilter}), for servlet
- * services, on unless {@value #ENABLED_PROPERTY} is false.
+ * services. The filter is always registered, and does nothing unless
+ * {@value #ENABLED_PROPERTY} is true (off by default) or it is turned on at
+ * runtime ({@link RequestDeadlineFilter#setEnabled(boolean)}).
  */
 @Configuration
 @ConditionalOnWebApplication(type = ConditionalOnWebApplication.Type.SERVLET)
-@ConditionalOnProperty(
-		name = RequestDeadlineAutoConfiguration.ENABLED_PROPERTY,
-		matchIfMissing = true
-)
 public class RequestDeadlineAutoConfiguration {
 
 	/**
@@ -40,6 +37,7 @@ public class RequestDeadlineAutoConfiguration {
 	 * Registers the request deadline filter on every path (it skips the health
 	 * check itself).
 	 *
+	 * @param  isEnabled             If the request deadline is on.
 	 * @param  healthCheckPath       Health check path.
 	 * @param  meterRegistryProvider Meter registry provider (none without
 	 *                                   Micrometer).
@@ -47,11 +45,13 @@ public class RequestDeadlineAutoConfiguration {
 	 */
 	@Bean
 	public FilterRegistrationBean<RequestDeadlineFilter> requestDeadlineFilter(
+			@Value("${" + RequestDeadlineAutoConfiguration.ENABLED_PROPERTY + ":false}")
+			final Boolean isEnabled,
 			@Value("${org.coldis.configuration.health-check:/health-check}")
 			final String healthCheckPath,
 			final ObjectProvider<MeterRegistry> meterRegistryProvider) {
 		final FilterRegistrationBean<RequestDeadlineFilter> registration = new FilterRegistrationBean<>(
-				new RequestDeadlineFilter(healthCheckPath, meterRegistryProvider.getIfAvailable()));
+				new RequestDeadlineFilter(Boolean.TRUE.equals(isEnabled), healthCheckPath, meterRegistryProvider.getIfAvailable()));
 		registration.setOrder(RequestDeadlineAutoConfiguration.FILTER_ORDER);
 		return registration;
 	}
