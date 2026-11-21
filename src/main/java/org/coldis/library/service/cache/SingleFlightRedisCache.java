@@ -4,6 +4,7 @@ import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.UUID;
 import java.util.concurrent.Callable;
+import java.util.function.BooleanSupplier;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -24,9 +25,15 @@ import org.springframework.data.redis.core.types.Expiration;
  * Optionally (a lock connection factory given), the instances that miss the same key also take a short Redis lock per
  * key ({@code SET NX PX}), so only one instance loads it: the others read the key every poll interval (trying the
  * lock again, which also covers an expired lock) until it appears, and after the wait timeout load it by themselves.
- * The loaded value is returned as {@link RedisCache} returns it: serialized and read back, and null values are stored
- * as {@link RedisCache} stores them. Without the lock, a load does not read Redis again before it runs (so single-flight
- * adds no Redis command): a thread that missed just before another thread's load ended may load the key once more.
+ * The loaded value is returned as {@link RedisCache} returns it: serialized once, and read back from the serialized
+ * bytes by each caller (the loading thread and every waiter get a copy of their own), and null values are stored as
+ * {@link RedisCache} stores them. Without the lock, a load does not read Redis again before it runs (so single-flight
+ * adds no Redis command): a thread that missed just before another thread's load ended may load the key once more. With
+ * the lock, the threads of this instance wait for its loading thread up to the lock timeout plus the wait timeout (the
+ * loading thread may wait the wait timeout for another instance, then load). An eviction or a clear through this
+ * instance that runs during a synchronized load of this instance wins: the load gives its value to its callers but
+ * does not keep it in Redis. An eviction through another instance is not seen by this instance's loads (as with
+ * {@link RedisCache} and the non-locking writer).
  */
 public class SingleFlightRedisCache extends RedisCache {
 
@@ -52,6 +59,11 @@ public class SingleFlightRedisCache extends RedisCache {
 	private final SingleFlightCacheLoader singleFlightLoader;
 
 	/**
+	 * How long an instance waits for another instance's load of the same key (with the cross-instance lock).
+	 */
+	private final Duration waitTimeout;
+
+	/**
 	 * Connection factory for the cross-instance lock (null without the lock).
 	 */
 	private final RedisConnectionFactory lockConnectionFactory;
@@ -72,7 +84,9 @@ public class SingleFlightRedisCache extends RedisCache {
 	 * @param name                  Cache name.
 	 * @param cacheWriter           Cache writer.
 	 * @param cacheConfiguration    Cache configuration.
-	 * @param waitTimeout           How long a thread (or instance) waits for another one's load of the same key.
+	 * @param waitTimeout           How long a thread (or instance) waits for another one's load of the same key (with
+	 *                                  the cross-instance lock, the threads of this instance wait up to the lock
+	 *                                  timeout plus this).
 	 * @param lockConnectionFactory Connection factory for the cross-instance lock (null without the lock).
 	 * @param lockTimeout           Cross-instance lock timeout.
 	 * @param lockPollInterval      Cross-instance lock poll interval.
@@ -86,7 +100,8 @@ public class SingleFlightRedisCache extends RedisCache {
 			final Duration lockTimeout,
 			final Duration lockPollInterval) {
 		super(name, cacheWriter, cacheConfiguration);
-		this.singleFlightLoader = new SingleFlightCacheLoader(waitTimeout);
+		this.singleFlightLoader = new SingleFlightCacheLoader((lockConnectionFactory == null) ? waitTimeout : lockTimeout.plus(waitTimeout));
+		this.waitTimeout = waitTimeout;
 		this.lockConnectionFactory = lockConnectionFactory;
 		this.lockTimeout = lockTimeout;
 		this.lockPollInterval = lockPollInterval;
@@ -102,6 +117,15 @@ public class SingleFlightRedisCache extends RedisCache {
 	}
 
 	/**
+	 * Gets how long an instance waits for another instance's load of the same key (with the cross-instance lock).
+	 *
+	 * @return The wait timeout.
+	 */
+	public Duration getWaitTimeout() {
+		return this.waitTimeout;
+	}
+
+	/**
 	 * Gets whether the cache takes the cross-instance lock.
 	 *
 	 * @return Whether the cache takes the cross-instance lock.
@@ -111,20 +135,41 @@ public class SingleFlightRedisCache extends RedisCache {
 	}
 
 	/**
-	 * Loads a key and puts it in Redis, as {@link RedisCache#get(Object, Callable)} does: the value is serialized once,
-	 * written, and read back from the serialized bytes.
+	 * Reads the serialized value of a key, as {@link RedisCache#lookup(Object)} does, without deserializing it.
+	 *
+	 * @param  key Key.
+	 * @return     The serialized store value (null if missing).
+	 */
+	private byte[] lookupBinary(
+			final Object key) {
+		final byte[] binaryKey = this.serializeCacheKey(this.createCacheKey(key));
+		return this.getCacheConfiguration().isTimeToIdleEnabled()
+				? this.getCacheWriter().get(this.getName(), binaryKey, this.getCacheConfiguration().getTtlFunction().getTimeToLive(key, null))
+				: this.getCacheWriter().get(this.getName(), binaryKey);
+	}
+
+	/**
+	 * Loads a key and puts it in Redis, as {@link RedisCache#get(Object, Callable)} does (the value is serialized once
+	 * and written), unless the load was invalidated (an eviction that runs during the put removes the value again).
 	 *
 	 * @param  key         Key.
 	 * @param  valueLoader Value loader.
-	 * @return             The store value.
+	 * @param  invalidated Whether the load was invalidated.
+	 * @return             The serialized store value.
 	 */
-	private Object loadAndPutValue(
+	private byte[] loadAndPutValue(
 			final Object key,
-			final Callable<?> valueLoader) {
+			final Callable<?> valueLoader,
+			final BooleanSupplier invalidated) {
 		final byte[] binaryValue = this.serializeCacheValue(this.toStoreValue(this.loadCacheValue(key, valueLoader)));
-		this.getCacheWriter().put(this.getName(), this.serializeCacheKey(this.createCacheKey(key)), binaryValue,
-				this.getCacheConfiguration().getTtlFunction().getTimeToLive(key, null));
-		return this.deserializeCacheValue(binaryValue);
+		if (!invalidated.getAsBoolean()) {
+			final byte[] binaryKey = this.serializeCacheKey(this.createCacheKey(key));
+			this.getCacheWriter().put(this.getName(), binaryKey, binaryValue, this.getCacheConfiguration().getTtlFunction().getTimeToLive(key, null));
+			if (invalidated.getAsBoolean()) {
+				this.getCacheWriter().remove(this.getName(), binaryKey);
+			}
+		}
+		return binaryValue;
 	}
 
 	/**
@@ -181,22 +226,24 @@ public class SingleFlightRedisCache extends RedisCache {
 	 *
 	 * @param  key         Key.
 	 * @param  valueLoader Value loader.
-	 * @return             The store value.
+	 * @param  invalidated Whether the load was invalidated.
+	 * @return             The serialized store value.
 	 */
-	private Object loadAndPutAcrossInstances(
+	private byte[] loadAndPutAcrossInstances(
 			final Object key,
-			final Callable<?> valueLoader) {
+			final Callable<?> valueLoader,
+			final BooleanSupplier invalidated) {
 		final byte[] lockKey = this.serializeCacheKey(this.createCacheKey(key) + SingleFlightRedisCache.LOCK_KEY_SUFFIX);
 		final byte[] lockToken = UUID.randomUUID().toString().getBytes(StandardCharsets.UTF_8);
-		final long deadline = System.nanoTime() + this.singleFlightLoader.getWaitTimeout().toNanos();
-		Object storeValue = null;
+		final long deadline = System.nanoTime() + this.waitTimeout.toNanos();
+		byte[] storeValue = null;
 		boolean isLoaded = false;
 		while (!isLoaded && ((System.nanoTime() - deadline) < 0)) {
 			if (this.acquireLock(lockKey, lockToken)) {
 				try {
-					storeValue = this.lookup(key);
+					storeValue = this.lookupBinary(key);
 					if (storeValue == null) {
-						storeValue = this.loadAndPutValue(key, valueLoader);
+						storeValue = this.loadAndPutValue(key, valueLoader, invalidated);
 					}
 				}
 				finally {
@@ -205,7 +252,7 @@ public class SingleFlightRedisCache extends RedisCache {
 				isLoaded = true;
 			}
 			else {
-				storeValue = this.lookup(key);
+				storeValue = this.lookupBinary(key);
 				isLoaded = (storeValue != null);
 				if (!isLoaded) {
 					this.waitPollInterval(key, valueLoader);
@@ -214,8 +261,8 @@ public class SingleFlightRedisCache extends RedisCache {
 		}
 		if (!isLoaded) {
 			SingleFlightRedisCache.LOGGER.debug("Waited {} for another instance to load a key of cache '{}', loading it.",
-					this.singleFlightLoader.getWaitTimeout(), this.getName());
-			storeValue = this.loadAndPutValue(key, valueLoader);
+					this.waitTimeout, this.getName());
+			storeValue = this.loadAndPutValue(key, valueLoader, invalidated);
 		}
 		return storeValue;
 	}
@@ -225,16 +272,19 @@ public class SingleFlightRedisCache extends RedisCache {
 	 *
 	 * @param  key         Key.
 	 * @param  valueLoader Value loader.
-	 * @return             The store value.
+	 * @param  invalidated Whether the load was invalidated.
+	 * @return             The serialized store value.
 	 */
-	private Object loadAndPut(
+	private byte[] loadAndPut(
 			final Object key,
-			final Callable<?> valueLoader) {
-		return (this.lockConnectionFactory == null) ? this.loadAndPutValue(key, valueLoader) : this.loadAndPutAcrossInstances(key, valueLoader);
+			final Callable<?> valueLoader,
+			final BooleanSupplier invalidated) {
+		return (this.lockConnectionFactory == null) ? this.loadAndPutValue(key, valueLoader, invalidated)
+				: this.loadAndPutAcrossInstances(key, valueLoader, invalidated);
 	}
 
 	/**
-	 * Reads the key; on a miss, loads it single-flight.
+	 * Reads the key; on a miss, loads it single-flight (the serialized value is shared, each caller deserializes it).
 	 *
 	 * @see org.springframework.data.redis.cache.RedisCache#get(java.lang.Object, java.util.concurrent.Callable)
 	 */
@@ -245,9 +295,34 @@ public class SingleFlightRedisCache extends RedisCache {
 			final Callable<T> valueLoader) {
 		Object storeValue = this.lookup(key);
 		if (storeValue == null) {
-			storeValue = this.singleFlightLoader.load(key, valueLoader, () -> this.loadAndPut(key, valueLoader));
+			storeValue = this.deserializeCacheValue((byte[]) this.singleFlightLoader.load(key, valueLoader, invalidated -> this.loadAndPut(key, valueLoader, invalidated)));
 		}
 		return (T) this.fromStoreValue(storeValue);
+	}
+
+	/**
+	 * Invalidates the key's load in flight, then evicts it ({@link #evictIfPresent(Object)} evicts through it).
+	 *
+	 * @see org.springframework.data.redis.cache.RedisCache#evict(java.lang.Object)
+	 */
+	@Override
+	public void evict(
+			final Object key) {
+		this.singleFlightLoader.invalidate(key);
+		super.evict(key);
+	}
+
+	/**
+	 * Invalidates every load in flight, then clears the keys that match the pattern ({@link #clear()} and
+	 * {@link #invalidate()} clear through it).
+	 *
+	 * @see org.springframework.data.redis.cache.RedisCache#clear(java.lang.String)
+	 */
+	@Override
+	public void clear(
+			final String keyPattern) {
+		this.singleFlightLoader.invalidateAll();
+		super.clear(keyPattern);
 	}
 
 }

@@ -7,7 +7,9 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
-import java.util.function.Supplier;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.function.BooleanSupplier;
+import java.util.function.Function;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -22,7 +24,10 @@ import org.springframework.core.env.Environment;
  * load by themselves) and get its value or its exception. Threads that miss different keys never wait for each other,
  * and no lock is held while a load runs. The in-flight map holds only the keys being loaded right now: each entry is
  * removed when its load ends, successfully or not. A thread that asks again, while loading, for the key it is loading
- * (a recursive load) loads it directly instead of waiting for itself.
+ * (a recursive load) loads it directly instead of waiting for itself. An eviction of a key (or a clear of the cache)
+ * marks its load in flight (or every load in flight) as invalidated: the load still gives its value to its caller and
+ * waiters, but does not put it in the cache. A waiter that loads by itself after the wait timeout follows the
+ * invalidation of the load it waited for: an eviction after that load ended is not seen by it.
  */
 public class SingleFlightCacheLoader {
 
@@ -56,7 +61,7 @@ public class SingleFlightCacheLoader {
 	/**
 	 * Default of {@value #WAIT_TIMEOUT_PROPERTY}.
 	 */
-	public static final String WAIT_TIMEOUT_DEFAULT = "60s";
+	public static final String WAIT_TIMEOUT_DEFAULT = "120s";
 
 	/**
 	 * Property that turns the central (Redis) cross-instance lock on or off (the default): on, the instances that miss
@@ -92,14 +97,17 @@ public class SingleFlightCacheLoader {
 	public static final String CENTRAL_LOCK_POLL_INTERVAL_DEFAULT = "100ms";
 
 	/**
-	 * A load in flight: the thread that runs it and the store value it gives.
+	 * A load in flight: the thread that runs it, the store value it gives and whether it was invalidated (by an eviction
+	 * of its key or a clear of the cache) while it ran.
 	 *
 	 * @param loadingThread Thread that runs the load.
 	 * @param storeValue    Store value the load gives.
+	 * @param invalidated   Whether the load was invalidated.
 	 */
 	private record InFlightLoad(
 			Thread loadingThread,
-			CompletableFuture<Object> storeValue
+			CompletableFuture<Object> storeValue,
+			AtomicBoolean invalidated
 	) {}
 
 	/**
@@ -223,26 +231,49 @@ public class SingleFlightCacheLoader {
 	}
 
 	/**
+	 * Marks the load in flight of a key, if any, as invalidated: it will not put its value in the cache. Call it before
+	 * evicting the key from the cache.
+	 *
+	 * @param key Key.
+	 */
+	public void invalidate(
+			final Object key) {
+		final InFlightLoad inFlightLoad = this.inFlightLoads.get(key);
+		if (inFlightLoad != null) {
+			inFlightLoad.invalidated().set(true);
+		}
+	}
+
+	/**
+	 * Marks every load in flight as invalidated: none will put its value in the cache. Call it before clearing the
+	 * cache.
+	 */
+	public void invalidateAll() {
+		this.inFlightLoads.values().forEach(inFlightLoad -> inFlightLoad.invalidated().set(true));
+	}
+
+	/**
 	 * Runs the load of a key this thread registered, completes its in-flight entry with the outcome and removes the
 	 * entry.
 	 *
-	 * @param  key             Key.
-	 * @param  ownLoad         The in-flight entry of this thread's load.
-	 * @param  storeValueLoader Loads the store value (and puts it in the cache).
-	 * @return                 The store value.
+	 * @param  key              Key.
+	 * @param  ownLoad          The in-flight entry of this thread's load.
+	 * @param  storeValueLoader Loads the store value (and puts it in the cache unless the load is invalidated).
+	 * @return                  The store value.
 	 */
 	private Object runLoad(
 			final Object key,
 			final InFlightLoad ownLoad,
-			final Supplier<Object> storeValueLoader) {
+			final Function<BooleanSupplier, Object> storeValueLoader) {
 		final Object storeValue;
 		try {
-			storeValue = storeValueLoader.get();
+			storeValue = storeValueLoader.apply(ownLoad.invalidated()::get);
 			ownLoad.storeValue().complete(storeValue);
 		}
-		catch (final RuntimeException | Error exception) {
-			ownLoad.storeValue().completeExceptionally(exception);
-			throw exception;
+		catch (final Throwable throwable) {
+			// Any failure, even an undeclared checked exception, ends the waits.
+			ownLoad.storeValue().completeExceptionally(throwable);
+			throw throwable;
 		}
 		finally {
 			this.inFlightLoads.remove(key, ownLoad);
@@ -251,33 +282,33 @@ public class SingleFlightCacheLoader {
 	}
 
 	/**
-	 * Waits for another thread's load of a key. After the wait timeout, loads the key by itself.
+	 * Waits for another thread's load of a key. After the wait timeout, loads the key by itself. A failed load gives
+	 * each waiter an exception of its own: a {@link Cache.ValueRetrievalException} whose cause is the value loader's
+	 * failure (the cause of the loading thread's {@link Cache.ValueRetrievalException}) or the load's failure.
 	 *
 	 * @param  key              Key.
-	 * @param  valueLoader      Value loader (for the exception thrown if the wait is interrupted).
+	 * @param  valueLoader      Value loader (for the exceptions thrown when the wait fails).
 	 * @param  otherLoad        The other thread's load.
-	 * @param  storeValueLoader Loads the store value (and puts it in the cache).
+	 * @param  storeValueLoader Loads the store value (and puts it in the cache unless the load is invalidated).
 	 * @return                  The store value.
 	 */
 	private Object waitForLoad(
 			final Object key,
 			final Callable<?> valueLoader,
 			final InFlightLoad otherLoad,
-			final Supplier<Object> storeValueLoader) {
+			final Function<BooleanSupplier, Object> storeValueLoader) {
 		Object storeValue;
 		try {
 			storeValue = otherLoad.storeValue().get(this.waitTimeout.toNanos(), TimeUnit.NANOSECONDS);
 		}
 		catch (final TimeoutException exception) {
 			SingleFlightCacheLoader.LOGGER.debug("Waited {} for the load of a cache key, loading it.", this.waitTimeout);
-			storeValue = storeValueLoader.get();
+			storeValue = storeValueLoader.apply(otherLoad.invalidated()::get);
 		}
 		catch (final ExecutionException exception) {
-			if (exception.getCause() instanceof final Error error) {
-				throw error;
-			}
-			throw (exception.getCause() instanceof final RuntimeException cause) ? cause
-					: new Cache.ValueRetrievalException(key, valueLoader, exception.getCause());
+			final Throwable failure = exception.getCause();
+			throw new Cache.ValueRetrievalException(key, valueLoader,
+					((failure instanceof Cache.ValueRetrievalException) && (failure.getCause() != null)) ? failure.getCause() : failure);
 		}
 		catch (final InterruptedException exception) {
 			Thread.currentThread().interrupt();
@@ -291,22 +322,24 @@ public class SingleFlightCacheLoader {
 	 *
 	 * @param  key              Key (a missed one).
 	 * @param  valueLoader      Value loader (for the exceptions thrown when a wait fails).
-	 * @param  storeValueLoader Loads the store value and puts it in the cache; throws
-	 *                              {@link Cache.ValueRetrievalException} if the value loader fails.
+	 * @param  storeValueLoader Loads the store value and puts it in the cache, unless the given supplier says the load
+	 *                              was invalidated (checked before the put, and again after it, to remove the value
+	 *                              if an eviction ran meanwhile); throws {@link Cache.ValueRetrievalException} if the
+	 *                              value loader fails.
 	 * @return                  The store value.
 	 */
 	public Object load(
 			final Object key,
 			final Callable<?> valueLoader,
-			final Supplier<Object> storeValueLoader) {
-		final InFlightLoad ownLoad = new InFlightLoad(Thread.currentThread(), new CompletableFuture<>());
+			final Function<BooleanSupplier, Object> storeValueLoader) {
+		final InFlightLoad ownLoad = new InFlightLoad(Thread.currentThread(), new CompletableFuture<>(), new AtomicBoolean());
 		final InFlightLoad otherLoad = this.inFlightLoads.putIfAbsent(key, ownLoad);
 		final Object storeValue;
 		if (otherLoad == null) {
 			storeValue = this.runLoad(key, ownLoad, storeValueLoader);
 		}
 		else if (otherLoad.loadingThread() == Thread.currentThread()) {
-			storeValue = storeValueLoader.get();
+			storeValue = storeValueLoader.apply(otherLoad.invalidated()::get);
 		}
 		else {
 			storeValue = this.waitForLoad(key, valueLoader, otherLoad, storeValueLoader);

@@ -10,7 +10,7 @@ import org.springframework.cache.CacheManager;
 
 /**
  * A service with Redis that turns the central cross-instance lock on: the central caches take it, with the configured
- * wait timeout.
+ * wait timeout (and the lock timeout plus the wait timeout for the threads of the instance).
  */
 public class CacheSingleFlightLockEnabledTest {
 
@@ -28,7 +28,9 @@ public class CacheSingleFlightLockEnabledTest {
 						final SingleFlightRedisCache centralCache = Assertions.assertInstanceOf(SingleFlightRedisCache.class,
 								context.getBean(expiration.getCentralCacheManagerName(), CacheManager.class).getCache("single-flight"));
 						Assertions.assertTrue(centralCache.isCrossInstanceLockEnabled());
-						Assertions.assertEquals(7, centralCache.getSingleFlightLoader().getWaitTimeout().getSeconds());
+						Assertions.assertEquals(7, centralCache.getWaitTimeout().getSeconds());
+						// The threads of the instance wait for its loading thread up to the lock timeout (60s by default) plus the wait timeout.
+						Assertions.assertEquals(67, centralCache.getSingleFlightLoader().getWaitTimeout().getSeconds());
 					}
 				});
 	}

@@ -26,6 +26,7 @@ public class CacheSingleFlightByDefaultTest {
 				final SingleFlightRedisCache centralCache = Assertions.assertInstanceOf(SingleFlightRedisCache.class,
 						context.getBean(expiration.getCentralCacheManagerName(), CacheManager.class).getCache("single-flight"));
 				Assertions.assertFalse(centralCache.isCrossInstanceLockEnabled());
+				Assertions.assertEquals(120, centralCache.getSingleFlightLoader().getWaitTimeout().getSeconds());
 				Assertions.assertInstanceOf(SingleFlightCaffeineCache.class,
 						context.getBean(expiration.getLocalCacheManagerName(), CacheManager.class).getCache("single-flight"));
 			}
