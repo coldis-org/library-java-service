@@ -99,7 +99,7 @@ public class CacheManagerFallbackRegistrar implements BeanDefinitionRegistryPost
 		return LocalCacheAutoConfiguration.createCacheManager(expiration.getCentralCacheManagerName(), expiration.getExpiration(this.environment),
 				this.environment.getProperty(LocalCacheAutoConfiguration.MAXIMUM_SIZE_PROPERTY, Long.class),
 				LocalCacheAutoConfiguration.shouldRecordStats(this.environment), LocalCacheAutoConfiguration.shouldPublishMetrics(this.environment),
-				this.beanFactory.getBeanProvider(MeterRegistry.class)::getIfUnique);
+				this.beanFactory.getBeanProvider(MeterRegistry.class)::getIfUnique, this.environment);
 	}
 
 	/**
