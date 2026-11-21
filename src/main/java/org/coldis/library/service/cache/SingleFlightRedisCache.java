@@ -154,18 +154,20 @@ public class SingleFlightRedisCache extends RedisCache {
 	 *
 	 * @param  key         Key.
 	 * @param  valueLoader Value loader.
-	 * @param  invalidated Whether the load was invalidated.
+	 * @param  isInvalidated Whether the load was invalidated.
 	 * @return             The serialized store value.
 	 */
 	private byte[] loadAndPutValue(
 			final Object key,
 			final Callable<?> valueLoader,
-			final BooleanSupplier invalidated) {
-		final byte[] binaryValue = this.serializeCacheValue(this.toStoreValue(this.loadCacheValue(key, valueLoader)));
-		if (!invalidated.getAsBoolean()) {
+			final BooleanSupplier isInvalidated) {
+		final Object loadedValue = this.loadCacheValue(key, valueLoader);
+		final byte[] binaryValue = this.serializeCacheValue(this.toStoreValue(loadedValue));
+		if (!isInvalidated.getAsBoolean()) {
 			final byte[] binaryKey = this.serializeCacheKey(this.createCacheKey(key));
-			this.getCacheWriter().put(this.getName(), binaryKey, binaryValue, this.getCacheConfiguration().getTtlFunction().getTimeToLive(key, null));
-			if (invalidated.getAsBoolean()) {
+			// As RedisCache#put: the time to live is computed from the loaded value.
+			this.getCacheWriter().put(this.getName(), binaryKey, binaryValue, this.getCacheConfiguration().getTtlFunction().getTimeToLive(key, loadedValue));
+			if (isInvalidated.getAsBoolean()) {
 				this.getCacheWriter().remove(this.getName(), binaryKey);
 			}
 		}
@@ -188,16 +190,27 @@ public class SingleFlightRedisCache extends RedisCache {
 	}
 
 	/**
-	 * Releases the cross-instance lock of a key, if this load still holds it.
+	 * Releases the cross-instance lock of a key, if this load still holds it. A failed release does not change the
+	 * outcome of the load (its value, or its own exception, stays the outcome): the lock expires by itself after the lock
+	 * timeout, so the failure is logged and, when the load itself failed, kept as a suppressed exception of that failure.
 	 *
-	 * @param lockKey   Lock key.
-	 * @param lockToken Token of this load.
+	 * @param lockKey     Lock key.
+	 * @param lockToken   Token of this load.
+	 * @param loadFailure The load's own failure (null if the load succeeded).
 	 */
 	private void releaseLock(
 			final byte[] lockKey,
-			final byte[] lockToken) {
+			final byte[] lockToken,
+			final Throwable loadFailure) {
 		try (RedisConnection connection = this.lockConnectionFactory.getConnection()) {
 			connection.scriptingCommands().eval(SingleFlightRedisCache.RELEASE_LOCK_SCRIPT, ReturnType.INTEGER, 1, lockKey, lockToken);
+		}
+		catch (final RuntimeException exception) {
+			SingleFlightRedisCache.LOGGER.warn("Could not release the single-flight lock of a key of cache '{}'; it expires after {}.", this.getName(),
+					this.lockTimeout, exception);
+			if (loadFailure != null) {
+				loadFailure.addSuppressed(exception);
+			}
 		}
 	}
 
@@ -226,13 +239,13 @@ public class SingleFlightRedisCache extends RedisCache {
 	 *
 	 * @param  key         Key.
 	 * @param  valueLoader Value loader.
-	 * @param  invalidated Whether the load was invalidated.
+	 * @param  isInvalidated Whether the load was invalidated.
 	 * @return             The serialized store value.
 	 */
 	private byte[] loadAndPutAcrossInstances(
 			final Object key,
 			final Callable<?> valueLoader,
-			final BooleanSupplier invalidated) {
+			final BooleanSupplier isInvalidated) {
 		final byte[] lockKey = this.serializeCacheKey(this.createCacheKey(key) + SingleFlightRedisCache.LOCK_KEY_SUFFIX);
 		final byte[] lockToken = UUID.randomUUID().toString().getBytes(StandardCharsets.UTF_8);
 		final long deadline = System.nanoTime() + this.waitTimeout.toNanos();
@@ -240,14 +253,19 @@ public class SingleFlightRedisCache extends RedisCache {
 		boolean isLoaded = false;
 		while (!isLoaded && ((System.nanoTime() - deadline) < 0)) {
 			if (this.acquireLock(lockKey, lockToken)) {
+				Throwable loadFailure = null;
 				try {
 					storeValue = this.lookupBinary(key);
 					if (storeValue == null) {
-						storeValue = this.loadAndPutValue(key, valueLoader, invalidated);
+						storeValue = this.loadAndPutValue(key, valueLoader, isInvalidated);
 					}
 				}
+				catch (final RuntimeException | Error failure) {
+					loadFailure = failure;
+					throw failure;
+				}
 				finally {
-					this.releaseLock(lockKey, lockToken);
+					this.releaseLock(lockKey, lockToken, loadFailure);
 				}
 				isLoaded = true;
 			}
@@ -262,7 +280,7 @@ public class SingleFlightRedisCache extends RedisCache {
 		if (!isLoaded) {
 			SingleFlightRedisCache.LOGGER.debug("Waited {} for another instance to load a key of cache '{}', loading it.",
 					this.waitTimeout, this.getName());
-			storeValue = this.loadAndPutValue(key, valueLoader, invalidated);
+			storeValue = this.loadAndPutValue(key, valueLoader, isInvalidated);
 		}
 		return storeValue;
 	}
@@ -272,15 +290,15 @@ public class SingleFlightRedisCache extends RedisCache {
 	 *
 	 * @param  key         Key.
 	 * @param  valueLoader Value loader.
-	 * @param  invalidated Whether the load was invalidated.
+	 * @param  isInvalidated Whether the load was invalidated.
 	 * @return             The serialized store value.
 	 */
 	private byte[] loadAndPut(
 			final Object key,
 			final Callable<?> valueLoader,
-			final BooleanSupplier invalidated) {
-		return (this.lockConnectionFactory == null) ? this.loadAndPutValue(key, valueLoader, invalidated)
-				: this.loadAndPutAcrossInstances(key, valueLoader, invalidated);
+			final BooleanSupplier isInvalidated) {
+		return (this.lockConnectionFactory == null) ? this.loadAndPutValue(key, valueLoader, isInvalidated)
+				: this.loadAndPutAcrossInstances(key, valueLoader, isInvalidated);
 	}
 
 	/**
@@ -295,7 +313,7 @@ public class SingleFlightRedisCache extends RedisCache {
 			final Callable<T> valueLoader) {
 		Object storeValue = this.lookup(key);
 		if (storeValue == null) {
-			storeValue = this.deserializeCacheValue((byte[]) this.singleFlightLoader.load(key, valueLoader, invalidated -> this.loadAndPut(key, valueLoader, invalidated)));
+			storeValue = this.deserializeCacheValue((byte[]) this.singleFlightLoader.load(key, valueLoader, isInvalidated -> this.loadAndPut(key, valueLoader, isInvalidated)));
 		}
 		return (T) this.fromStoreValue(storeValue);
 	}

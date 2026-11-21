@@ -32,6 +32,7 @@ import org.coldis.library.test.StartTestWithContainerExtension;
 import org.coldis.library.test.TestWithContainer;
 import org.coldis.library.test.service.ContainerTestHelper;
 import org.junit.jupiter.api.Assertions;
+import org.junit.jupiter.api.Assumptions;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -503,6 +504,8 @@ public class CacheSingleFlightTest extends ContainerTestHelper {
 					return impatientInstanceCache.get("timeout", fastLoader);
 				});
 		Assertions.assertEquals(2, outcomes.get(1).value());
+		Assertions.assertNull(outcomes.get(0).exception());
+		Assertions.assertEquals(1, outcomes.get(0).value());
 		Assertions.assertTrue(outcomes.get(1).elapsedMillis() < (2 * CacheSingleFlightTest.SLOW_LOAD_MILLIS),
 				"Waited " + outcomes.get(1).elapsedMillis() + "ms.");
 		Assertions.assertEquals(2, loads.get());
@@ -515,6 +518,8 @@ public class CacheSingleFlightTest extends ContainerTestHelper {
 			return patientInstanceCache.get("expiry", fastLoader);
 		});
 		Assertions.assertEquals(2, outcomes.get(1).value());
+		Assertions.assertNull(outcomes.get(0).exception());
+		Assertions.assertEquals(1, outcomes.get(0).value());
 		Assertions.assertTrue(outcomes.get(1).elapsedMillis() < (2 * CacheSingleFlightTest.SLOW_LOAD_MILLIS),
 				"Waited " + outcomes.get(1).elapsedMillis() + "ms.");
 		Assertions.assertEquals(2, loads.get());
@@ -809,6 +814,9 @@ public class CacheSingleFlightTest extends ContainerTestHelper {
 	@Test
 	@DisplayName("The single-flight hit path cost against the plain caches' (synchronized and not) is measured and logged")
 	public void testHitPathOverhead() throws Exception {
+		// A measurement (logged for the merge request), not a check: opt in with -Dorg.coldis.test.benchmark=true.
+		// testHitIsOneDelegateRead guards the hit path structurally on every build.
+		Assumptions.assumeTrue(Boolean.getBoolean("org.coldis.test.benchmark"), "Benchmark off (-Dorg.coldis.test.benchmark=true turns it on).");
 		CacheSingleFlightTest.measureHitPath("local",
 				new CaffeineCache("hit-path-plain", Caffeine.newBuilder().recordStats().build(), true),
 				new SingleFlightCaffeineCache("hit-path-single-flight", Caffeine.newBuilder().recordStats().build(), true, Duration.ofSeconds(60)), 1_000_000, 7);

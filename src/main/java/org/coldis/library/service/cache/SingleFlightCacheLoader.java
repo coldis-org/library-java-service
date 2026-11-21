@@ -102,12 +102,12 @@ public class SingleFlightCacheLoader {
 	 *
 	 * @param loadingThread Thread that runs the load.
 	 * @param storeValue    Store value the load gives.
-	 * @param invalidated   Whether the load was invalidated.
+	 * @param isInvalidated Whether the load was invalidated.
 	 */
 	private record InFlightLoad(
 			Thread loadingThread,
 			CompletableFuture<Object> storeValue,
-			AtomicBoolean invalidated
+			AtomicBoolean isInvalidated
 	) {}
 
 	/**
@@ -240,7 +240,7 @@ public class SingleFlightCacheLoader {
 			final Object key) {
 		final InFlightLoad inFlightLoad = this.inFlightLoads.get(key);
 		if (inFlightLoad != null) {
-			inFlightLoad.invalidated().set(true);
+			inFlightLoad.isInvalidated().set(true);
 		}
 	}
 
@@ -249,7 +249,7 @@ public class SingleFlightCacheLoader {
 	 * cache.
 	 */
 	public void invalidateAll() {
-		this.inFlightLoads.values().forEach(inFlightLoad -> inFlightLoad.invalidated().set(true));
+		this.inFlightLoads.values().forEach(inFlightLoad -> inFlightLoad.isInvalidated().set(true));
 	}
 
 	/**
@@ -267,7 +267,7 @@ public class SingleFlightCacheLoader {
 			final Function<BooleanSupplier, Object> storeValueLoader) {
 		final Object storeValue;
 		try {
-			storeValue = storeValueLoader.apply(ownLoad.invalidated()::get);
+			storeValue = storeValueLoader.apply(ownLoad.isInvalidated()::get);
 			ownLoad.storeValue().complete(storeValue);
 		}
 		catch (final Throwable throwable) {
@@ -303,7 +303,7 @@ public class SingleFlightCacheLoader {
 		}
 		catch (final TimeoutException exception) {
 			SingleFlightCacheLoader.LOGGER.debug("Waited {} for the load of a cache key, loading it.", this.waitTimeout);
-			storeValue = storeValueLoader.apply(otherLoad.invalidated()::get);
+			storeValue = storeValueLoader.apply(otherLoad.isInvalidated()::get);
 		}
 		catch (final ExecutionException exception) {
 			final Throwable failure = exception.getCause();
@@ -339,7 +339,7 @@ public class SingleFlightCacheLoader {
 			storeValue = this.runLoad(key, ownLoad, storeValueLoader);
 		}
 		else if (otherLoad.loadingThread() == Thread.currentThread()) {
-			storeValue = storeValueLoader.apply(otherLoad.invalidated()::get);
+			storeValue = storeValueLoader.apply(otherLoad.isInvalidated()::get);
 		}
 		else {
 			storeValue = this.waitForLoad(key, valueLoader, otherLoad, storeValueLoader);

@@ -52,12 +52,15 @@ public class CacheSingleFlightLoaderTest {
 	public void testWaitTimeoutFallback() throws Exception {
 		final SingleFlightCaffeineCache cache = CacheSingleFlightLoaderTest.createCache(Duration.ofMillis(300), true);
 		final AtomicInteger loads = new AtomicInteger();
+		final CountDownLatch slowLoadStarted = new CountDownLatch(1);
 		final CompletableFuture<Object> slowLoad = CompletableFuture.supplyAsync(() -> cache.get("key", () -> {
 			loads.incrementAndGet();
+			slowLoadStarted.countDown();
 			Thread.sleep(3000);
 			return "slow";
 		}));
-		Thread.sleep(100);
+		// The slow load is in flight before the second caller asks for the key (no ordering by sleep).
+		Assertions.assertTrue(slowLoadStarted.await(10, TimeUnit.SECONDS));
 		final long start = System.nanoTime();
 		final Object value = cache.get("key", () -> {
 			loads.incrementAndGet();

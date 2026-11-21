@@ -55,13 +55,13 @@ public class SingleFlightCaffeineCache extends CaffeineCache {
 	 *
 	 * @param  key         Key.
 	 * @param  valueLoader Value loader.
-	 * @param  invalidated Whether the load was invalidated.
+	 * @param  isInvalidated Whether the load was invalidated.
 	 * @return             The store value.
 	 */
 	private Object loadAndPut(
 			final Object key,
 			final Callable<?> valueLoader,
-			final BooleanSupplier invalidated) {
+			final BooleanSupplier isInvalidated) {
 		Object storeValue = this.getNativeCache().policy().getIfPresentQuietly(key);
 		if (storeValue == null) {
 			try {
@@ -70,9 +70,9 @@ public class SingleFlightCaffeineCache extends CaffeineCache {
 			catch (final Exception exception) {
 				throw new ValueRetrievalException(key, valueLoader, exception);
 			}
-			if (!invalidated.getAsBoolean()) {
+			if (!isInvalidated.getAsBoolean()) {
 				this.getNativeCache().put(key, storeValue);
-				if (invalidated.getAsBoolean()) {
+				if (isInvalidated.getAsBoolean()) {
 					this.getNativeCache().asMap().remove(key, storeValue);
 				}
 			}
@@ -92,7 +92,7 @@ public class SingleFlightCaffeineCache extends CaffeineCache {
 			final Callable<T> valueLoader) {
 		Object storeValue = this.lookup(key);
 		if (storeValue == null) {
-			storeValue = this.singleFlightLoader.load(key, valueLoader, invalidated -> this.loadAndPut(key, valueLoader, invalidated));
+			storeValue = this.singleFlightLoader.load(key, valueLoader, isInvalidated -> this.loadAndPut(key, valueLoader, isInvalidated));
 		}
 		return (T) this.fromStoreValue(storeValue);
 	}
