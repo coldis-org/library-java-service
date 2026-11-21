@@ -277,6 +277,22 @@ public class CacheSingleFlightTest extends ContainerTestHelper {
 	}
 
 	/**
+	 * Gets whether every slow load of the unrelated-calls test has started (one load of the shared key and one of each
+	 * key of its own).
+	 *
+	 * @param  keyPrefix Key prefix of the test.
+	 * @return           Whether every slow load has started.
+	 */
+	private static boolean slowLoadsStarted(
+			final String keyPrefix) {
+		boolean isStarted = SingleFlightCachedService.getLoads(keyPrefix + "slow") == 1;
+		for (int callIndex = 1; callIndex < CacheSingleFlightTest.CONCURRENT_CALLS; callIndex += 2) {
+			isStarted = isStarted && (SingleFlightCachedService.getLoads(keyPrefix + "slow-" + callIndex) == 1);
+		}
+		return isStarted;
+	}
+
+	/**
 	 * Tests that unrelated cache calls are not slowed while slow loads run.
 	 *
 	 * @param  cachedCall Cached call (key, load duration).
@@ -296,7 +312,12 @@ public class CacheSingleFlightTest extends ContainerTestHelper {
 			final String key = keyPrefix + ((callIndex % 2) == 0 ? "slow" : "slow-" + callIndex);
 			slowLoads.add(slowLoadsExecutor.submit(() -> cachedCall.apply(key, slowLoadMillis)));
 		}
-		Thread.sleep(300);
+		// Every slow load is in flight (its load started) before the timed calls: no ordering by sleep.
+		final long slowLoadsDeadline = System.nanoTime() + Duration.ofSeconds(10).toNanos();
+		while ((!CacheSingleFlightTest.slowLoadsStarted(keyPrefix)) && ((System.nanoTime() - slowLoadsDeadline) < 0)) {
+			Thread.sleep(10);
+		}
+		Assertions.assertTrue(CacheSingleFlightTest.slowLoadsStarted(keyPrefix), "The slow loads did not start.");
 		final long hitStart = System.nanoTime();
 		Assertions.assertEquals(1, cachedCall.apply(keyPrefix + "hit", 0L));
 		final long hitMillis = (System.nanoTime() - hitStart) / 1_000_000;
@@ -562,6 +583,10 @@ public class CacheSingleFlightTest extends ContainerTestHelper {
 		try (RedisConnection connection = this.redisConnectionFactory.getConnection()) {
 			Assertions.assertFalse(connection.keyCommands().exists((cacheName + "::key" + SingleFlightRedisCache.LOCK_KEY_SUFFIX).getBytes(StandardCharsets.UTF_8)));
 			Assertions.assertTrue(connection.keyCommands().exists((cacheName + "::key").getBytes(StandardCharsets.UTF_8)));
+			// Written with the cache's time to live (5 minutes here), not without expiry.
+			final Long timeToLiveMillis = connection.keyCommands().pTtl((cacheName + "::key").getBytes(StandardCharsets.UTF_8));
+			Assertions.assertTrue((timeToLiveMillis != null) && (timeToLiveMillis > 0) && (timeToLiveMillis <= Duration.ofMinutes(5).toMillis()),
+					"Time to live " + timeToLiveMillis + "ms.");
 		}
 	}
 

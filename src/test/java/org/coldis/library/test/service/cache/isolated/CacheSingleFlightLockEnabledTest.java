@@ -28,7 +28,7 @@ public class CacheSingleFlightLockEnabledTest {
 						final SingleFlightRedisCache centralCache = Assertions.assertInstanceOf(SingleFlightRedisCache.class,
 								context.getBean(expiration.getCentralCacheManagerName(), CacheManager.class).getCache("single-flight"));
 						Assertions.assertTrue(centralCache.isCrossInstanceLockEnabled());
-						Assertions.assertEquals(7, centralCache.getWaitTimeout().getSeconds());
+						Assertions.assertEquals(7, centralCache.getCrossInstanceWaitTimeout().getSeconds());
 						// The threads of the instance wait for its loading thread up to the lock timeout (60s by default) plus the wait timeout.
 						Assertions.assertEquals(67, centralCache.getSingleFlightLoader().getWaitTimeout().getSeconds());
 					}

@@ -61,7 +61,7 @@ public class SingleFlightRedisCache extends RedisCache {
 	/**
 	 * How long an instance waits for another instance's load of the same key (with the cross-instance lock).
 	 */
-	private final Duration waitTimeout;
+	private final Duration crossInstanceWaitTimeout;
 
 	/**
 	 * Connection factory for the cross-instance lock (null without the lock).
@@ -101,7 +101,7 @@ public class SingleFlightRedisCache extends RedisCache {
 			final Duration lockPollInterval) {
 		super(name, cacheWriter, cacheConfiguration);
 		this.singleFlightLoader = new SingleFlightCacheLoader((lockConnectionFactory == null) ? waitTimeout : lockTimeout.plus(waitTimeout));
-		this.waitTimeout = waitTimeout;
+		this.crossInstanceWaitTimeout = waitTimeout;
 		this.lockConnectionFactory = lockConnectionFactory;
 		this.lockTimeout = lockTimeout;
 		this.lockPollInterval = lockPollInterval;
@@ -117,12 +117,13 @@ public class SingleFlightRedisCache extends RedisCache {
 	}
 
 	/**
-	 * Gets how long an instance waits for another instance's load of the same key (with the cross-instance lock).
+	 * Gets how long this instance waits for another instance's load of a key (the cross-instance poll window). Threads
+	 * of this instance wait for its own load as long as {@link SingleFlightCacheLoader#getWaitTimeout()}.
 	 *
-	 * @return The wait timeout.
+	 * @return The cross-instance wait timeout.
 	 */
-	public Duration getWaitTimeout() {
-		return this.waitTimeout;
+	public Duration getCrossInstanceWaitTimeout() {
+		return this.crossInstanceWaitTimeout;
 	}
 
 	/**
@@ -248,7 +249,7 @@ public class SingleFlightRedisCache extends RedisCache {
 			final BooleanSupplier isInvalidated) {
 		final byte[] lockKey = this.serializeCacheKey(this.createCacheKey(key) + SingleFlightRedisCache.LOCK_KEY_SUFFIX);
 		final byte[] lockToken = UUID.randomUUID().toString().getBytes(StandardCharsets.UTF_8);
-		final long deadline = System.nanoTime() + this.waitTimeout.toNanos();
+		final long deadline = System.nanoTime() + this.crossInstanceWaitTimeout.toNanos();
 		byte[] storeValue = null;
 		boolean isLoaded = false;
 		while (!isLoaded && ((System.nanoTime() - deadline) < 0)) {
@@ -279,7 +280,7 @@ public class SingleFlightRedisCache extends RedisCache {
 		}
 		if (!isLoaded) {
 			SingleFlightRedisCache.LOGGER.debug("Waited {} for another instance to load a key of cache '{}', loading it.",
-					this.waitTimeout, this.getName());
+					this.crossInstanceWaitTimeout, this.getName());
 			storeValue = this.loadAndPutValue(key, valueLoader, isInvalidated);
 		}
 		return storeValue;
@@ -297,8 +298,17 @@ public class SingleFlightRedisCache extends RedisCache {
 			final Object key,
 			final Callable<?> valueLoader,
 			final BooleanSupplier isInvalidated) {
-		return (this.lockConnectionFactory == null) ? this.loadAndPutValue(key, valueLoader, isInvalidated)
-				: this.loadAndPutAcrossInstances(key, valueLoader, isInvalidated);
+		final byte[] storeValue;
+		if (this.lockConnectionFactory == null) {
+			// Read again before loading (as the lock path and the local cache do): a load that ended between this
+			// thread's miss and its registration has already put the key, so it is not loaded a second time.
+			final byte[] storedValue = this.lookupBinary(key);
+			storeValue = (storedValue != null) ? storedValue : this.loadAndPutValue(key, valueLoader, isInvalidated);
+		}
+		else {
+			storeValue = this.loadAndPutAcrossInstances(key, valueLoader, isInvalidated);
+		}
+		return storeValue;
 	}
 
 	/**
