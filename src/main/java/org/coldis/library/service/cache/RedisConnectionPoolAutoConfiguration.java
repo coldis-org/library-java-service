@@ -20,7 +20,8 @@ import org.springframework.data.redis.connection.lettuce.LettucePoolingClientCon
 import io.lettuce.core.api.StatefulConnection;
 
 /**
- * Pooled Redis connections for the central cache. Off by default ({@value #ENABLED_PROPERTY}).
+ * Pooled Redis connections for the central cache. On by default ({@value #ENABLED_PROPERTY}=false turns it off), when
+ * commons-pool2 is on the class path (without it, the one shared native connection stays, as before).
  * <p>
  * The Redis connection factory is Spring Boot's (Lettuce). With commons-pool2 on the class path Boot already builds a
  * pooling client configuration, but the factory shares one native connection, and every command that is neither
@@ -31,10 +32,14 @@ import io.lettuce.core.api.StatefulConnection;
  * (max-total) connections to Redis instead of one.
  */
 @Configuration
-@ConditionalOnClass(value = { LettuceConnectionFactory.class })
+@ConditionalOnClass(
+		value = { LettuceConnectionFactory.class },
+		name = "org.apache.commons.pool2.impl.GenericObjectPoolConfig"
+)
 @ConditionalOnProperty(
 		name = RedisConnectionPoolAutoConfiguration.ENABLED_PROPERTY,
-		havingValue = "true"
+		havingValue = "true",
+		matchIfMissing = true
 )
 public class RedisConnectionPoolAutoConfiguration {
 
@@ -44,7 +49,7 @@ public class RedisConnectionPoolAutoConfiguration {
 	public static final String PROPERTY_PREFIX = "org.coldis.configuration.cache.central.pool.";
 
 	/**
-	 * Property that turns the pool on (false or unset: one shared connection, as before).
+	 * Property that turns the pool off when false (true or unset: pooled connections; false: one shared connection).
 	 */
 	public static final String ENABLED_PROPERTY = RedisConnectionPoolAutoConfiguration.PROPERTY_PREFIX + "enabled";
 
