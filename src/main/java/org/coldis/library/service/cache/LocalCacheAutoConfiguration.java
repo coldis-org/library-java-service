@@ -219,6 +219,7 @@ public class LocalCacheAutoConfiguration {
 	 * @param  shouldPublishMetrics  If the caches publish metrics.
 	 * @param  meterRegistrySupplier Meter registry supplier, read when each cache is created (null when there is no
 	 *                                   single or primary registry).
+	 * @param  environment           Environment (single-flight properties, see {@link SingleFlightCacheLoader}).
 	 * @return                       Cache manager.
 	 */
 	static CaffeineCacheManager createCacheManager(
@@ -227,9 +228,10 @@ public class LocalCacheAutoConfiguration {
 			final Long maximumSize,
 			final Boolean shouldRecordStats,
 			final Boolean shouldPublishMetrics,
-			final Supplier<MeterRegistry> meterRegistrySupplier) {
+			final Supplier<MeterRegistry> meterRegistrySupplier,
+			final Environment environment) {
 		final CaffeineCacheManager cacheManager = new MeteredCaffeineCacheManager(cacheManagerName, Boolean.TRUE.equals(shouldPublishMetrics),
-				meterRegistrySupplier);
+				meterRegistrySupplier, SingleFlightCacheLoader.isLocalEnabled(environment) ? SingleFlightCacheLoader.getWaitTimeout(environment) : null);
 		Caffeine<Object, Object> caffeine = Caffeine.newBuilder().expireAfterWrite(expiration);
 		if ((maximumSize != null) && (maximumSize > 0)) {
 			caffeine = caffeine.maximumSize(maximumSize);
@@ -253,7 +255,7 @@ public class LocalCacheAutoConfiguration {
 			final Environment environment) {
 		return LocalCacheAutoConfiguration.createCacheManager(expiration.getLocalCacheManagerName(), expiration.getExpiration(environment), this.maximumSize,
 				LocalCacheAutoConfiguration.shouldRecordStats(environment), LocalCacheAutoConfiguration.shouldPublishMetrics(environment),
-				this.meterRegistryProvider::getIfUnique);
+				this.meterRegistryProvider::getIfUnique, environment);
 	}
 
 	/**

@@ -18,6 +18,7 @@ import org.springframework.core.env.Environment;
 import org.springframework.data.redis.cache.CacheKeyPrefix;
 import org.springframework.data.redis.cache.RedisCacheConfiguration;
 import org.springframework.data.redis.cache.RedisCacheManager;
+import org.springframework.data.redis.cache.RedisCacheWriter;
 import org.springframework.data.redis.connection.RedisConnectionFactory;
 import org.springframework.data.redis.serializer.GenericJackson2JsonRedisSerializer;
 import org.springframework.data.redis.serializer.RedisSerializationContext.SerializationPair;
@@ -136,6 +137,33 @@ public class RedisCacheAutoConfiguration {
 	}
 
 	/**
+	 * Creates a central cache manager: single-flight ({@link SingleFlightRedisCacheManager}) unless
+	 * {@value SingleFlightCacheLoader#CENTRAL_ENABLED_PROPERTY} is false, with the cross-instance lock if
+	 * {@value SingleFlightCacheLoader#CENTRAL_LOCK_ENABLED_PROPERTY} is true.
+	 *
+	 * @param  redisConnectionFactory Redis connection factory.
+	 * @param  cacheConfiguration     Cache configuration.
+	 * @param  environment            Environment.
+	 * @return                        The cache manager.
+	 */
+	private RedisCacheManager createCacheManager(
+			final RedisConnectionFactory redisConnectionFactory,
+			final RedisCacheConfiguration cacheConfiguration,
+			final Environment environment) {
+		final RedisCacheManager cacheManager;
+		if (SingleFlightCacheLoader.isCentralEnabled(environment)) {
+			cacheManager = new SingleFlightRedisCacheManager(RedisCacheWriter.nonLockingRedisCacheWriter(redisConnectionFactory), cacheConfiguration,
+					SingleFlightCacheLoader.getWaitTimeout(environment),
+					SingleFlightCacheLoader.isCentralLockEnabled(environment) ? redisConnectionFactory : null,
+					SingleFlightCacheLoader.getCentralLockTimeout(environment), SingleFlightCacheLoader.getCentralLockPollInterval(environment));
+		}
+		else {
+			cacheManager = RedisCacheManager.builder(redisConnectionFactory).cacheDefaults(cacheConfiguration).build();
+		}
+		return cacheManager;
+	}
+
+	/**
 	 * Short lived cache.
 	 *
 	 * @param  redisConnectionFactory Redis connection factory.
@@ -150,7 +178,7 @@ public class RedisCacheAutoConfiguration {
 				.serializeValuesWith(this.serializationPair).computePrefixWith(CacheKeyPrefix.simple());
 		cacheConfiguration.configureKeyConverters(conversionService -> conversionService.addConverter(SimpleKey.class, String.class, this.keyConverter));
 		cacheConfiguration.configureKeyConverters(conversionService -> conversionService.addConverter(this.keyConverter));
-		this.millisExpirationCentralCacheManager = RedisCacheManager.builder(redisConnectionFactory).cacheDefaults(cacheConfiguration).build();
+		this.millisExpirationCentralCacheManager = this.createCacheManager(redisConnectionFactory, cacheConfiguration, environment);
 		return this.millisExpirationCentralCacheManager;
 	}
 
@@ -169,7 +197,7 @@ public class RedisCacheAutoConfiguration {
 				.serializeValuesWith(this.serializationPair).computePrefixWith(CacheKeyPrefix.simple());
 		cacheConfiguration.configureKeyConverters(conversionService -> conversionService.addConverter(SimpleKey.class, String.class, this.keyConverter));
 		cacheConfiguration.configureKeyConverters(conversionService -> conversionService.addConverter(this.keyConverter));
-		this.secondsExpirationCentralCacheManager = RedisCacheManager.builder(redisConnectionFactory).cacheDefaults(cacheConfiguration).build();
+		this.secondsExpirationCentralCacheManager = this.createCacheManager(redisConnectionFactory, cacheConfiguration, environment);
 		return this.secondsExpirationCentralCacheManager;
 	}
 
@@ -188,7 +216,7 @@ public class RedisCacheAutoConfiguration {
 				.serializeValuesWith(this.serializationPair).computePrefixWith(CacheKeyPrefix.simple());
 		cacheConfiguration.configureKeyConverters(conversionService -> conversionService.addConverter(SimpleKey.class, String.class, this.keyConverter));
 		cacheConfiguration.configureKeyConverters(conversionService -> conversionService.addConverter(this.keyConverter));
-		this.minutesExpirationCentralCacheManager = RedisCacheManager.builder(redisConnectionFactory).cacheDefaults(cacheConfiguration).build();
+		this.minutesExpirationCentralCacheManager = this.createCacheManager(redisConnectionFactory, cacheConfiguration, environment);
 		return this.minutesExpirationCentralCacheManager;
 	}
 
@@ -207,7 +235,7 @@ public class RedisCacheAutoConfiguration {
 				.serializeValuesWith(this.serializationPair).computePrefixWith(CacheKeyPrefix.simple());
 		cacheConfiguration.configureKeyConverters(conversionService -> conversionService.addConverter(SimpleKey.class, String.class, this.keyConverter));
 		cacheConfiguration.configureKeyConverters(conversionService -> conversionService.addConverter(this.keyConverter));
-		this.hoursExpirationCentralCacheManager = RedisCacheManager.builder(redisConnectionFactory).cacheDefaults(cacheConfiguration).build();
+		this.hoursExpirationCentralCacheManager = this.createCacheManager(redisConnectionFactory, cacheConfiguration, environment);
 		return this.hoursExpirationCentralCacheManager;
 	}
 
@@ -226,7 +254,7 @@ public class RedisCacheAutoConfiguration {
 				.serializeValuesWith(this.serializationPair).computePrefixWith(CacheKeyPrefix.simple());
 		cacheConfiguration.configureKeyConverters(conversionService -> conversionService.addConverter(SimpleKey.class, String.class, this.keyConverter));
 		cacheConfiguration.configureKeyConverters(conversionService -> conversionService.addConverter(this.keyConverter));
-		this.dayExpirationCentralCacheManager = RedisCacheManager.builder(redisConnectionFactory).cacheDefaults(cacheConfiguration).build();
+		this.dayExpirationCentralCacheManager = this.createCacheManager(redisConnectionFactory, cacheConfiguration, environment);
 		return this.dayExpirationCentralCacheManager;
 	}
 
@@ -245,7 +273,7 @@ public class RedisCacheAutoConfiguration {
 				.serializeValuesWith(this.serializationPair).computePrefixWith(CacheKeyPrefix.simple());
 		cacheConfiguration.configureKeyConverters(conversionService -> conversionService.addConverter(SimpleKey.class, String.class, this.keyConverter));
 		cacheConfiguration.configureKeyConverters(conversionService -> conversionService.addConverter(this.keyConverter));
-		this.daysExpirationCentralCacheManager = RedisCacheManager.builder(redisConnectionFactory).cacheDefaults(cacheConfiguration).build();
+		this.daysExpirationCentralCacheManager = this.createCacheManager(redisConnectionFactory, cacheConfiguration, environment);
 		return this.daysExpirationCentralCacheManager;
 	}
 
