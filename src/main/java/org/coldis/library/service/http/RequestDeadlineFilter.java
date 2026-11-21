@@ -33,12 +33,13 @@ import jakarta.servlet.http.HttpServletResponse;
  * and cleared after it; the generated clients called for it cap their calls to
  * what is left of it, and send it on.</li>
  * </ul>
- * Off by default ({@code org.coldis.configuration.request-deadline.enabled},
- * also a runtime switch: {@link #setEnabled(boolean)}): off, every request goes
- * through as before. The header is taken from any caller (an accepted
- * decision): a caller can shorten or skip its own request's downstream calls,
- * which matters only where a check lets a request through when its downstream
- * call fails. The health check is never filtered. Nothing running is interrupted: the
+ * On by default ({@code org.coldis.configuration.request-deadline.enabled},
+ * also a runtime switch: {@link #setEnabled(boolean)}); off, every request goes
+ * through as before. Accepted decisions: the header is taken from any caller (a
+ * caller can shorten or skip its own request's downstream calls, which matters
+ * only where a check lets a request through when its downstream call fails),
+ * and once the original caller has given up a chain of writes can stop
+ * partway. The health check is never filtered. Nothing running is interrupted: the
  * deadline is only checked when the request arrives and when a generated client
  * call starts. Work the request hands to another thread (asynchronous methods,
  * JMS, executors, asynchronous request processing) does not get it. Any failure

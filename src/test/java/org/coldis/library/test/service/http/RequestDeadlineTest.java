@@ -85,9 +85,16 @@ public class RequestDeadlineTest extends ContainerTestHelper {
 	private ServiceClientRequestDeadlinePolicy serviceClientRequestDeadlinePolicy;
 
 	/**
-	 * Turns the request deadline on, on both sides, for the tests of this class
-	 * (it is off by default; the shared context is not split, and
-	 * {@link #clearDeadline()} turns it back off).
+	 * Shipped value of the request deadline switch.
+	 */
+	@Value("${" + RequestDeadlineAutoConfiguration.ENABLED_PROPERTY + "}")
+	private Boolean shippedEnabled;
+
+	/**
+	 * Turns the request deadline on, on both sides, before each test of this
+	 * class (its default; a test may switch it off at runtime, and
+	 * {@link #clearDeadline()} puts it back on, so the shared context is not
+	 * split).
 	 */
 	@BeforeEach
 	public void turnDeadlineOn() {
@@ -96,14 +103,14 @@ public class RequestDeadlineTest extends ContainerTestHelper {
 	}
 
 	/**
-	 * Turns the request deadline back off (its default) and clears the test
+	 * Puts the request deadline back on (its default) and clears the test
 	 * thread's deadline (the unit tests set none, but a failure must not leak
 	 * one).
 	 */
 	@AfterEach
 	public void clearDeadline() {
-		this.requestDeadlineFilter.getFilter().setEnabled(false);
-		this.serviceClientRequestDeadlinePolicy.setEnabled(false);
+		this.requestDeadlineFilter.getFilter().setEnabled(true);
+		this.serviceClientRequestDeadlinePolicy.setEnabled(true);
 		ServiceClientRequestDeadline.setDeadlineNanos(null);
 	}
 
@@ -287,19 +294,20 @@ public class RequestDeadlineTest extends ContainerTestHelper {
 	}
 
 	/**
-	 * The switch: the filter is always registered, off by default and when the
-	 * property is false, on when it is true (a context runner of its own, so the
-	 * shared context is not split); off on the running server, nothing changes.
+	 * The switch: on as shipped and by default, off when the property is false
+	 * (the filter is always registered; a context runner of its own, so the
+	 * shared context is not split); switched off on the running server, nothing
+	 * changes.
 	 *
 	 * @throws Exception If the test fails.
 	 */
 	@Test
-	@DisplayName("the switch registers the filter or not")
+	@DisplayName("the switch: on by default, off by the property or at runtime")
 	@SuppressWarnings("unchecked")
 	public void testSwitch() throws Exception {
 		final WebApplicationContextRunner runner = new WebApplicationContextRunner().withUserConfiguration(RequestDeadlineAutoConfiguration.class);
-		runner.run(context -> Assertions.assertFalse(context.getBean(FilterRegistrationBean.class).getFilter() instanceof final RequestDeadlineFilter filter
-				&& filter.isEnabled()));
+		Assertions.assertTrue(this.shippedEnabled);
+		runner.run(context -> Assertions.assertTrue(((FilterRegistrationBean<RequestDeadlineFilter>) context.getBean(FilterRegistrationBean.class)).getFilter().isEnabled()));
 		runner.withPropertyValues(RequestDeadlineAutoConfiguration.ENABLED_PROPERTY + "=true")
 				.run(context -> Assertions.assertTrue(((FilterRegistrationBean<RequestDeadlineFilter>) context.getBean(FilterRegistrationBean.class)).getFilter().isEnabled()));
 		runner.withPropertyValues(RequestDeadlineAutoConfiguration.ENABLED_PROPERTY + "=false")

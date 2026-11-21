@@ -12,9 +12,9 @@ import io.micrometer.core.instrument.MeterRegistry;
 
 /**
  * Request deadline configuration (see {@link RequestDeadlineFilter}), for servlet
- * services. The filter is always registered, and does nothing unless
- * {@value #ENABLED_PROPERTY} is true (off by default) or it is turned on at
- * runtime ({@link RequestDeadlineFilter#setEnabled(boolean)}).
+ * services. The filter is always registered; it is on unless
+ * {@value #ENABLED_PROPERTY} is false (on by default), and can also be switched
+ * at runtime ({@link RequestDeadlineFilter#setEnabled(boolean)}).
  */
 @Configuration
 @ConditionalOnWebApplication(type = ConditionalOnWebApplication.Type.SERVLET)
@@ -45,7 +45,7 @@ public class RequestDeadlineAutoConfiguration {
 	 */
 	@Bean
 	public FilterRegistrationBean<RequestDeadlineFilter> requestDeadlineFilter(
-			@Value("${" + RequestDeadlineAutoConfiguration.ENABLED_PROPERTY + ":false}")
+			@Value("${" + RequestDeadlineAutoConfiguration.ENABLED_PROPERTY + ":true}")
 			final Boolean isEnabled,
 			@Value("${org.coldis.configuration.health-check:/health-check}")
 			final String healthCheckPath,
