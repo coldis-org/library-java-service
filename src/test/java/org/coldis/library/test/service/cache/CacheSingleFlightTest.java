@@ -40,6 +40,7 @@ import org.springframework.data.redis.cache.RedisCacheConfiguration;
 import org.springframework.data.redis.cache.RedisCacheManager;
 import org.springframework.data.redis.cache.RedisCacheWriter;
 import org.springframework.data.redis.connection.RedisConnectionFactory;
+import org.springframework.data.redis.connection.lettuce.LettuceConnectionFactory;
 
 import com.github.benmanes.caffeine.cache.Caffeine;
 
@@ -163,6 +164,9 @@ public class CacheSingleFlightTest extends ContainerTestHelper {
 	@Test
 	@DisplayName("The central and local cache managers load single-flight by default, without the cross-instance lock")
 	public void testSingleFlightByDefault() {
+		CacheSingleFlightTest.LOGGER.info("Redis connections pooled (native connection not shared): {}.",
+				(this.redisConnectionFactory instanceof final LettuceConnectionFactory lettuceConnectionFactory)
+						&& !lettuceConnectionFactory.getShareNativeConnection());
 		final SingleFlightRedisCache centralCache = Assertions.assertInstanceOf(SingleFlightRedisCache.class,
 				this.centralCacheManager.getCache(SingleFlightCachedService.CENTRAL_CACHE));
 		Assertions.assertFalse(centralCache.isCrossInstanceLockEnabled());
@@ -493,41 +497,38 @@ public class CacheSingleFlightTest extends ContainerTestHelper {
 	}
 
 	/**
-	 * Measures the mean time of a cache read, best of some rounds.
+	 * Measures the mean time of a cache read over some iterations.
 	 *
 	 * @param  read       Cache read.
-	 * @param  iterations Iterations per round.
-	 * @param  rounds     Rounds.
-	 * @return            The best mean time, in nanoseconds.
+	 * @param  iterations Iterations.
+	 * @return            The mean time, in nanoseconds.
 	 * @throws Exception  If a read fails.
 	 */
 	private static double measureNanosPerRead(
 			final Callable<Object> read,
-			final int iterations,
-			final int rounds) throws Exception {
-		double bestNanosPerRead = Double.MAX_VALUE;
+			final int iterations) throws Exception {
 		long checksum = 0;
-		for (int roundIndex = 0; roundIndex < rounds; roundIndex++) {
-			final long start = System.nanoTime();
-			for (int iterationIndex = 0; iterationIndex < iterations; iterationIndex++) {
-				checksum += read.call().hashCode();
-			}
-			bestNanosPerRead = Math.min(bestNanosPerRead, (double) (System.nanoTime() - start) / iterations);
+		final long start = System.nanoTime();
+		for (int iterationIndex = 0; iterationIndex < iterations; iterationIndex++) {
+			checksum += read.call().hashCode();
 		}
+		final double nanosPerRead = (double) (System.nanoTime() - start) / iterations;
 		Assertions.assertNotEquals(0, checksum);
-		return bestNanosPerRead;
+		return nanosPerRead;
 	}
 
 	/**
-	 * Measures the hit path of a plain cache and its single-flight version, synchronized and not.
+	 * Measures the hit path of a plain cache and its single-flight version, synchronized and not. Each round measures
+	 * every variant once, in a rotating order (so drift and noise hit all of them alike), after a warm-up round; the
+	 * best mean of each variant is kept.
 	 *
-	 * @param  label            Label.
-	 * @param  plainCache       Plain cache.
+	 * @param  label             Label.
+	 * @param  plainCache        Plain cache.
 	 * @param  singleFlightCache Single-flight cache.
-	 * @param  iterations       Iterations per round.
-	 * @param  rounds           Rounds.
-	 * @return                  Nanoseconds per read: plain synchronized, single-flight synchronized, plain, single-flight.
-	 * @throws Exception        If a read fails.
+	 * @param  iterations        Iterations per variant per round.
+	 * @param  rounds            Rounds.
+	 * @return                   Nanoseconds per read: plain synchronized, single-flight synchronized, plain, single-flight.
+	 * @throws Exception         If a read fails.
 	 */
 	private static double[] measureHitPath(
 			final String label,
@@ -540,18 +541,23 @@ public class CacheSingleFlightTest extends ContainerTestHelper {
 		};
 		plainCache.put("key", 42);
 		singleFlightCache.put("key", 42);
-		// Warm-up, then the variants measured in turns.
-		double[] nanosPerRead = new double[4];
-		for (int turnIndex = 0; turnIndex < 2; turnIndex++) {
-			nanosPerRead = new double[] { CacheSingleFlightTest.measureNanosPerRead(() -> plainCache.get("key", loader), iterations, rounds),
-					CacheSingleFlightTest.measureNanosPerRead(() -> singleFlightCache.get("key", loader), iterations, rounds),
-					CacheSingleFlightTest.measureNanosPerRead(() -> plainCache.get("key").get(), iterations, rounds),
-					CacheSingleFlightTest.measureNanosPerRead(() -> singleFlightCache.get("key").get(), iterations, rounds) };
+		final List<Callable<Object>> reads = List.of(() -> plainCache.get("key", loader), () -> singleFlightCache.get("key", loader),
+				() -> plainCache.get("key").get(), () -> singleFlightCache.get("key").get());
+		final double[] nanosPerRead = new double[] { Double.MAX_VALUE, Double.MAX_VALUE, Double.MAX_VALUE, Double.MAX_VALUE };
+		for (int roundIndex = 0; roundIndex <= rounds; roundIndex++) {
+			for (int readIndex = 0; readIndex < reads.size(); readIndex++) {
+				final int variantIndex = (readIndex + roundIndex) % reads.size();
+				final double roundNanosPerRead = CacheSingleFlightTest.measureNanosPerRead(reads.get(variantIndex), iterations);
+				// Round 0 is the warm-up.
+				if (roundIndex > 0) {
+					nanosPerRead[variantIndex] = Math.min(nanosPerRead[variantIndex], roundNanosPerRead);
+				}
+			}
 		}
 		CacheSingleFlightTest.LOGGER.info(
-				"Hit path, {} (ns per read, best of {} rounds of {}): synchronized get(key, loader): plain {}, single-flight {}; get(key): plain {}, single-flight {}.",
-				label, rounds, iterations, String.format(Locale.ROOT, "%.1f", nanosPerRead[0]), String.format(Locale.ROOT, "%.1f", nanosPerRead[1]), String.format(Locale.ROOT, "%.1f", nanosPerRead[2]),
-				String.format(Locale.ROOT, "%.1f", nanosPerRead[3]));
+				"Hit path, {} (ns per read, best of {} interleaved rounds of {}): synchronized get(key, loader): plain {}, single-flight {}; get(key): plain {}, single-flight {}.",
+				label, rounds, iterations, String.format(Locale.ROOT, "%.1f", nanosPerRead[0]), String.format(Locale.ROOT, "%.1f", nanosPerRead[1]),
+				String.format(Locale.ROOT, "%.1f", nanosPerRead[2]), String.format(Locale.ROOT, "%.1f", nanosPerRead[3]));
 		return nanosPerRead;
 	}
 
@@ -565,18 +571,18 @@ public class CacheSingleFlightTest extends ContainerTestHelper {
 	public void testHitPathOverhead() throws Exception {
 		final double[] localNanos = CacheSingleFlightTest.measureHitPath("local",
 				new CaffeineCache("hit-path-plain", Caffeine.newBuilder().recordStats().build(), true),
-				new SingleFlightCaffeineCache("hit-path-single-flight", Caffeine.newBuilder().recordStats().build(), true, Duration.ofSeconds(60)), 1_000_000, 5);
+				new SingleFlightCaffeineCache("hit-path-single-flight", Caffeine.newBuilder().recordStats().build(), true, Duration.ofSeconds(60)), 1_000_000, 7);
 		final String cacheName = "hit-path-" + UUID.randomUUID();
 		final double[] centralNanos = CacheSingleFlightTest.measureHitPath("central",
 				RedisCacheManager.builder(this.redisConnectionFactory).cacheDefaults(RedisCacheConfiguration.defaultCacheConfig().entryTtl(Duration.ofMinutes(5)))
 						.build().getCache(cacheName + "-plain"),
-				this.createCentralCacheManager(Duration.ofSeconds(60), false, Duration.ofSeconds(60)).getCache(cacheName + "-single-flight"), 2_000, 3);
+				this.createCentralCacheManager(Duration.ofSeconds(60), false, Duration.ofSeconds(60)).getCache(cacheName + "-single-flight"), 1_000, 15);
 		// Generous bounds (shared machines are noisy): the single-flight hit is one delegate read, as the plain one.
 		Assertions.assertTrue(localNanos[1] < ((2 * localNanos[0]) + 100), "Local synchronized hit: " + localNanos[1] + "ns vs " + localNanos[0] + "ns.");
 		Assertions.assertTrue(localNanos[3] < ((2 * localNanos[2]) + 100), "Local hit: " + localNanos[3] + "ns vs " + localNanos[2] + "ns.");
-		Assertions.assertTrue(centralNanos[1] < ((1.5 * centralNanos[0]) + 200_000),
+		Assertions.assertTrue(centralNanos[1] < ((1.5 * centralNanos[0]) + 50_000),
 				"Central synchronized hit: " + centralNanos[1] + "ns vs " + centralNanos[0] + "ns.");
-		Assertions.assertTrue(centralNanos[3] < ((1.5 * centralNanos[2]) + 200_000), "Central hit: " + centralNanos[3] + "ns vs " + centralNanos[2] + "ns.");
+		Assertions.assertTrue(centralNanos[3] < ((1.5 * centralNanos[2]) + 50_000), "Central hit: " + centralNanos[3] + "ns vs " + centralNanos[2] + "ns.");
 	}
 
 }
