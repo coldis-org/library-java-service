@@ -33,7 +33,8 @@ public class StatisticsContextConfigurationServiceComponent {
    */
   @Cacheable(
       cacheManager = "hoursExpirationLocalCacheManager",
-      value = "StatisticsContextConfigurationServiceComponent.getTruncationMinutes")
+      value = "StatisticsContextConfigurationServiceComponent.getTruncationMinutes",
+      sync = true)
   @Transactional(propagation = Propagation.NOT_SUPPORTED, readOnly = true)
   public Long getTruncationMinutes(final String context) {
     final StatisticsContextConfiguration configuration = this.findByContextOrParent(context);
@@ -61,7 +62,8 @@ public class StatisticsContextConfigurationServiceComponent {
    */
   @Cacheable(
       cacheManager = "hoursExpirationLocalCacheManager",
-      value = "StatisticsContextConfigurationServiceComponent.findByContext")
+      value = "StatisticsContextConfigurationServiceComponent.findByContext",
+      sync = true)
   @Transactional(propagation = Propagation.NOT_SUPPORTED, readOnly = true)
   public StatisticsContextConfiguration findByContext(final String context) {
     return this.statisticsContextConfigurationRepository.findById(context).orElse(null);
@@ -78,7 +80,8 @@ public class StatisticsContextConfigurationServiceComponent {
    */
   @Cacheable(
       cacheManager = "hoursExpirationLocalCacheManager",
-      value = "StatisticsContextConfigurationServiceComponent.findByContextOrParent")
+      value = "StatisticsContextConfigurationServiceComponent.findByContextOrParent",
+      sync = true)
   @Transactional(propagation = Propagation.NOT_SUPPORTED, readOnly = true)
   public StatisticsContextConfiguration findByContextOrParent(final String context) {
     String current = context;

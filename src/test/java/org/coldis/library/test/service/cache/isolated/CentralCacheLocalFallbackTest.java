@@ -4,9 +4,11 @@ import org.coldis.library.service.cache.CacheManagerFallbackRegistrar;
 import org.coldis.library.service.cache.LocalCacheAutoConfiguration;
 import org.coldis.library.service.cache.CacheHelper;
 import org.coldis.library.service.cache.CacheManagerExpiration;
+import org.coldis.library.service.cache.SingleFlightCaffeineCache;
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.springframework.cache.CacheManager;
 import org.springframework.cache.caffeine.CaffeineCacheManager;
 
 /**
@@ -29,6 +31,8 @@ public class CentralCacheLocalFallbackTest {
 			Assertions.assertEquals(5, IsolatedCacheContext.getMaximumSize(context.getBean("minutesExpirationLocalCacheManager")));
 			Assertions.assertEquals(5, IsolatedCacheContext.getMaximumSize(context.getBean("minutesExpirationCentralCacheManager")));
 			Assertions.assertNotSame(context.getBean("minutesExpirationLocalCacheManager"), context.getBean("minutesExpirationCentralCacheManager"));
+			Assertions.assertInstanceOf(SingleFlightCaffeineCache.class,
+					context.getBean("minutesExpirationCentralCacheManager", CacheManager.class).getCache("single-flight"));
 			final CacheClient cacheClient = context.getBean(CacheClient.class);
 			for (int call = 0; call < 3; call++) {
 				Assertions.assertEquals(1, cacheClient.getFromCentralCache("key"));

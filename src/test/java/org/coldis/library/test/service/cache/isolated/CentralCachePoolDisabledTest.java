@@ -9,18 +9,19 @@ import org.springframework.data.redis.cache.RedisCacheManager;
 import org.springframework.data.redis.connection.lettuce.LettuceConnectionFactory;
 
 /**
- * A service with Redis that does not turn the central cache connection pool on: as before, every cache command goes
- * through the one native connection the Lettuce connection factory shares.
+ * A service with Redis that turns the central cache connection pool off: every cache command goes through the one native
+ * connection the Lettuce connection factory shares.
  */
-public class CentralCachePoolOffByDefaultTest {
+public class CentralCachePoolDisabledTest {
 
 	/**
-	 * Tests that the pool configuration stays off and the connection factory keeps sharing its native connection.
+	 * Tests that, with the pool turned off, the pool configuration stays off and the connection factory keeps sharing its
+	 * native connection.
 	 */
 	@Test
-	@DisplayName("Without the pool property, the Redis connection factory keeps one shared connection")
-	public void testCentralCachePoolOffByDefault() {
-		IsolatedCacheContext.withBootRedis().run(context -> {
+	@DisplayName("With the pool turned off, the Redis connection factory keeps one shared connection")
+	public void testCentralCachePoolDisabled() {
+		IsolatedCacheContext.withBootRedis().withPropertyValues(RedisConnectionPoolAutoConfiguration.ENABLED_PROPERTY + "=false").run(context -> {
 			Assertions.assertNull(context.getStartupFailure());
 			Assertions.assertTrue(context.getBeansOfType(RedisConnectionPoolAutoConfiguration.class).isEmpty());
 			Assertions.assertFalse(context.containsBean("redisConnectionPoolCustomizer"));
