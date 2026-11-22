@@ -183,7 +183,15 @@ public class RequestDeadlineFilter extends OncePerRequestFilter {
 			final FilterChain filterChain) throws ServletException, IOException {
 		final Long timeoutMillis = this.readTimeoutMillis(request);
 		if (timeoutMillis == null) {
-			filterChain.doFilter(request, response);
+			// No deadline for this request, whatever the thread may carry.
+			final Long previousDeadlineNanos = ServiceClientRequestDeadline.getDeadlineNanos();
+			ServiceClientRequestDeadline.setDeadlineNanos(null);
+			try {
+				filterChain.doFilter(request, response);
+			}
+			finally {
+				ServiceClientRequestDeadline.setDeadlineNanos(previousDeadlineNanos);
+			}
 		}
 		else if (timeoutMillis <= 0) {
 			RequestDeadlineFilter.LOGGER.debug("Request {} answered 504: its caller's deadline had passed ({} ms left).", request.getMethod(), timeoutMillis);

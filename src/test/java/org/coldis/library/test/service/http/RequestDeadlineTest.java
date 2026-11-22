@@ -97,7 +97,7 @@ public class RequestDeadlineTest extends ContainerTestHelper {
 	 * split).
 	 */
 	@BeforeEach
-	public void turnDeadlineOn() {
+	public void beforeEach() {
 		this.requestDeadlineFilter.getFilter().setEnabled(true);
 		this.serviceClientRequestDeadlinePolicy.setEnabled(true);
 	}
@@ -219,7 +219,7 @@ public class RequestDeadlineTest extends ContainerTestHelper {
 
 	/**
 	 * A request without the header, or with one that is not an integer, gets no
-	 * deadline and is served as before.
+	 * deadline (not even one its thread carries) and is served as before.
 	 *
 	 * @throws Exception If the test fails.
 	 */
@@ -235,6 +235,26 @@ public class RequestDeadlineTest extends ContainerTestHelper {
 		Assertions.assertNull(RequestDeadlineFilter.parseTimeoutMillis("  "));
 		Assertions.assertNull(RequestDeadlineFilter.parseTimeoutMillis("99999999999999999999"));
 		Assertions.assertEquals(250L, RequestDeadlineFilter.parseTimeoutMillis(" 250 "));
+		// A deadline the thread carries (stale) is not seen by a request without the
+		// header, and is put back after it.
+		final long staleDeadlineNanos = ServiceClientRequestDeadline.getDeadlineNanosIn(60_000);
+		ServiceClientRequestDeadline.setDeadlineNanos(staleDeadlineNanos);
+		final AtomicReference<Long> deadlineInChain = new AtomicReference<>(0L);
+		new RequestDeadlineFilter(true, "/health-check", null).doFilter(new MockHttpServletRequest("GET", "/any"), new MockHttpServletResponse(),
+				new MockFilterChain(new HttpServlet() {
+
+					private static final long serialVersionUID = 1L;
+
+					@Override
+					protected void service(
+							final HttpServletRequest servletRequest,
+							final HttpServletResponse servletResponse) {
+						deadlineInChain.set(ServiceClientRequestDeadline.getDeadlineNanos());
+					}
+
+				}));
+		Assertions.assertNull(deadlineInChain.get());
+		Assertions.assertEquals(staleDeadlineNanos, ServiceClientRequestDeadline.getDeadlineNanos());
 	}
 
 	/**
@@ -312,14 +332,16 @@ public class RequestDeadlineTest extends ContainerTestHelper {
 				.run(context -> Assertions.assertTrue(((FilterRegistrationBean<RequestDeadlineFilter>) context.getBean(FilterRegistrationBean.class)).getFilter().isEnabled()));
 		runner.withPropertyValues(RequestDeadlineAutoConfiguration.ENABLED_PROPERTY + "=false")
 				.run(context -> Assertions.assertFalse(((FilterRegistrationBean<RequestDeadlineFilter>) context.getBean(FilterRegistrationBean.class)).getFilter().isEnabled()));
-		// Off on the running server (as by default): a passed deadline goes through,
-		// with no deadline, and the generated clients send none.
-		this.requestDeadlineFilter.getFilter().setEnabled(false);
+		// The client side switched off at runtime (the filter on): the request has
+		// its deadline, but the generated client sends none.
 		this.serviceClientRequestDeadlinePolicy.setEnabled(false);
+		Assertions.assertEquals(RequestDeadlineTestService.NONE, this.get("/request-deadline/forward-header", "3000").body());
+		// The filter switched off at runtime: a passed deadline goes through, with
+		// no deadline.
+		this.requestDeadlineFilter.getFilter().setEnabled(false);
 		final HttpResponse<String> offResponse = this.get("/request-deadline/remaining", "0");
 		Assertions.assertEquals(200, offResponse.statusCode());
 		Assertions.assertEquals(RequestDeadlineTestService.NONE, offResponse.body());
-		Assertions.assertEquals(RequestDeadlineTestService.NONE, this.get("/request-deadline/forward-header", "3000").body());
 	}
 
 }
