@@ -39,7 +39,7 @@ import jakarta.servlet.http.HttpServletResponse;
  * caller can shorten or skip its own request's downstream calls, which matters
  * only where a check lets a request through when its downstream call fails),
  * and once the original caller has given up a chain of writes can stop
- * partway. The health check is never filtered. Nothing running is interrupted: the
+ * partway. The health check (its exact path) is never filtered. Nothing running is interrupted: the
  * deadline is only checked when the request arrives and when a generated client
  * call starts. Work the request hands to another thread (asynchronous methods,
  * JMS, executors, asynchronous request processing) does not get it. Any failure
@@ -182,18 +182,7 @@ public class RequestDeadlineFilter extends OncePerRequestFilter {
 			final HttpServletResponse response,
 			final FilterChain filterChain) throws ServletException, IOException {
 		final Long timeoutMillis = this.readTimeoutMillis(request);
-		if (timeoutMillis == null) {
-			// No deadline for this request, whatever the thread may carry.
-			final Long previousDeadlineNanos = ServiceClientRequestDeadline.getDeadlineNanos();
-			ServiceClientRequestDeadline.setDeadlineNanos(null);
-			try {
-				filterChain.doFilter(request, response);
-			}
-			finally {
-				ServiceClientRequestDeadline.setDeadlineNanos(previousDeadlineNanos);
-			}
-		}
-		else if (timeoutMillis <= 0) {
+		if ((timeoutMillis != null) && (timeoutMillis <= 0)) {
 			RequestDeadlineFilter.LOGGER.debug("Request {} answered 504: its caller's deadline had passed ({} ms left).", request.getMethod(), timeoutMillis);
 			if (this.expiredCounter != null) {
 				this.expiredCounter.increment();
@@ -203,8 +192,10 @@ public class RequestDeadlineFilter extends OncePerRequestFilter {
 			response.getWriter().write("Request deadline expired.");
 		}
 		else {
+			// The request's own deadline (none without the header, whatever the
+			// thread may carry), and the thread's back after it.
 			final Long previousDeadlineNanos = ServiceClientRequestDeadline.getDeadlineNanos();
-			ServiceClientRequestDeadline.setDeadlineNanos(ServiceClientRequestDeadline.getDeadlineNanosIn(timeoutMillis));
+			ServiceClientRequestDeadline.setDeadlineNanos(timeoutMillis == null ? null : ServiceClientRequestDeadline.getDeadlineNanosIn(timeoutMillis));
 			try {
 				filterChain.doFilter(request, response);
 			}

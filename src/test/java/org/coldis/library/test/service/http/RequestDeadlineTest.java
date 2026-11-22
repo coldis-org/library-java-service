@@ -281,6 +281,22 @@ public class RequestDeadlineTest extends ContainerTestHelper {
 		final MockFilterChain otherChain = new MockFilterChain();
 		new RequestDeadlineFilter(true, "/health-check", null).doFilter(otherRequest, new MockHttpServletResponse(), otherChain);
 		Assertions.assertNull(otherChain.getRequest());
+		// Under a context path, the health check after it goes through, a
+		// neighbouring path does not.
+		final MockHttpServletRequest contextHealthRequest = new MockHttpServletRequest("GET", "/api/health-check");
+		contextHealthRequest.setContextPath("/api");
+		contextHealthRequest.addHeader(ServiceClientRequestDeadline.HEADER, "0");
+		final MockFilterChain contextHealthChain = new MockFilterChain();
+		new RequestDeadlineFilter(true, "/health-check", null).doFilter(contextHealthRequest, new MockHttpServletResponse(), contextHealthChain);
+		Assertions.assertNotNull(contextHealthChain.getRequest());
+		final MockHttpServletRequest contextOtherRequest = new MockHttpServletRequest("GET", "/api/health-check-other");
+		contextOtherRequest.setContextPath("/api");
+		contextOtherRequest.addHeader(ServiceClientRequestDeadline.HEADER, "0");
+		final MockHttpServletResponse contextOtherResponse = new MockHttpServletResponse();
+		final MockFilterChain contextOtherChain = new MockFilterChain();
+		new RequestDeadlineFilter(true, "/health-check", null).doFilter(contextOtherRequest, contextOtherResponse, contextOtherChain);
+		Assertions.assertNull(contextOtherChain.getRequest());
+		Assertions.assertEquals(504, contextOtherResponse.getStatus());
 	}
 
 	/**
