@@ -255,6 +255,49 @@ public class RequestDeadlineTest extends ContainerTestHelper {
 				}));
 		Assertions.assertNull(deadlineInChain.get());
 		Assertions.assertEquals(staleDeadlineNanos, ServiceClientRequestDeadline.getDeadlineNanos());
+		// A header that cannot be read: the request goes on with no deadline.
+		final MockHttpServletRequest unreadableRequest = new MockHttpServletRequest("GET", "/any") {
+
+			@Override
+			public String getHeader(
+					final String name) {
+				throw new IllegalStateException("Unreadable header.");
+			}
+
+		};
+		deadlineInChain.set(0L);
+		new RequestDeadlineFilter(true, "/health-check", null).doFilter(unreadableRequest, new MockHttpServletResponse(),
+				new MockFilterChain(new HttpServlet() {
+
+					private static final long serialVersionUID = 1L;
+
+					@Override
+					protected void service(
+							final HttpServletRequest servletRequest,
+							final HttpServletResponse servletResponse) {
+						deadlineInChain.set(ServiceClientRequestDeadline.getDeadlineNanos());
+					}
+
+				}));
+		Assertions.assertNull(deadlineInChain.get());
+		// A controller that fails: the thread's deadline is still put back.
+		final MockHttpServletRequest failingRequest = new MockHttpServletRequest("GET", "/any");
+		failingRequest.addHeader(ServiceClientRequestDeadline.HEADER, "3000");
+		Assertions.assertThrows(IllegalStateException.class,
+				() -> new RequestDeadlineFilter(true, "/health-check", null).doFilter(failingRequest, new MockHttpServletResponse(),
+						new MockFilterChain(new HttpServlet() {
+
+							private static final long serialVersionUID = 1L;
+
+							@Override
+							protected void service(
+									final HttpServletRequest servletRequest,
+									final HttpServletResponse servletResponse) {
+								throw new IllegalStateException("Controller failed.");
+							}
+
+						})));
+		Assertions.assertEquals(staleDeadlineNanos, ServiceClientRequestDeadline.getDeadlineNanos());
 	}
 
 	/**
@@ -324,8 +367,8 @@ public class RequestDeadlineTest extends ContainerTestHelper {
 		Assertions.assertTrue(slowResponse.statusCode() >= 500, slowResponse::body);
 		Assertions.assertTrue(elapsed.compareTo(Duration.ofMillis(400)) > 0, elapsed::toString);
 		Assertions.assertTrue(elapsed.compareTo(Duration.ofMillis(1900)) < 0, elapsed::toString);
-		TestHelper.waitUntilValid(RequestDeadlineTestService.CONTROLLER_CALLS::get, calls -> calls >= (controllerCalls + 2), TestHelper.SHORT_WAIT,
-				TestHelper.SHORT_WAIT / 10);
+		Assertions.assertTrue(TestHelper.waitUntilValid(RequestDeadlineTestService.CONTROLLER_CALLS::get, calls -> calls >= (controllerCalls + 2), TestHelper.SHORT_WAIT,
+				TestHelper.SHORT_WAIT / 10));
 		Assertions.assertEquals(controllerCalls + 2, RequestDeadlineTestService.CONTROLLER_CALLS.get());
 	}
 

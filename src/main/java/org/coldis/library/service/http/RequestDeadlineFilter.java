@@ -30,7 +30,8 @@ import jakarta.servlet.http.HttpServletResponse;
  * {@value #EXPIRED_COUNTER} when there is a meter registry).</li>
  * <li>More: the deadline (now plus that time) is kept for the request in
  * {@link ServiceClientRequestDeadline} while the request runs on this thread,
- * and cleared after it; the generated clients called for it cap their calls to
+ * and the thread's previous deadline put back after it; the generated clients
+ * called for it cap their calls to
  * what is left of it, and send it on.</li>
  * </ul>
  * On by default ({@code org.coldis.configuration.request-deadline.enabled},
