@@ -4,6 +4,7 @@ import java.lang.reflect.Method;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.SynchronousQueue;
 import java.util.concurrent.ThreadPoolExecutor;
 
@@ -17,7 +18,6 @@ import org.coldis.library.service.jms.EnhancedJmsBootstrapConfiguration;
 import org.coldis.library.service.jms.ExtendedArtemisProperties;
 import org.coldis.library.service.jms.ExtendedMessagingMessageListenerAdapter;
 import org.coldis.library.service.jms.JmsConfigurationHelper;
-import org.coldis.library.service.jms.JmsCpuLimits;
 import org.coldis.library.service.jms.JmsConverterProperties;
 import org.coldis.library.service.jms.StaleMessageFilterService;
 import org.coldis.library.test.StartTestWithContainerExtension;
@@ -61,6 +61,10 @@ public class JmsConfigurationHelperTest extends ContainerTestHelper {
 	/** JMS configuration helper. */
 	@Autowired
 	private JmsConfigurationHelper jmsConfigurationHelper;
+
+	/** Meter registry. */
+	@Autowired
+	private MeterRegistry meterRegistry;
 
 	/** JMS converter properties. */
 	@Autowired
@@ -186,57 +190,75 @@ public class JmsConfigurationHelperTest extends ContainerTestHelper {
 	}
 
 	/**
-	 * Tests that the listener executor is unbounded by default.
+	 * Tests that the listener executor is an unbounded cached pool by default,
+	 * growing with consumers and shrinking to no thread when idle.
 	 *
 	 * @throws Throwable If the test fails.
 	 */
 	@Test
-	@DisplayName("Listener executor: unbounded cached pool by default, without a bounded-pool WARN")
+	@DisplayName("Listener executor: by default a cached pool with no core threads, growing with consumers and shrinking to 0 when idle, no WARN")
 	public void testDefaultExecutorIsUnbounded() throws Throwable {
 		final JmsConfigurationHelper helper = new JmsConfigurationHelper();
 		final List<String> warnings = JmsConfigurationHelperTest.captureWarnings(
-				() -> helper.setJmsListenerExecutor("executor-default", 5, false, null, null, null, null, null, null, null, null, 60, null));
-		final ThreadPoolExecutor pool = JmsConfigurationHelperTest.getPoolAndShutdown(helper);
-		Assertions.assertEquals(0, pool.getCorePoolSize());
-		Assertions.assertEquals(Integer.MAX_VALUE, pool.getMaximumPoolSize());
-		Assertions.assertInstanceOf(SynchronousQueue.class, pool.getQueue());
-		Assertions.assertEquals(List.of(), warnings);
+				() -> helper.setJmsListenerExecutor("executor-default", null, false, null, null, null, null, null, null, null, null, 1, true));
+		final ThreadPoolExecutor pool = Assertions.assertInstanceOf(ThreadPoolExecutor.class, JmsConfigurationHelperTest.getListenerExecutor(helper));
+		try {
+			Assertions.assertEquals(List.of(), warnings);
+			Assertions.assertEquals(0, pool.getCorePoolSize());
+			Assertions.assertEquals(Integer.MAX_VALUE, pool.getMaximumPoolSize());
+			Assertions.assertInstanceOf(SynchronousQueue.class, pool.getQueue());
+			final CountDownLatch release = new CountDownLatch(1);
+			for (int taskIndex = 0; taskIndex < 5; taskIndex++) {
+				pool.execute(() -> JmsListenerBulkheadTestSupport.awaitIgnoringInterrupts(release));
+			}
+			Assertions.assertEquals(5, pool.getPoolSize());
+			release.countDown();
+			JmsListenerBulkheadTestSupport.waitUntil(() -> pool.getPoolSize() == 0, "idle threads released after the keep-alive");
+		}
+		finally {
+			pool.shutdownNow();
+		}
 	}
 
 	/**
-	 * Tests that an explicit cap gives the bounded pool with a WARN.
+	 * Tests the unbounded and bounded settings.
 	 *
 	 * @throws Throwable If the test fails.
 	 */
 	@Test
-	@DisplayName("Listener executor: an explicit core size or unbounded=false gives the bounded pool and a WARN; unbounded=true keeps it unbounded")
-	public void testExplicitCapIsBounded() throws Throwable {
-		final JmsConfigurationHelper coreSizeHelper = new JmsConfigurationHelper();
-		final List<String> coreSizeWarnings = JmsConfigurationHelperTest.captureWarnings(
-				() -> coreSizeHelper.setJmsListenerExecutor("executor-core-size", 5, false, null, null, null, null, null, null, 2, null, 60, null));
-		final ThreadPoolExecutor coreSizePool = JmsConfigurationHelperTest.getPoolAndShutdown(coreSizeHelper);
-		Assertions.assertEquals(2, coreSizePool.getCorePoolSize());
-		Assertions.assertEquals(2, coreSizePool.getMaximumPoolSize());
-		Assertions.assertEquals(1, coreSizeWarnings.size());
-		Assertions.assertTrue(coreSizeWarnings.get(0).contains("bounded") && coreSizeWarnings.get(0).contains("bulkhead"));
+	@DisplayName("Listener executor: core-size* is ignored with a WARN when unbounded; unbounded=false keeps the previous bounded pool, with WARNs")
+	public void testBoundedOnlyWhenUnboundedFalse() throws Throwable {
+		final JmsConfigurationHelper ignoredHelper = new JmsConfigurationHelper();
+		final List<String> ignoredWarnings = JmsConfigurationHelperTest.captureWarnings(() -> ignoredHelper.setJmsListenerExecutor("executor-ignored",
+				null, false, null, null, 4, null, 2, null, 2, 50D, 60, true));
+		final ThreadPoolExecutor ignoredPool = JmsConfigurationHelperTest.getPoolAndShutdown(ignoredHelper);
+		Assertions.assertEquals(0, ignoredPool.getCorePoolSize());
+		Assertions.assertEquals(Integer.MAX_VALUE, ignoredPool.getMaximumPoolSize());
+		Assertions.assertEquals(3, ignoredWarnings.size());
+		Assertions.assertTrue(ignoredWarnings.stream().allMatch(warning -> warning.contains("deprecated") && warning.contains("ignored")));
 
 		final JmsConfigurationHelper boundedHelper = new JmsConfigurationHelper();
-		final List<String> boundedWarnings = JmsConfigurationHelperTest.captureWarnings(
-				() -> boundedHelper.setJmsListenerExecutor("executor-bounded", 5, false, null, null, null, null, null, null, null, null, 60, false));
+		final List<String> boundedWarnings = JmsConfigurationHelperTest.captureWarnings(() -> boundedHelper.setJmsListenerExecutor("executor-bounded",
+				null, false, null, null, null, null, null, null, 2, null, 60, false));
 		final ThreadPoolExecutor boundedPool = JmsConfigurationHelperTest.getPoolAndShutdown(boundedHelper);
-		final int defaultBoundedSize = (int) Math.ceil(JmsCpuLimits.getAvailableCpus() * JmsConfigurationHelper.DEFAULT_BOUNDED_CORE_SIZE_CPU_MULTIPLIER);
-		Assertions.assertEquals(defaultBoundedSize, boundedPool.getCorePoolSize());
-		Assertions.assertEquals(defaultBoundedSize, boundedPool.getMaximumPoolSize());
-		Assertions.assertEquals(1, boundedWarnings.size());
+		Assertions.assertEquals(2, boundedPool.getCorePoolSize());
+		Assertions.assertEquals(2, boundedPool.getMaximumPoolSize());
+		Assertions.assertEquals(2, boundedWarnings.size());
+		Assertions.assertTrue(boundedWarnings.stream().anyMatch(warning -> warning.contains("unbounded=false") && warning.contains("bulkhead")));
 
-		final JmsConfigurationHelper unboundedHelper = new JmsConfigurationHelper();
-		final List<String> unboundedWarnings = JmsConfigurationHelperTest.captureWarnings(
-				() -> unboundedHelper.setJmsListenerExecutor("executor-unbounded", 5, false, null, null, 4, null, null, null, 2, null, 60, true));
-		final ThreadPoolExecutor unboundedPool = JmsConfigurationHelperTest.getPoolAndShutdown(unboundedHelper);
-		Assertions.assertEquals(2, unboundedPool.getCorePoolSize());
-		Assertions.assertEquals(Integer.MAX_VALUE, unboundedPool.getMaximumPoolSize());
-		Assertions.assertEquals(1, unboundedWarnings.size());
-		Assertions.assertTrue(unboundedWarnings.get(0).contains("parallelism"));
+		final JmsConfigurationHelper defaultBoundedHelper = new JmsConfigurationHelper();
+		defaultBoundedHelper.setJmsListenerExecutor("executor-default-bounded", null, false, null, null, null, null, null, null, null, null, 60, false);
+		final ThreadPoolExecutor defaultBoundedPool = JmsConfigurationHelperTest.getPoolAndShutdown(defaultBoundedHelper);
+		final int previousDefaultSize = (int) (Runtime.getRuntime().availableProcessors() * JmsConfigurationHelper.DEFAULT_BOUNDED_CORE_SIZE_CPU_MULTIPLIER);
+		Assertions.assertEquals(previousDefaultSize, defaultBoundedPool.getCorePoolSize());
+		Assertions.assertEquals(previousDefaultSize, defaultBoundedPool.getMaximumPoolSize());
+
+		final JmsConfigurationHelper priorityHelper = new JmsConfigurationHelper();
+		final List<String> priorityWarnings = JmsConfigurationHelperTest.captureWarnings(() -> priorityHelper.setJmsListenerExecutor("executor-priority", 3,
+				false, null, null, null, null, null, null, null, null, 60, true));
+		JmsConfigurationHelperTest.getPoolAndShutdown(priorityHelper);
+		Assertions.assertEquals(1, priorityWarnings.size());
+		Assertions.assertTrue(priorityWarnings.get(0).contains("priority"));
 	}
 
 	/**
@@ -245,25 +267,38 @@ public class JmsConfigurationHelperTest extends ContainerTestHelper {
 	 * @throws Throwable If the test fails.
 	 */
 	@Test
-	@DisplayName("Deprecated: the old executor setter (a core size still bounds the pool, none is unbounded) and the legacy concurrency limit with its WARN")
+	@DisplayName("Deprecated: the old executor setter (now unbounded, sizes ignored with a WARN) and the legacy concurrency limit with its WARN")
 	@SuppressWarnings("deprecation")
 	public void testDeprecatedExecutorPaths() throws Throwable {
-		final JmsConfigurationHelper oldBoundedHelper = new JmsConfigurationHelper();
-		oldBoundedHelper.setJmsListenerExecutor("executor-old-bounded", 5, false, null, null, null, null, null, null, null, 0.5D, 60);
-		final ThreadPoolExecutor oldBoundedPool = JmsConfigurationHelperTest.getPoolAndShutdown(oldBoundedHelper);
-		Assertions.assertEquals(oldBoundedPool.getCorePoolSize(), oldBoundedPool.getMaximumPoolSize());
-
-		final JmsConfigurationHelper oldDefaultHelper = new JmsConfigurationHelper();
-		oldDefaultHelper.setJmsListenerExecutor("executor-old-default", 5, false, null, null, null, null, null, null, null, null, 60);
-		Assertions.assertEquals(Integer.MAX_VALUE, JmsConfigurationHelperTest.getPoolAndShutdown(oldDefaultHelper).getMaximumPoolSize());
+		final JmsConfigurationHelper oldHelper = new JmsConfigurationHelper();
+		final List<String> oldWarnings = JmsConfigurationHelperTest
+				.captureWarnings(() -> oldHelper.setJmsListenerExecutor("executor-old", 5, false, null, null, null, null, null, null, null, 20D, 60));
+		Assertions.assertEquals(Integer.MAX_VALUE, JmsConfigurationHelperTest.getPoolAndShutdown(oldHelper).getMaximumPoolSize());
+		Assertions.assertTrue(oldWarnings.stream().anyMatch(warning -> warning.contains("core-size") && warning.contains("ignored")));
 
 		final JmsConfigurationHelper legacyHelper = new JmsConfigurationHelper();
 		final List<String> legacyWarnings = JmsConfigurationHelperTest.captureWarnings(
-				() -> legacyHelper.setJmsListenerExecutor("executor-legacy", 5, false, 3, null, null, null, null, null, null, null, 60));
+				() -> legacyHelper.setJmsListenerExecutor("executor-legacy", null, false, 3, null, null, null, null, null, null, null, 60));
 		Assertions.assertEquals(3, Assertions.assertInstanceOf(SimpleAsyncTaskExecutor.class, JmsConfigurationHelperTest.getListenerExecutor(legacyHelper))
 				.getConcurrencyLimit());
 		Assertions.assertEquals(1, legacyWarnings.size());
 		Assertions.assertTrue(legacyWarnings.get(0).contains("deprecated") && legacyWarnings.get(0).contains("bulkhead"));
+	}
+
+	/**
+	 * Tests that the JMS executors of the context expose metrics.
+	 *
+	 * @throws Exception If the test fails.
+	 */
+	@Test
+	@DisplayName("The listener executor and the Artemis global, scheduled and flow control executors expose executor metrics")
+	public void testExecutorMetrics() throws Exception {
+		for (final String executorName : List.of(JmsConfigurationHelper.LISTENER_EXECUTOR_METRICS_NAME, JmsConfigurationHelper.GLOBAL_EXECUTOR_METRICS_NAME,
+				JmsConfigurationHelper.GLOBAL_SCHEDULED_EXECUTOR_METRICS_NAME, JmsConfigurationHelper.GLOBAL_FLOW_CONTROL_EXECUTOR_METRICS_NAME)) {
+			Assertions.assertNotNull(this.meterRegistry.find("executor.pool.size").tag("name", executorName).gauge(), executorName);
+		}
+		Assertions.assertEquals((double) Integer.MAX_VALUE, this.meterRegistry.find("executor.pool.max")
+				.tag("name", JmsConfigurationHelper.LISTENER_EXECUTOR_METRICS_NAME).gauge().value());
 	}
 
 	/**
@@ -329,13 +364,14 @@ public class JmsConfigurationHelperTest extends ContainerTestHelper {
 	 * @throws Exception If the test fails.
 	 */
 	@Test
-	@DisplayName("The library defaults do not count as an explicit core size or unbounded setting; an application's values do")
+	@DisplayName("The library defaults leave core-size* and priority unset and unbounded=true; an application's values are seen as set")
 	public void testLibraryDefaultsAreNotExplicit() throws Exception {
+		Assertions.assertEquals("", JmsConfigurationHelperTest.resolveExecutorSetting(1, Map.of()));
 		Assertions.assertEquals("", JmsConfigurationHelperTest.resolveExecutorSetting(9, Map.of()));
 		Assertions.assertEquals("", JmsConfigurationHelperTest.resolveExecutorSetting(10, Map.of()));
-		Assertions.assertEquals("", JmsConfigurationHelperTest.resolveExecutorSetting(12, Map.of()));
-		Assertions.assertEquals("", JmsConfigurationHelperTest.resolveExecutorSetting(12,
-				Map.of("org.coldis.library.service.jms.listener.bulkhead.enabled", "true")));
+		Assertions.assertEquals("true", JmsConfigurationHelperTest.resolveExecutorSetting(12, Map.of()));
+		Assertions.assertEquals("true", JmsConfigurationHelperTest.resolveExecutorSetting(12,
+				Map.of("org.coldis.library.service.jms.listener.bulkhead.enabled", "false")));
 		Assertions.assertEquals("20", JmsConfigurationHelperTest.resolveExecutorSetting(10,
 				Map.of("org.coldis.library.service.jms.listener.executor.core-size-cpu-multiplier", "20")));
 		Assertions.assertEquals("false", JmsConfigurationHelperTest.resolveExecutorSetting(12,

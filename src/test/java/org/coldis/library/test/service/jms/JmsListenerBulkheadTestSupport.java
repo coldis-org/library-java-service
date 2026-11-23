@@ -200,8 +200,8 @@ public final class JmsListenerBulkheadTestSupport {
 	}
 
 	/**
-	 * Creates a helper with an unbounded listener executor that keeps no idle
-	 * threads.
+	 * Creates a helper with the default (unbounded) listener executor, idle
+	 * threads released after a second.
 	 *
 	 * @param  threadName Thread name prefix.
 	 * @return            The helper.
@@ -209,7 +209,7 @@ public final class JmsListenerBulkheadTestSupport {
 	public static JmsConfigurationHelper createUnboundedHelper(
 			final String threadName) {
 		final JmsConfigurationHelper helper = new JmsConfigurationHelper();
-		helper.setJmsListenerExecutor(threadName, 5, false, null, null, null, null, null, null, 0, null, 1, true);
+		helper.setJmsListenerExecutor(threadName, null, false, null, null, null, null, null, null, null, null, 1, true);
 		return helper;
 	}
 

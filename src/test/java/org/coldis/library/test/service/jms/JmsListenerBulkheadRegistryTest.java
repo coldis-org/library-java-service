@@ -117,14 +117,20 @@ public class JmsListenerBulkheadRegistryTest {
 	 * Tests that an enabled bulkhead without a limit limits nothing.
 	 */
 	@Test
-	@DisplayName("enabled=true alone leaves the default group unlimited")
+	@DisplayName("enabled=true alone limits the default group to 2 handlers per CPU; a multiplier of 0 leaves it unlimited")
 	public void testEnabledWithoutLimit() {
 		this.contextRunner.withPropertyValues(JmsListenerBulkheadRegistryTest.PREFIX + "enabled=true").run(context -> {
 			final JmsListenerBulkheadRegistry registry = context.getBean(JmsListenerBulkheadRegistry.class);
 			Assertions.assertTrue(registry.isEnabled());
-			Assertions.assertNull(registry.bind(JmsListenerBulkheadRegistryTest.container("queue"), null, null));
-			Assertions.assertNull(registry.getBulkhead(JmsListenerBulkheadProperties.DEFAULT_GROUP));
+			Assertions.assertEquals((int) Math.ceil(JmsCpuLimits.getAvailableCpus() * 2),
+					registry.getBulkhead(JmsListenerBulkheadProperties.DEFAULT_GROUP).getMaxInFlight());
 		});
+		this.contextRunner.withPropertyValues(JmsListenerBulkheadRegistryTest.PREFIX + "enabled=true",
+				JmsListenerBulkheadRegistryTest.PREFIX + "max-in-flight-cpu-multiplier=0").run(context -> {
+					final JmsListenerBulkheadRegistry registry = context.getBean(JmsListenerBulkheadRegistry.class);
+					Assertions.assertNull(registry.bind(JmsListenerBulkheadRegistryTest.container("queue"), null, null));
+					Assertions.assertNull(registry.getBulkhead(JmsListenerBulkheadProperties.DEFAULT_GROUP));
+				});
 	}
 
 	/**
@@ -182,7 +188,8 @@ public class JmsListenerBulkheadRegistryTest {
 	public void testGroups() {
 		this.contextRunner.withPropertyValues(JmsListenerBulkheadRegistryTest.PREFIX + "enabled=true", JmsListenerBulkheadRegistryTest.PREFIX + "max-in-flight=10",
 				JmsListenerBulkheadRegistryTest.PREFIX + "groups.low.factories=lowFactory", JmsListenerBulkheadRegistryTest.PREFIX + "groups.low.max-in-flight=2",
-				JmsListenerBulkheadRegistryTest.PREFIX + "groups.high.max-in-flight=5", JmsListenerBulkheadRegistryTest.PREFIX + "groups.unlimited.factories=freeFactory")
+				JmsListenerBulkheadRegistryTest.PREFIX + "groups.high.max-in-flight=5", JmsListenerBulkheadRegistryTest.PREFIX + "groups.unlimited.factories=freeFactory",
+				JmsListenerBulkheadRegistryTest.PREFIX + "groups.unlimited.max-in-flight-cpu-multiplier=0")
 				.run(context -> {
 					final JmsListenerBulkheadRegistry registry = context.getBean(JmsListenerBulkheadRegistry.class);
 					Assertions.assertEquals("low", registry.resolveGroup("lowFactory", null));
@@ -253,7 +260,8 @@ public class JmsListenerBulkheadRegistryTest {
 	public void testValidation() {
 		this.assertInvalid(JmsListenerBulkheadRegistryTest.PREFIX + "reserved.*.permits", JmsListenerBulkheadRegistryTest.PREFIX + "max-in-flight=2",
 				JmsListenerBulkheadRegistryTest.PREFIX + "reserved.critical.permits=2", JmsListenerBulkheadRegistryTest.PREFIX + "reserved.critical.destinations=queue");
-		this.assertInvalid(JmsListenerBulkheadRegistryTest.PREFIX + "reserved.*.permits", JmsListenerBulkheadRegistryTest.PREFIX + "reserved.critical.permits=1",
+		this.assertInvalid(JmsListenerBulkheadRegistryTest.PREFIX + "reserved.*.permits", JmsListenerBulkheadRegistryTest.PREFIX + "max-in-flight-cpu-multiplier=0",
+				JmsListenerBulkheadRegistryTest.PREFIX + "reserved.critical.permits=1",
 				JmsListenerBulkheadRegistryTest.PREFIX + "reserved.critical.destinations=queue");
 		this.assertInvalid(JmsListenerBulkheadRegistryTest.PREFIX + "reserved.second.destinations", JmsListenerBulkheadRegistryTest.PREFIX + "max-in-flight=5",
 				JmsListenerBulkheadRegistryTest.PREFIX + "reserved.first.permits=1", JmsListenerBulkheadRegistryTest.PREFIX + "reserved.first.destinations=queue",

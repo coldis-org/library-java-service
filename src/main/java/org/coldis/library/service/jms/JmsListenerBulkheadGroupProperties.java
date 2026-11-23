@@ -21,6 +21,13 @@ public class JmsListenerBulkheadGroupProperties {
 	public static final Integer DEFAULT_MAX_WAIT_DELIVERIES = 3;
 
 	/**
+	 * Default handlers per CPU of a group without {@code max-in-flight} nor
+	 * {@code max-in-flight-cpu-multiplier} (tune between 1.5 and 3, toward 3 for
+	 * database-heavy modules).
+	 */
+	public static final double DEFAULT_MAX_IN_FLIGHT_CPU_MULTIPLIER = 2D;
+
+	/**
 	 * Maximum concurrent handler executions of the group. Wins over the
 	 * multiplier when positive.
 	 */
@@ -28,7 +35,9 @@ public class JmsListenerBulkheadGroupProperties {
 
 	/**
 	 * Maximum concurrent handler executions per CPU ({@link JmsCpuLimits}), used
-	 * when {@link #maxInFlight} is not set.
+	 * when {@link #maxInFlight} is not set (default
+	 * {@value #DEFAULT_MAX_IN_FLIGHT_CPU_MULTIPLIER}; 0 leaves the group not
+	 * limited).
 	 */
 	private Double maxInFlightCpuMultiplier;
 
@@ -174,12 +183,13 @@ public class JmsListenerBulkheadGroupProperties {
 
 	/**
 	 * Default limit per CPU of the group when neither {@code max-in-flight} nor
-	 * {@code max-in-flight-cpu-multiplier} is set (null: not limited by default).
+	 * {@code max-in-flight-cpu-multiplier} is set
+	 * ({@value #DEFAULT_MAX_IN_FLIGHT_CPU_MULTIPLIER}).
 	 *
 	 * @return The default ratio.
 	 */
 	protected Double getDefaultMaxInFlightCpuMultiplier() {
-		return null;
+		return JmsListenerBulkheadGroupProperties.DEFAULT_MAX_IN_FLIGHT_CPU_MULTIPLIER;
 	}
 
 	/**
