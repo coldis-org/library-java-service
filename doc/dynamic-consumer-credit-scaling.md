@@ -187,6 +187,17 @@ Prefetching more without enough consumers only buffers messages; it does not
 increase throughput. Batch listeners that run at concurrency `1` rely primarily on
 the depth-proportional window to drain faster.
 
+### With the listener bulkhead
+
+With the [listener bulkhead](jms-listener-bulkhead.md) enabled, a consumer waiting
+for a permit keeps whatever it has buffered: up to `dynamic-credits-max-credits`
+bytes once the queue is above the depth threshold. That only happens with a deep
+backlog, when every instance is saturated anyway, and the bulkhead makes it rarer
+(backlogged containers run more consumers, so each one's share of the depth is
+smaller). Where instances have very different capacity, lower
+`dynamic-credits-max-credits` or raise the threshold so a slow instance does not
+hold messages others could process.
+
 ## Observability
 
 - `getConsumersRegistered()` / `getCreditPacketsIntercepted()` /
