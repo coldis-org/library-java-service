@@ -16,6 +16,7 @@ All under `src/main/java/org/coldis/library/`.
 | `service/batch` | `BatchService` (endpoints), `BatchServiceComponent`, `BatchExecutor` (persisted as JSONB in the key-value store) |
 | `service/jms` | JMS configuration, dynamic consumer credit, stale-message filtering, listener bulkhead (opt-in bound on concurrent handlers, `org.coldis.library.service.jms.listener.bulkhead.*`), thread settings, see [`doc/dynamic-consumer-credit-scaling.md`](doc/dynamic-consumer-credit-scaling.md), [`doc/stale-message-filter.md`](doc/stale-message-filter.md), [`doc/jms-listener-bulkhead.md`](doc/jms-listener-bulkhead.md) and [`doc/jms-threads.md`](doc/jms-threads.md) |
 | `service/statistics` | Statistics events and buffered upserts, see [`doc/statistics.md`](doc/statistics.md) |
+| `service/cpu` | Spring glue for the CPU source of per-CPU limits (core `CpuLimits`): pins `org.coldis.library.service.cpus` at startup, see [`doc/cpu-source.md`](doc/cpu-source.md) |
 | `service/warmup` | Opt-in (`org.coldis.library.service.warm-up.enabled`, off by default): `ServiceWarmUp` routines run before the health check passes; calls must follow read paths, only the database is guarded, while `read-only-transaction` is on (the default): a read-only transaction per call, `@Transactional` methods read-only, new read-write transactions refused (entity changes are discarded, not refused); no bean is proxied; see [`doc/service-warm-up.md`](doc/service-warm-up.md) |
 | `service/tiering` | Cold storage tiering: hot Postgres table in front of an S3 cold tier (archive, eviction, backfill, rehydration, scheduled on the batch service). Layered `tiering` (policy: components, properties, registry, schema) → `tiering/repository` (access: hot tier JDBC, tiered reads, S3/folder/memory stores) → `tiering/model` (definitions, keys, column values, codec and key-layout SPIs); nothing lower imports anything higher. See [`doc/cold-storage-tiering.md`](doc/cold-storage-tiering.md) |
 | `service/aspectj`, `transaction` | Aspects and transaction helpers |
@@ -44,7 +45,7 @@ be running.
   `unbounded=false`, all deprecated): they limit polling consumers, which can starve or stop every
   listener until a restart. The listener executor is an unbounded cached pool by default; bound
   concurrent handlers with `listener.bulkhead.*`. The bulkhead and remoting-threads multipliers
-  multiply one CPU count (`org.coldis.library.service.cpus`, else the cgroup quota): see
+  multiply the [CPU source](doc/cpu-source.md) (`org.coldis.library.service.cpus`, else the cgroup quota): see
   [`doc/jms-threads.md`](doc/jms-threads.md).
 - **AspectJ compile-time weaving** (from the parent pom): `@Transactional` and the other aspects
   work on private methods and self-calls. Run through `test`/`install`, not a bare

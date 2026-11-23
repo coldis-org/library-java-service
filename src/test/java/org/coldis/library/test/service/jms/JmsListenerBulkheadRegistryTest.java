@@ -1,6 +1,6 @@
 package org.coldis.library.test.service.jms;
 
-import org.coldis.library.service.jms.JmsCpuLimits;
+import org.coldis.library.thread.CpuLimits;
 import org.coldis.library.service.jms.JmsListenerBulkhead;
 import org.coldis.library.service.jms.JmsListenerBulkheadBinding;
 import org.coldis.library.service.jms.JmsListenerBulkheadProperties;
@@ -122,7 +122,7 @@ public class JmsListenerBulkheadRegistryTest {
 		this.contextRunner.withPropertyValues(JmsListenerBulkheadRegistryTest.PREFIX + "enabled=true").run(context -> {
 			final JmsListenerBulkheadRegistry registry = context.getBean(JmsListenerBulkheadRegistry.class);
 			Assertions.assertTrue(registry.isEnabled());
-			Assertions.assertEquals((int) Math.ceil(JmsCpuLimits.getAvailableCpus() * 2),
+			Assertions.assertEquals((int) Math.ceil(CpuLimits.getDefault().getCpus() * 2),
 					registry.getBulkhead(JmsListenerBulkheadProperties.DEFAULT_GROUP).getMaxInFlight());
 		});
 		this.contextRunner.withPropertyValues(JmsListenerBulkheadRegistryTest.PREFIX + "enabled=true",
@@ -175,7 +175,7 @@ public class JmsListenerBulkheadRegistryTest {
 				});
 		this.contextRunner.withPropertyValues(JmsListenerBulkheadRegistryTest.PREFIX + "enabled=true",
 				JmsListenerBulkheadRegistryTest.PREFIX + "max-in-flight-cpu-multiplier=0.5").run(context -> {
-					Assertions.assertEquals((int) Math.ceil(JmsCpuLimits.getAvailableCpus() * 0.5),
+					Assertions.assertEquals((int) Math.ceil(CpuLimits.getDefault().getCpus() * 0.5),
 							context.getBean(JmsListenerBulkheadRegistry.class).getBulkhead(JmsListenerBulkheadProperties.DEFAULT_GROUP).getMaxInFlight());
 				});
 	}

@@ -6,22 +6,11 @@ the [listener bulkhead](jms-listener-bulkhead.md), not by threads.
 
 ## CPUs
 
-The multipliers introduced here (the bulkhead's `max-in-flight-cpu-multiplier` and
-`spring.artemis.remoting-threads-cpu-multiplier`) are multiplied by one CPU count (`JmsCpuLimits`),
-rounded up, with a minimum of 1. First match:
-
-1. `org.coldis.library.service.cpus` (a decimal): a project can pin it;
-2. the cgroup v2 quota (`/sys/fs/cgroup/cpu.max`: quota / period);
-3. the cgroup v1 quota (`cpu.cfs_quota_us / cpu.cfs_period_us`);
-4. `Runtime.availableProcessors()`.
-
-A quota is capped at `availableProcessors()`. The JVM rounds a fractional quota up (a quota of 2.08
-CPUs reports 3 processors), which is why the quota itself is read. A limit resolves, first match: the
-explicit absolute value, the explicit ratio, the default ratio. The deprecated legacy
+The bulkhead's `max-in-flight-cpu-multiplier` and `spring.artemis.remoting-threads-cpu-multiplier`
+are multiplied by the service's [CPU source](cpu-source.md). The deprecated legacy
 `listener.executor.concurrency-cpu-multiplier`, the bounded listener pool (`unbounded=false`) and the
-Artemis global executors keep their previous sizing from `availableProcessors()`, as do the library's
-other (non-JMS) users of it. A remoting-threads multiplier that is not positive falls back to the
-default.
+Artemis global executors keep their previous sizing from `availableProcessors()`. A remoting-threads
+multiplier that is not positive falls back to the default.
 
 ## Settings
 
@@ -114,6 +103,6 @@ database pool's pending connections (Hikari `pending`) and queue message age; th
 
 ## Follow-ups
 
-- Route the Artemis global executors' multipliers and the non-JMS users of `availableProcessors()`
-  (HTTP threads, other pools) through the same CPU source.
+- Route the bounded listener pool, the Artemis global executors and the non-JMS users of
+  `availableProcessors()` through the [CPU source](cpu-source.md).
 - Lower the remoting threads multiplier once a thread dump confirms the Netty usage.

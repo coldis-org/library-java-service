@@ -6,6 +6,8 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
+import org.coldis.library.thread.CpuLimits;
+
 /**
  * Settings of one JMS listener bulkhead group. The top-level bulkhead settings
  * ({@link JmsListenerBulkheadProperties}) configure the group named
@@ -34,7 +36,7 @@ public class JmsListenerBulkheadGroupProperties {
 	private Integer maxInFlight;
 
 	/**
-	 * Maximum concurrent handler executions per CPU ({@link JmsCpuLimits}), used
+	 * Maximum concurrent handler executions per CPU ({@link CpuLimits}), used
 	 * when {@link #maxInFlight} is not set (default
 	 * {@value #DEFAULT_MAX_IN_FLIGHT_CPU_MULTIPLIER}; 0 leaves the group not
 	 * limited).
@@ -194,14 +196,14 @@ public class JmsListenerBulkheadGroupProperties {
 
 	/**
 	 * Gets the current limit of the group, read on every call (so a changed
-	 * property applies live), resolved by {@link JmsCpuLimits#resolve}: the
+	 * property applies live), resolved by {@link CpuLimits#resolve(Integer, Double, Double)}: the
 	 * explicit {@code max-in-flight}, else {@code max-in-flight-cpu-multiplier},
 	 * else the default ratio, times the CPUs.
 	 *
 	 * @return The current limit, or null when the group is not limited.
 	 */
 	public Integer getActualMaxInFlight() {
-		return JmsCpuLimits.resolve(this.getMaxInFlight(), this.getMaxInFlightCpuMultiplier(), this.getDefaultMaxInFlightCpuMultiplier());
+		return CpuLimits.getDefault().resolve(this.getMaxInFlight(), this.getMaxInFlightCpuMultiplier(), this.getDefaultMaxInFlightCpuMultiplier());
 	}
 
 }
