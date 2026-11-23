@@ -40,9 +40,12 @@ be running.
 - **`-Dnet.bytebuddy.experimental=true`** is needed on a JVM newer than Byte Buddy supports (Java 25
   locally): `hibernate-enhance-maven-plugin` fails without it. Don't work around it by switching
   `JAVA_HOME`. The release plugin already passes the flag.
-- **Never limit JMS load with `listener.executor.concurrency*`**: it limits polling consumers, and
+- **Never limit JMS load with listener threads** (`listener.executor.concurrency*`, deprecated, or a
+  bounded `listener.executor.core-size*` / `unbounded=false`): they limit polling consumers, and
   consumers that wait for a second slot while holding one can stop every listener until a restart.
-  Bound concurrent handlers with `listener.bulkhead.*` ([`doc/jms-listener-bulkhead.md`](doc/jms-listener-bulkhead.md)).
+  The listener executor is unbounded by default; bound concurrent handlers with `listener.bulkhead.*`
+  ([`doc/jms-listener-bulkhead.md`](doc/jms-listener-bulkhead.md)). JMS limits resolve as absolute
+  value, then `*-cpu-multiplier`, then a default ratio, times `JmsCpuLimits`' CPU count.
 - **AspectJ compile-time weaving** (from the parent pom): `@Transactional` and the other aspects
   work on private methods and self-calls. Run through `test`/`install`, not a bare
   `surefire:test` after `test-compile`.
@@ -81,21 +84,21 @@ Git:
 
 ## Workspace
 
-This repository expects `supersim-infrastructure-code-reviewer` checked out next to it
-(`../supersim-infrastructure-code-reviewer`; clone it there from the internal Git host if it's
-missing). The review gates and the local review both live in it.
+This repository expects the internal code-reviewer repository (`<code-reviewer>` below) checked out
+next to it; clone it from the internal Git host if it's missing. The review gates and the local
+review both live in it.
 
 ## Review
 
 The gates are those of `src/agents/review/review.toml`, read from master, so a branch can't
 weaken its own review: `security`, `service-business`, `service-architecture`, `service-coding`,
 `service-test`, all mandatory (no `infrastructure`: a library has no deployment module). What
-each gate stops: `../supersim-infrastructure-code-reviewer/local-review/GATES.md`. The service gates were
+each gate stops: `<code-reviewer>/local-review/GATES.md`. The service gates were
 written for application services: rules about client/common/test subprojects, generated clients,
 integration services, service tiers or migrations apply here only where this library has that
 concept. The PR description is what the gates read as intent: name every default, limit or
 behaviour you change there.
 
 Before pushing, run the local review: follow
-`../supersim-infrastructure-code-reviewer/local-review/REVIEW.md`. It ends with
+`<code-reviewer>/local-review/REVIEW.md`. It ends with
 `local-check attest`. Push only when the developer asks.
