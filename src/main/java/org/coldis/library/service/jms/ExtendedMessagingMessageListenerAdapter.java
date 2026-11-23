@@ -103,7 +103,7 @@ public class ExtendedMessagingMessageListenerAdapter extends MessagingMessageLis
 	/**
 	 * If the bulkhead binding was resolved (it may be resolved to none).
 	 */
-	private volatile boolean bulkheadBindingResolved;
+	private volatile boolean isBulkheadBindingResolved;
 
 	/**
 	 * Bulkhead binding (null when the listener is not limited).
@@ -210,11 +210,11 @@ public class ExtendedMessagingMessageListenerAdapter extends MessagingMessageLis
 	 *         registry or container, bulkhead disabled or group not limited).
 	 */
 	private JmsListenerBulkheadBinding getBulkheadBinding() {
-		if (!this.bulkheadBindingResolved) {
+		if (!this.isBulkheadBindingResolved) {
 			final JmsListenerBulkheadRegistry bulkheadRegistry = (this.bulkheadRegistrySupplier == null ? null : this.bulkheadRegistrySupplier.get());
 			this.bulkheadBinding = ((bulkheadRegistry == null) || (this.listenerContainer == null) ? null : bulkheadRegistry.bind(this.listenerContainer, this.factoryBeanName,
 					this.bulkheadGroup));
-			this.bulkheadBindingResolved = true;
+			this.isBulkheadBindingResolved = true;
 		}
 		return this.bulkheadBinding;
 	}

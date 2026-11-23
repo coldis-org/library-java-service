@@ -598,6 +598,8 @@ public class JmsListenerBulkheadTest {
 		final PermitHolder second = this.startQueuedHolder(bulkhead, "second", grantOrder, probe);
 		final PermitHolder third = this.startQueuedHolder(bulkhead, "third", grantOrder, probe);
 		limit.set(3);
+		// The limit gauge reads the new limit first: the waiters must still get it.
+		Assertions.assertEquals(3, bulkhead.getMaxInFlight());
 		Assertions.assertTrue(first.granted.await(JmsListenerBulkheadTest.WAIT.toMillis(), TimeUnit.MILLISECONDS));
 		Assertions.assertTrue(second.granted.await(JmsListenerBulkheadTest.WAIT.toMillis(), TimeUnit.MILLISECONDS));
 		Assertions.assertEquals(3, bulkhead.getMaxInFlight());

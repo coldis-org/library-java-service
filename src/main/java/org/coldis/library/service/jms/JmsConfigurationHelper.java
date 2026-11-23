@@ -94,7 +94,7 @@ public class JmsConfigurationHelper {
 	 * executor concurrency limit; injected before the executor setter).
 	 */
 	@Value("${org.coldis.library.service.jms.listener.bulkhead.enabled:false}")
-	private Boolean bulkheadEnabled;
+	private Boolean isBulkheadEnabled;
 
 	/** Application base packages (comma separated). */
 	@Value("${org.coldis.configuration.base-package:}")
@@ -217,7 +217,7 @@ public class JmsConfigurationHelper {
 					+ "consumers, not handlers: a consumer that has to start or resubmit another consumer waits for a slot while holding its own, so "
 					+ "listeners can stop processing until a restart. Remove it and bound concurrent handlers with "
 					+ "org.coldis.library.service.jms.listener.bulkhead.* instead (doc/jms-listener-bulkhead.md).", actualConcurrency);
-			if (Boolean.TRUE.equals(this.bulkheadEnabled)) {
+			if (Boolean.TRUE.equals(this.isBulkheadEnabled)) {
 				JmsConfigurationHelper.LOGGER.warn("The JMS listener bulkhead is enabled together with the legacy listener executor concurrency limit, "
 						+ "which can still stop listeners whatever the bulkhead does: remove the legacy limit.");
 			}
@@ -266,11 +266,11 @@ public class JmsConfigurationHelper {
 			@Value("${org.coldis.library.service.jms.listener.executor.keep-alive-seconds:60}")
 			final Integer keepAliveSeconds,
 			@Value("${org.coldis.library.service.jms.listener.executor.unbounded:${org.coldis.library.service.jms.listener.bulkhead.enabled:false}}")
-			final Boolean unbounded) {
+			final Boolean isUnbounded) {
 		if ((concurrency != null) || (concurrencyCpuMultiplier != null)) {
 			this.setLegacyThrottledJmsListenerExecutor(name, priority, virtual, concurrency, concurrencyCpuMultiplier);
 		}
-		else if (Boolean.TRUE.equals(unbounded)) {
+		else if (Boolean.TRUE.equals(isUnbounded)) {
 			if ((parallelism != null) || (parallelismCpuMultiplier != null)) {
 				JmsConfigurationHelper.LOGGER.warn("org.coldis.library.service.jms.listener.executor.parallelism(-cpu-multiplier) is ignored: the listener "
 						+ "executor is unbounded.");

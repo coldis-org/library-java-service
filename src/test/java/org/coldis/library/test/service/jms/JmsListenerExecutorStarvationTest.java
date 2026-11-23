@@ -220,9 +220,11 @@ public class JmsListenerExecutorStarvationTest extends ContainerTestHelper {
 	 *
 	 * @param  listenerContainers   Containers.
 	 * @param  threadName           Consumer thread name prefix.
+	 * @return                      If consumer threads were left (asserted
+	 *                              after the test's own assertions).
 	 * @throws InterruptedException If interrupted.
 	 */
-	private static void shutdownStuckContainers(
+	private static boolean shutdownStuckContainers(
 			final List<DefaultMessageListenerContainer> listenerContainers,
 			final String threadName) throws InterruptedException {
 		final List<Thread> shutdownThreads = new ArrayList<>();
@@ -243,7 +245,24 @@ public class JmsListenerExecutorStarvationTest extends ContainerTestHelper {
 		for (final Thread shutdownThread : shutdownThreads) {
 			shutdownThread.join(JmsListenerBulkheadTestSupport.WAIT.toMillis());
 		}
-		Assertions.assertFalse(consumersLeft, "legacy consumer threads left");
+		return consumersLeft;
+	}
+
+	/**
+	 * Drains the messages left on the queues of a run (the broker container is
+	 * reused across runs).
+	 *
+	 * @param queues Queues.
+	 */
+	private void drain(
+			final List<String> queues) {
+		final JmsTemplate receiveTemplate = new JmsTemplate(this.connectionFactory);
+		receiveTemplate.setReceiveTimeout(TestHelper.VERY_SHORT_WAIT);
+		for (final String queue : queues) {
+			while (receiveTemplate.receive(queue) != null) {
+				// Discards the message.
+			}
+		}
 	}
 
 	/**
@@ -299,6 +318,7 @@ public class JmsListenerExecutorStarvationTest extends ContainerTestHelper {
 		});
 		final int[] processedSnapshot = new int[JmsListenerExecutorStarvationTest.QUEUES];
 		int throttledThreads = 0;
+		boolean consumersLeft = false;
 		try {
 			this.send(queues.get(0), JmsListenerExecutorStarvationTest.FLOOD);
 			JmsListenerExecutorStarvationTest.startContainers(listenerContainers, threadName + "-start");
@@ -327,11 +347,13 @@ public class JmsListenerExecutorStarvationTest extends ContainerTestHelper {
 			throttledThreads = JmsListenerExecutorStarvationTest.countThrottledThreads();
 		}
 		finally {
-			JmsListenerExecutorStarvationTest.shutdownStuckContainers(listenerContainers, threadName);
+			consumersLeft = JmsListenerExecutorStarvationTest.shutdownStuckContainers(listenerContainers, threadName);
+			this.drain(queues);
 		}
 		Assertions.assertEquals(0, Arrays.stream(processedSnapshot).skip(1).sum(), "light queues processed " + Arrays.toString(processedSnapshot));
 		Assertions.assertTrue(processedSnapshot[0] < JmsListenerExecutorStarvationTest.FLOOD, Arrays.toString(processedSnapshot));
 		Assertions.assertTrue(throttledThreads >= 1);
+		Assertions.assertFalse(consumersLeft, "legacy consumer threads left");
 	}
 
 	/**

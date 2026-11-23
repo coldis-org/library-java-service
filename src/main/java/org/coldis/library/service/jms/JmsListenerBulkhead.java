@@ -35,6 +35,11 @@ import org.slf4j.LoggerFactory;
  * {@code synchronized}), so waiting does not pin a virtual thread. No lock is
  * held while the handler runs.
  * <p>
+ * An interrupted waiter ends with {@code INTERRUPTED} and the interrupt flag
+ * cleared, not restored: the interrupt is the container shutdown's, and the
+ * session rollback that follows must not run on an interrupted thread. A caller
+ * outside a listener container that relies on the flag must restore it.
+ * <p>
  * No Spring, JMS or metrics dependency: see {@link JmsListenerBulkheadRegistry}
  * and {@link JmsListenerBulkheadBinding} for the wiring.
  */
@@ -70,7 +75,7 @@ public class JmsListenerBulkhead {
 		/**
 		 * If the permit was granted (and counted).
 		 */
-		private boolean granted;
+		private boolean isGranted;
 
 		/**
 		 * Constructor.
@@ -195,9 +200,9 @@ public class JmsListenerBulkhead {
 					this.group, configuredMaxInFlight, minimumMaxInFlight);
 		}
 		this.lastConfiguredMaxInFlight = configuredMaxInFlight;
-		final boolean changed = (actualMaxInFlight != this.maxInFlight);
+		final boolean hasChanged = (actualMaxInFlight != this.maxInFlight);
 		this.maxInFlight = actualMaxInFlight;
-		return changed;
+		return hasChanged;
 	}
 
 	/**
@@ -305,7 +310,7 @@ public class JmsListenerBulkhead {
 					this.queuedReservedWaiters--;
 				}
 				this.countInFlight(waiter.reservation);
-				waiter.granted = true;
+				waiter.isGranted = true;
 				waiter.condition.signal();
 			}
 		}
@@ -328,14 +333,17 @@ public class JmsListenerBulkhead {
 			final long maxWaitNanos,
 			final BooleanSupplier stopped) {
 		JmsListenerBulkheadException.Reason abortReason = null;
-		if (!waiter.granted) {
+		if (!waiter.isGranted) {
 			if (stopped.getAsBoolean()) {
 				abortReason = JmsListenerBulkheadException.Reason.CONTAINER_STOPPED;
 			}
 			else if ((maxWaitNanos > 0) && ((System.nanoTime() - startNanos) >= maxWaitNanos)) {
 				abortReason = JmsListenerBulkheadException.Reason.WAIT_TIMEOUT;
 			}
-			else if (this.refreshMaxInFlight()) {
+			// Grants on every check, not only when this check saw the limit change:
+			// another reader (such as the limit gauge) may have seen it first.
+			else {
+				this.refreshMaxInFlight();
 				this.grantWaiters();
 			}
 		}
@@ -357,7 +365,7 @@ public class JmsListenerBulkhead {
 			final JmsListenerBulkheadException.Reason reason,
 			final String destination,
 			final long startNanos) {
-		if (waiter.granted) {
+		if (waiter.isGranted) {
 			this.uncountInFlight(waiter.reservation);
 			this.grantWaiters();
 		}
@@ -395,7 +403,7 @@ public class JmsListenerBulkhead {
 		this.grantWaiters();
 		final long stateCheckIntervalNanos = JmsListenerBulkhead.STATE_CHECK_INTERVAL.toNanos();
 		JmsListenerBulkheadException.Reason abortReason = null;
-		while (!waiter.granted && (abortReason == null)) {
+		while (!waiter.isGranted && (abortReason == null)) {
 			final long sliceNanos = (maxWaitNanos > 0 ? Math.min(stateCheckIntervalNanos, maxWaitNanos - (System.nanoTime() - startNanos))
 					: stateCheckIntervalNanos);
 			try {

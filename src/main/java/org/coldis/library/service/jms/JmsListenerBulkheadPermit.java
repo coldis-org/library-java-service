@@ -26,7 +26,7 @@ public final class JmsListenerBulkheadPermit implements AutoCloseable {
 	/**
 	 * If the permit was released.
 	 */
-	private final AtomicBoolean released = new AtomicBoolean();
+	private final AtomicBoolean isReleased = new AtomicBoolean();
 
 	/**
 	 * Constructor.
@@ -75,7 +75,7 @@ public final class JmsListenerBulkheadPermit implements AutoCloseable {
 	 */
 	@Override
 	public void close() {
-		if (this.released.compareAndSet(false, true)) {
+		if (this.isReleased.compareAndSet(false, true)) {
 			this.bulkhead.release(this);
 		}
 	}

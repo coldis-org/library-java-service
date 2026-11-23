@@ -131,7 +131,12 @@ its `redelivery-delay` and dead-letters after `max-delivery-attempts` (the
 container back-off plays no part). `max-wait-deliveries` caps the attempts a
 timeout can consume: keep it well below the broker's `max-delivery-attempts`,
 so waiting alone never dead-letters a message. Rolling restarts under
-saturation still cost one attempt per waiting message.
+saturation still cost one attempt per waiting message, and `max-wait-deliveries`
+does not cap those. Size the broker's `max-delivery-attempts` for the queues of
+a limited group as at least `max-wait-deliveries` (when `max-wait` is set) plus
+the restarts a backlog may live through, plus the retries handlers need, with
+margin. Alert on the dead letter queue depth and on a non-zero
+`jms.listener.bulkhead.wait.aborted` with `reason=stopped` or `interrupted`.
 
 Recommendation: leave `max-wait` unset. A timeout only puts the message back
 on the queue so another instance may take it; with the default prefetch of 0
@@ -145,7 +150,9 @@ the same instance often gets it again.
 - **Rollout:** enable it with `max-in-flight` at today's effective handler
   concurrency, watch `jms.listener.bulkhead.wait` and
   `jms.listener.bulkhead.waiting`, then lower the limit step by step.
-- **Thread count.** With the unbounded executor each polling consumer has its
+- **Thread count.** Worst case with the bulkhead on: the sum of the maximum
+  concurrency of every listener container, in threads and JMS sessions. With
+  the unbounded executor each polling consumer has its
   own thread. A backlogged container climbs to its maximum consumers even
   though only `max-in-flight` handlers run (a consumer that received a message
   counts as busy), so expect up to the sum of the maximum consumers of every

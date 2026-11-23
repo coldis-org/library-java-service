@@ -391,7 +391,8 @@ public class JmsListenerBulkheadContainerTest extends ContainerTestHelper {
 
 		final Thread shutdownThread = Thread.ofPlatform().name("bulkhead-container-shutdown").start(listenerContainer::shutdown);
 		JmsListenerBulkheadTestSupport.waitUntil(() -> bulkhead.getWaiting() == 0, Duration.ofMillis(TestHelper.LONG_WAIT), "waiters left on shutdown");
-		Assertions.assertEquals(2D, this.getAborted(group, queue, "stopped") + this.getAborted(group, queue, "interrupted"));
+		JmsListenerBulkheadTestSupport.waitUntil(() -> (this.getAborted(group, queue, "stopped") + this.getAborted(group, queue, "interrupted")) == 2D,
+				"two stopped or interrupted waits");
 		release.countDown();
 		shutdownThread.join(JmsListenerBulkheadTestSupport.WAIT.toMillis());
 		Assertions.assertFalse(shutdownThread.isAlive());
