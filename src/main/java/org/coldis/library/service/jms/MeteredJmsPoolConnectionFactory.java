@@ -4,6 +4,7 @@ import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.ToDoubleFunction;
 
+import org.messaginghub.pooled.jms.JmsPoolConnection;
 import org.messaginghub.pooled.jms.JmsPoolConnectionFactory;
 import org.messaginghub.pooled.jms.pool.PooledConnection;
 import org.springframework.beans.factory.BeanNameAware;
@@ -15,6 +16,7 @@ import io.micrometer.core.instrument.Gauge;
 import io.micrometer.core.instrument.MeterRegistry;
 import jakarta.jms.Connection;
 import jakarta.jms.ConnectionFactory;
+import jakarta.jms.JMSException;
 
 /**
  * Pooled JMS connection factory that exposes pool usage as Micrometer gauges.
@@ -75,6 +77,9 @@ public class MeteredJmsPoolConnectionFactory extends JmsPoolConnectionFactory im
 
 	/** Bean name, used as the gauge tag. */
 	private String beanName;
+
+	/** Limit on the request threads that may hold a connection at once, or null for none. */
+	private JmsRequestThreadsLimit requestThreadsLimit;
 
 	/**
 	 * Default constructor.
@@ -168,6 +173,62 @@ public class MeteredJmsPoolConnectionFactory extends JmsPoolConnectionFactory im
 			final String factory,
 			final ToDoubleFunction<MeteredJmsPoolConnectionFactory> value) {
 		Gauge.builder(name, this, value).tag(MeteredJmsPoolConnectionFactory.FACTORY_TAG, factory).register(this.meterRegistry);
+	}
+
+	/**
+	 * Sets the limit on the request threads that may hold a connection of this factory at once.
+	 *
+	 * @param requestThreadsLimit Limit, or null for none.
+	 */
+	public void setRequestThreadsLimit(
+			final JmsRequestThreadsLimit requestThreadsLimit) {
+		this.requestThreadsLimit = requestThreadsLimit;
+	}
+
+	/**
+	 * Takes a request-thread permit ({@link JmsRequestThreadsLimit}) before borrowing a connection,
+	 * and hands it to the connection, which gives it back when closed. The permit is taken before the
+	 * pool is touched: the pool creates connections in a method synchronized on the whole factory, so
+	 * a request past the limit fails here instead of queueing behind a connection attempt to a broker
+	 * that is gone. createConnection() and the queue and topic variants all end in this method.
+	 *
+	 * @see org.messaginghub.pooled.jms.JmsPoolConnectionFactory#createConnection(java.lang.String, java.lang.String)
+	 */
+	@Override
+	public Connection createConnection(
+			final String userName,
+			final String password) throws JMSException {
+		final JmsRequestThreadsLimit.Permit permit = (this.requestThreadsLimit == null) ? null : this.requestThreadsLimit.acquire();
+		final Connection connection;
+		try {
+			connection = super.createConnection(userName, password);
+		}
+		catch (final JMSException | RuntimeException | Error exception) {
+			if (permit != null) {
+				permit.release();
+			}
+			throw exception;
+		}
+		if (permit != null) {
+			if (connection instanceof final RequestThreadsLimitedConnection limitedConnection) {
+				limitedConnection.holdPermit(permit);
+			}
+			else {
+				permit.release();
+			}
+		}
+		return connection;
+	}
+
+	/**
+	 * Wraps every pooled connection so it can give a request-thread permit back when closed.
+	 *
+	 * @see org.messaginghub.pooled.jms.JmsPoolConnectionFactory#newPooledConnectionWrapper(org.messaginghub.pooled.jms.pool.PooledConnection)
+	 */
+	@Override
+	protected JmsPoolConnection newPooledConnectionWrapper(
+			final PooledConnection connection) {
+		return new RequestThreadsLimitedConnection(connection);
 	}
 
 	/**

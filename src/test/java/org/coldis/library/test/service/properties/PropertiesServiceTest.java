@@ -1,10 +1,18 @@
 package org.coldis.library.test.service.properties;
 
 import java.sql.Connection;
+import java.time.Duration;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 
 import javax.sql.DataSource;
 
+import org.apache.activemq.artemis.core.client.impl.ClientSessionFactoryInternal;
+import org.apache.activemq.artemis.core.client.impl.ServerLocatorImpl;
+import org.apache.activemq.artemis.jms.client.ActiveMQConnectionFactory;
+import org.apache.activemq.artemis.spi.core.protocol.RemotingConnection;
+import org.coldis.library.service.jms.ArtemisReconnectOnAddressChange;
 import org.coldis.library.test.StartTestWithContainerExtension;
 import org.coldis.library.test.TestHelper;
 import org.coldis.library.test.TestWithContainer;
@@ -21,7 +29,9 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.context.SpringBootTest.WebEnvironment;
+import org.springframework.jms.config.JmsListenerEndpointRegistry;
 import org.springframework.jms.core.JmsTemplate;
+import org.springframework.jms.listener.DefaultMessageListenerContainer;
 import org.springframework.test.annotation.DirtiesContext;
 import org.springframework.web.client.RestTemplate;
 import org.testcontainers.containers.GenericContainer;
@@ -77,6 +87,18 @@ public class PropertiesServiceTest extends ContainerTestHelper {
 	@Autowired
 	private JmsTemplate jmsTemplate;
 
+	/** Moves live Artemis connections to a changed broker address. */
+	@Autowired
+	private ArtemisReconnectOnAddressChange artemisReconnectOnAddressChange;
+
+	/** Properties service. */
+	@Autowired
+	private PropertiesService propertiesService;
+
+	/** JMS listener containers of the context. */
+	@Autowired
+	private JmsListenerEndpointRegistry jmsListenerEndpointRegistry;
+
 	/** Original datasource URL from environment. */
 	@Value("${spring.datasource.url}")
 	private String originalJdbcUrl;
@@ -85,43 +107,80 @@ public class PropertiesServiceTest extends ContainerTestHelper {
 	@Value("${ARTEMIS_CONTAINER_61616}")
 	private String originalArtemisPort;
 
-	/** Resets shared singletons after each test to their initial environment-based values. */
+	/**
+	 * Whether every running listener container of the context has a consumer
+	 * registered with its destination. The test context does not let the client
+	 * reconnect, so a failed listener connection is replaced by the container's
+	 * recovery, a few seconds later.
+	 *
+	 * @return Whether every listener is registered.
+	 */
+	private Boolean areJmsListenersRegistered() {
+		return this.jmsListenerEndpointRegistry.getListenerContainers().stream()
+				.filter(container -> container.isRunning() && (container instanceof DefaultMessageListenerContainer))
+				.allMatch(container -> ((DefaultMessageListenerContainer) container).isRegisteredWithDestination());
+	}
+
+	/**
+	 * Resets shared singletons after each test to their initial environment-based values.
+	 *
+	 * @throws Exception If the Artemis connections do not come back.
+	 */
 	@org.junit.jupiter.api.AfterEach
-	public void tearDown() {
+	public void tearDown() throws Exception {
 		try {
-			this.restTemplate.put("http://localhost:" + this.port + "/properties/string/testProperties1/property1", 1, Void.class);
-			this.restTemplate.put("http://localhost:" + this.port + "/properties/long/testProperties1/property2", 1, Void.class);
-			this.restTemplate.put("http://localhost:" + this.port + "/properties/integer/testProperties1/property3", 1, Void.class);
-			this.restTemplate.put("http://localhost:" + this.port + "/properties/double/testProperties1/property4", 1, Void.class);
-			this.restTemplate.put("http://localhost:" + this.port + "/properties/float/testProperties1/property5", 1, Void.class);
-			this.restTemplate.put("http://localhost:" + this.port + "/properties/boolean/testProperties1/property6", true, Void.class);
-		} catch (final Exception exception) {
+			final Set<RemotingConnection> connectionsBeforeReverts = this.getLiveArtemisConnections();
+			try {
+				this.restTemplate.put("http://localhost:" + this.port + "/properties/string/testProperties1/property1", 1, Void.class);
+				this.restTemplate.put("http://localhost:" + this.port + "/properties/long/testProperties1/property2", 1, Void.class);
+				this.restTemplate.put("http://localhost:" + this.port + "/properties/integer/testProperties1/property3", 1, Void.class);
+				this.restTemplate.put("http://localhost:" + this.port + "/properties/double/testProperties1/property4", 1, Void.class);
+				this.restTemplate.put("http://localhost:" + this.port + "/properties/float/testProperties1/property5", 1, Void.class);
+				this.restTemplate.put("http://localhost:" + this.port + "/properties/boolean/testProperties1/property6", true, Void.class);
+			} catch (final Exception exception) {
+			}
+			try {
+				this.restTemplate.put("http://localhost:" + this.port + "/properties/string/dataSource/pool.dataSource.jdbcUrl?fieldAccess=true",
+						this.originalJdbcUrl, Void.class);
+			} catch (final Exception exception) {
+			}
+			try {
+				this.restTemplate.put(
+						"http://localhost:" + this.port
+								+ "/properties/string/pooledJmsConnectionFactory/connectionFactory.serverLocator.topologyArray.0.a.params.host?fieldAccess=true",
+						"localhost", Void.class);
+				this.restTemplate.put(
+						"http://localhost:" + this.port
+								+ "/properties/string/pooledJmsConnectionFactory/connectionFactory.serverLocator.initialConnectors.0.params.host?fieldAccess=true",
+						"localhost", Void.class);
+				this.restTemplate.put(
+						"http://localhost:" + this.port
+								+ "/properties/string/pooledJmsConnectionFactory/connectionFactory.serverLocator.topologyArray.0.a.params.port?fieldAccess=true",
+						this.originalArtemisPort, Void.class);
+				this.restTemplate.put(
+						"http://localhost:" + this.port
+								+ "/properties/string/pooledJmsConnectionFactory/connectionFactory.serverLocator.initialConnectors.0.params.port?fieldAccess=true",
+						this.originalArtemisPort, Void.class);
+				// A reconnection the reverts scheduled (after a test that changed the address and failed
+				// before changing it back) runs now, and fails its connections, before the next test.
+				final Boolean isReconnectScheduled = this.artemisReconnectOnAddressChange.isReconnectPending();
+				Assertions.assertTrue(TestHelper.waitUntilValid(this.artemisReconnectOnAddressChange::isReconnectPending, isPending -> !isPending,
+						TestHelper.LONG_WAIT, TestHelper.VERY_SHORT_WAIT));
+				if (isReconnectScheduled) {
+					Assertions.assertTrue(TestHelper.waitUntilValid(this::getLiveArtemisConnections,
+							liveConnections -> liveConnections.stream().noneMatch(connectionsBeforeReverts::contains), TestHelper.LONG_WAIT, TestHelper.VERY_SHORT_WAIT));
+				}
+				this.connectionFactory.clear();
+			} catch (final Exception exception) {
+			}
 		}
-		try {
-			this.restTemplate.put("http://localhost:" + this.port + "/properties/string/dataSource/pool.dataSource.jdbcUrl?fieldAccess=true",
-					this.originalJdbcUrl, Void.class);
-		} catch (final Exception exception) {
+		finally {
+			// Restores the reconnection a test may have swapped.
+			this.propertiesService.setArtemisReconnectOnAddressChange(this.artemisReconnectOnAddressChange);
 		}
-		try {
-			this.restTemplate.put(
-					"http://localhost:" + this.port
-							+ "/properties/string/pooledJmsConnectionFactory/connectionFactory.serverLocator.topologyArray.0.a.params.host?fieldAccess=true",
-					"localhost", Void.class);
-			this.restTemplate.put(
-					"http://localhost:" + this.port
-							+ "/properties/string/pooledJmsConnectionFactory/connectionFactory.serverLocator.initialConnectors.0.params.host?fieldAccess=true",
-					"localhost", Void.class);
-			this.restTemplate.put(
-					"http://localhost:" + this.port
-							+ "/properties/string/pooledJmsConnectionFactory/connectionFactory.serverLocator.topologyArray.0.a.params.port?fieldAccess=true",
-					this.originalArtemisPort, Void.class);
-			this.restTemplate.put(
-					"http://localhost:" + this.port
-							+ "/properties/string/pooledJmsConnectionFactory/connectionFactory.serverLocator.initialConnectors.0.params.port?fieldAccess=true",
-					this.originalArtemisPort, Void.class);
-			this.connectionFactory.clear();
-		} catch (final Exception exception) {
-		}
+		// The next test, in this class or in one that shares the context, finds every listener consuming.
+		Assertions.assertTrue(TestHelper.waitUntilValid(this::areJmsListenersRegistered, isRegistered -> isRegistered, TestHelper.VERY_LONG_WAIT,
+				TestHelper.VERY_SHORT_WAIT));
 	}
 
 	/** A value set through the endpoint is logged masked: a password-like string by its length only. */
@@ -250,6 +309,10 @@ public class PropertiesServiceTest extends ContainerTestHelper {
 	 */
 	@Test
 	public void testArtemisConnectionUpdate() throws Exception {
+		// The live connections stay: this test checks the new ones, and moving the listeners to an
+		// address that does not answer would leave them reconnecting there (the teardown restores it).
+		this.propertiesService.setArtemisReconnectOnAddressChange(new ArtemisReconnectOnAddressChange(false, Duration.ofSeconds(1)));
+
 		// Validates initial property value.
 		this.jmsTemplate.convertAndSend("testQueue", "testMessage");
 
@@ -318,6 +381,77 @@ public class PropertiesServiceTest extends ContainerTestHelper {
 			}
 		}, valid -> valid, TestHelper.VERY_LONG_WAIT, TestHelper.VERY_SHORT_WAIT));
 
+	}
+
+
+	/**
+	 * Gets the live connections of the pooled factory's Artemis factory.
+	 *
+	 * @return The live connections.
+	 */
+	private Set<RemotingConnection> getLiveArtemisConnections() {
+		final ServerLocatorImpl serverLocator = (ServerLocatorImpl) ((ActiveMQConnectionFactory) this.connectionFactory.getConnectionFactory())
+				.getServerLocator();
+		final Set<RemotingConnection> liveConnections = new HashSet<>();
+		final Set<ClientSessionFactoryInternal> sessionFactories = serverLocator.getFactories();
+		synchronized (sessionFactories) {
+			for (final ClientSessionFactoryInternal sessionFactory : sessionFactories) {
+				if (sessionFactory.numConnections() > 0) {
+					liveConnections.add(sessionFactory.getConnection());
+				}
+			}
+		}
+		return liveConnections;
+	}
+
+	/**
+	 * Sends a broker host through the endpoint, as the update scripts send it,
+	 * and waits until every connection that was live is replaced, with no
+	 * clear() of the pool, and a send goes through.
+	 *
+	 * @param  host      Broker host.
+	 * @throws Exception If the test fails.
+	 */
+	private void changeArtemisHostAndAwaitMove(
+			final String host) throws Exception {
+		final Set<RemotingConnection> connectionsBefore = this.getLiveArtemisConnections();
+		Assertions.assertFalse(connectionsBefore.isEmpty());
+		this.restTemplate.put(
+				"http://localhost:" + this.port
+						+ "/properties/string/pooledJmsConnectionFactory/connectionFactory.serverLocator.initialConnectors.0.params.host?fieldAccess=true",
+				host, Void.class);
+		Assertions.assertTrue(TestHelper.waitUntilValid(this::getLiveArtemisConnections,
+				liveConnections -> liveConnections.stream().noneMatch(connectionsBefore::contains), TestHelper.LONG_WAIT, TestHelper.VERY_SHORT_WAIT));
+		Assertions.assertTrue(TestHelper.waitUntilValid(() -> {
+			try {
+				this.jmsTemplate.convertAndSend("propertiesAddressChangeQueue", "after the move to " + host);
+				return Boolean.TRUE;
+			}
+			catch (final Exception exception) {
+				return Boolean.FALSE;
+			}
+		}, isSent -> isSent, TestHelper.LONG_WAIT, TestHelper.VERY_SHORT_WAIT));
+		// The listeners, whose connections moved too, consume again.
+		Assertions.assertTrue(TestHelper.waitUntilValid(this::areJmsListenersRegistered, isRegistered -> isRegistered, TestHelper.VERY_LONG_WAIT,
+				TestHelper.VERY_SHORT_WAIT));
+	}
+
+	/**
+	 * A new broker host sent through the endpoint, as the update scripts send
+	 * it, moves the live connections of the pooled factory to it without
+	 * clearing the pool: each is replaced by a new one, and sends go on.
+	 *
+	 * @throws Exception If the test fails.
+	 */
+	@Test
+	@DisplayName("A broker host changed through the endpoint moves the live connections, without clearing the pool")
+	public void testArtemisAddressChangeMovesLiveConnections() throws Exception {
+		this.jmsTemplate.convertAndSend("propertiesAddressChangeQueue", "before");
+		// The same broker under another host name: the address changed.
+		this.changeArtemisHostAndAwaitMove("127.0.0.1");
+		// Back to the first host, so no move is left for the next test.
+		this.changeArtemisHostAndAwaitMove("localhost");
+		Assertions.assertFalse(this.artemisReconnectOnAddressChange.isReconnectPending());
 	}
 
 }
