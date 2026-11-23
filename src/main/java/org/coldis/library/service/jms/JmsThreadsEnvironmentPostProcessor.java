@@ -19,8 +19,13 @@ import org.springframework.core.env.MapPropertySource;
  * {@value #REMOTING_THREADS_CPU_MULTIPLIER_PROPERTY} times the CPUs
  * ({@link JmsCpuLimits}); the legacy {@value #LEGACY_REMOTING_THREADS_PROPERTY}
  * (kept working); {@value #DEFAULT_REMOTING_THREADS_CPU_MULTIPLIER} times the
- * CPUs. The value is added as the lowest-precedence property source, so an
- * application's own value always wins.
+ * CPUs. The value is added as the lowest-precedence property source at this
+ * point, so an application's own value in Spring Boot config data
+ * ({@code application.properties}, profiles) or environment variables wins.
+ * Runs before {@code @PropertySource} files are loaded: these three keys
+ * ({@value JmsCpuLimits#CPUS_PROPERTY}, {@value #REMOTING_THREADS_PROPERTY},
+ * {@value #REMOTING_THREADS_CPU_MULTIPLIER_PROPERTY}) must be set in config data
+ * or environment variables, not in a {@code @PropertySource} file.
  */
 public class JmsThreadsEnvironmentPostProcessor implements EnvironmentPostProcessor {
 
