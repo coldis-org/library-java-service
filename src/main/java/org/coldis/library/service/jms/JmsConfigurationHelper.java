@@ -118,12 +118,6 @@ public class JmsConfigurationHelper {
 	@Value("${org.coldis.library.service.jms.listener.bulkhead.enabled:false}")
 	private Boolean isBulkheadEnabled;
 
-	/**
-	 * CPUs the JMS limits are multiplied by, when pinned ({@link JmsCpuLimits}).
-	 */
-	@Value("${" + JmsCpuLimits.CPUS_PROPERTY + ":}")
-	private Double cpus;
-
 	/** Application base packages (comma separated). */
 	@Value("${org.coldis.configuration.base-package:}")
 	private String basePackages;
@@ -229,7 +223,6 @@ public class JmsConfigurationHelper {
 			final Integer flowControlKeepAliveSeconds
 			
 	) {
-		JmsCpuLimits.setConfiguredCpus(this.cpus);
 		if (useCustomPools) {
 			final String priorityReason = "thread priority has no effect on Linux without -XX:ThreadPriorityPolicy=1 (doc/jms-threads.md).";
 			JmsConfigurationHelper.warnDeprecated("org.coldis.library.service.jms.global.executor.priority", priority, priorityReason);
@@ -356,7 +349,6 @@ public class JmsConfigurationHelper {
 			final Integer keepAliveSeconds,
 			@Value("${org.coldis.library.service.jms.listener.executor.unbounded:true}")
 			final Boolean isUnbounded) {
-		JmsCpuLimits.setConfiguredCpus(this.cpus);
 		JmsConfigurationHelper.warnDeprecated("org.coldis.library.service.jms.listener.executor.priority", priority,
 				"thread priority has no effect on Linux without -XX:ThreadPriorityPolicy=1, nor on virtual threads (doc/jms-threads.md).");
 		final Integer actualPriority = Objects.requireNonNullElse(priority, Thread.NORM_PRIORITY);

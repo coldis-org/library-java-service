@@ -81,7 +81,7 @@ public class JmsListenerBulkheadRegistry {
 	/**
 	 * If the bulkhead is enabled (decided at startup).
 	 */
-	private final boolean enabled;
+	private final boolean isEnabled;
 
 	/**
 	 * Group of each factory listed in {@code groups.<group>.factories}.
@@ -103,9 +103,9 @@ public class JmsListenerBulkheadRegistry {
 	public JmsListenerBulkheadRegistry(final JmsListenerBulkheadProperties properties, final ObjectProvider<MeterRegistry> meterRegistryProvider) {
 		this.properties = Objects.requireNonNull(properties);
 		this.meterRegistryProvider = meterRegistryProvider;
-		this.enabled = properties.getEnabled();
+		this.isEnabled = properties.getEnabled();
 		final Map<String, String> actualFactoryGroups = new HashMap<>();
-		if (this.enabled) {
+		if (this.isEnabled) {
 			JmsListenerBulkheadRegistry.validate(properties, actualFactoryGroups);
 			JmsListenerBulkheadRegistry.LOGGER.info("JMS listener bulkhead enabled: default group limit {}, groups {}.", properties.getActualMaxInFlight(),
 					properties.getGroups().keySet());
@@ -240,7 +240,7 @@ public class JmsListenerBulkheadRegistry {
 	 * @return If the bulkhead is enabled.
 	 */
 	public boolean isEnabled() {
-		return this.enabled;
+		return this.isEnabled;
 	}
 
 	/**
@@ -335,7 +335,7 @@ public class JmsListenerBulkheadRegistry {
 	public JmsListenerBulkhead getBulkhead(
 			final String group) {
 		JmsListenerBulkhead bulkhead = null;
-		final JmsListenerBulkheadGroupProperties groupProperties = (this.enabled ? this.getGroupProperties(group) : null);
+		final JmsListenerBulkheadGroupProperties groupProperties = (this.isEnabled ? this.getGroupProperties(group) : null);
 		if ((groupProperties != null) && ((groupProperties.getActualMaxInFlight() != null) || this.bulkheads.containsKey(group))) {
 			bulkhead = this.bulkheads.computeIfAbsent(group, newGroup -> this.createBulkhead(newGroup, groupProperties));
 		}
@@ -386,7 +386,7 @@ public class JmsListenerBulkheadRegistry {
 			final String factoryBeanName,
 			final String bulkheadGroup) {
 		JmsListenerBulkheadBinding binding = null;
-		if (this.enabled) {
+		if (this.isEnabled) {
 			final String group = this.resolveGroup(factoryBeanName, bulkheadGroup);
 			final JmsListenerBulkheadGroupProperties groupProperties = this.getGroupProperties(group);
 			final JmsListenerBulkhead bulkhead = this.getBulkhead(group);

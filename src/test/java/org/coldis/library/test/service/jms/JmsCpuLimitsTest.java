@@ -4,7 +4,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 
 import org.coldis.library.service.jms.JmsCpuLimits;
-import org.coldis.library.service.jms.JmsRemotingThreadsEnvironmentPostProcessor;
+import org.coldis.library.service.jms.JmsThreadsEnvironmentPostProcessor;
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -13,7 +13,7 @@ import org.springframework.mock.env.MockEnvironment;
 
 /**
  * {@link JmsCpuLimits} (CPU source and limit resolution) and
- * {@link JmsRemotingThreadsEnvironmentPostProcessor}. The global pinned CPUs
+ * {@link JmsThreadsEnvironmentPostProcessor}. The global pinned CPUs
  * are not changed here (tests run in parallel): fake cgroup trees and the
  * {@value JmsCpuLimits#CPUS_PROPERTY} property of a mock environment are.
  */
@@ -70,20 +70,25 @@ public class JmsCpuLimitsTest {
 	 * Tests the remoting threads resolution.
 	 */
 	@Test
-	@DisplayName("Remoting threads: an application's value wins, then the multiplier, then the legacy AVAILABLE_CPUS_30X, then 30 per CPU")
+	@DisplayName("Remoting threads: an application's value wins, then a positive multiplier, then the legacy AVAILABLE_CPUS_30X, then 30 per CPU")
 	public void testRemotingThreads() {
 		final MockEnvironment pinned = new MockEnvironment().withProperty(JmsCpuLimits.CPUS_PROPERTY, "2.08");
-		Assertions.assertEquals(63, JmsRemotingThreadsEnvironmentPostProcessor.resolveRemotingThreads(pinned));
-		Assertions.assertEquals(60, JmsRemotingThreadsEnvironmentPostProcessor
+		Assertions.assertEquals(63, JmsThreadsEnvironmentPostProcessor.resolveRemotingThreads(pinned));
+		Assertions.assertEquals(60, JmsThreadsEnvironmentPostProcessor
 				.resolveRemotingThreads(new MockEnvironment().withProperty(JmsCpuLimits.CPUS_PROPERTY, "2.08").withProperty("AVAILABLE_CPUS_30X", "60")));
-		Assertions.assertEquals(9, JmsRemotingThreadsEnvironmentPostProcessor.resolveRemotingThreads(new MockEnvironment()
+		Assertions.assertEquals(9, JmsThreadsEnvironmentPostProcessor.resolveRemotingThreads(new MockEnvironment()
 				.withProperty(JmsCpuLimits.CPUS_PROPERTY, "2.08").withProperty("AVAILABLE_CPUS_30X", "60")
-				.withProperty(JmsRemotingThreadsEnvironmentPostProcessor.REMOTING_THREADS_CPU_MULTIPLIER_PROPERTY, "4")));
-		final MockEnvironment explicit = new MockEnvironment().withProperty(JmsRemotingThreadsEnvironmentPostProcessor.REMOTING_THREADS_PROPERTY, "12");
-		new JmsRemotingThreadsEnvironmentPostProcessor().postProcessEnvironment(explicit, null);
-		Assertions.assertEquals("12", explicit.getProperty(JmsRemotingThreadsEnvironmentPostProcessor.REMOTING_THREADS_PROPERTY));
-		new JmsRemotingThreadsEnvironmentPostProcessor().postProcessEnvironment(pinned, null);
-		Assertions.assertEquals("63", pinned.getProperty(JmsRemotingThreadsEnvironmentPostProcessor.REMOTING_THREADS_PROPERTY));
+				.withProperty(JmsThreadsEnvironmentPostProcessor.REMOTING_THREADS_CPU_MULTIPLIER_PROPERTY, "4")));
+		Assertions.assertEquals(63, JmsThreadsEnvironmentPostProcessor.resolveRemotingThreads(new MockEnvironment()
+				.withProperty(JmsCpuLimits.CPUS_PROPERTY, "2.08").withProperty(JmsThreadsEnvironmentPostProcessor.REMOTING_THREADS_CPU_MULTIPLIER_PROPERTY, "0")));
+		final MockEnvironment explicit = new MockEnvironment().withProperty(JmsThreadsEnvironmentPostProcessor.REMOTING_THREADS_PROPERTY, "12");
+		new JmsThreadsEnvironmentPostProcessor().postProcessEnvironment(explicit, null);
+		Assertions.assertEquals("12", explicit.getProperty(JmsThreadsEnvironmentPostProcessor.REMOTING_THREADS_PROPERTY));
+		// Without a pinned CPU count (the post-processor pins it process-wide, which parallel tests share).
+		final MockEnvironment unpinned = new MockEnvironment();
+		final int expectedThreads = JmsThreadsEnvironmentPostProcessor.resolveRemotingThreads(unpinned);
+		new JmsThreadsEnvironmentPostProcessor().postProcessEnvironment(unpinned, null);
+		Assertions.assertEquals(String.valueOf(expectedThreads), unpinned.getProperty(JmsThreadsEnvironmentPostProcessor.REMOTING_THREADS_PROPERTY));
 	}
 
 }

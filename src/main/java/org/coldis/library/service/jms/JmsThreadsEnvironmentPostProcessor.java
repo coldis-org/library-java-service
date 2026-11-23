@@ -9,7 +9,10 @@ import org.springframework.core.env.ConfigurableEnvironment;
 import org.springframework.core.env.MapPropertySource;
 
 /**
- * Resolves the Artemis client's Netty remoting threads
+ * Applies the JMS thread settings that must be known before any bean is
+ * created. Pins the CPU count of {@link JmsCpuLimits} from
+ * {@value JmsCpuLimits#CPUS_PROPERTY}, so every reader sees it whatever the
+ * bean creation order. Resolves the Artemis client's Netty remoting threads
  * ({@value #REMOTING_THREADS_PROPERTY}, used by
  * {@code spring.artemis.broker-url-query-default} as {@code remotingThreads})
  * when the application does not set it, first match:
@@ -19,7 +22,7 @@ import org.springframework.core.env.MapPropertySource;
  * CPUs. The value is added as the lowest-precedence property source, so an
  * application's own value always wins.
  */
-public class JmsRemotingThreadsEnvironmentPostProcessor implements EnvironmentPostProcessor {
+public class JmsThreadsEnvironmentPostProcessor implements EnvironmentPostProcessor {
 
 	/**
 	 * Remoting threads property.
@@ -57,11 +60,15 @@ public class JmsRemotingThreadsEnvironmentPostProcessor implements EnvironmentPo
 		final Double cpus = environment.getProperty(JmsCpuLimits.CPUS_PROPERTY, Double.class);
 		final double actualCpus = ((cpus == null) || (cpus <= 0) ? JmsCpuLimits.detectCpus(JmsCpuLimits.CGROUP_ROOT, () -> Runtime.getRuntime().availableProcessors())
 				: cpus);
-		final Double multiplier = environment.getProperty(JmsRemotingThreadsEnvironmentPostProcessor.REMOTING_THREADS_CPU_MULTIPLIER_PROPERTY, Double.class);
-		final String legacyValue = environment.getProperty(JmsRemotingThreadsEnvironmentPostProcessor.LEGACY_REMOTING_THREADS_PROPERTY);
+		// A multiplier that is not positive is not a valid thread count: the default applies.
+		final Double configuredMultiplier = environment.getProperty(JmsThreadsEnvironmentPostProcessor.REMOTING_THREADS_CPU_MULTIPLIER_PROPERTY,
+				Double.class);
+		final Double multiplier = ((configuredMultiplier == null) || (configuredMultiplier <= 0) ? null : configuredMultiplier);
+		final String legacyValue = environment.getProperty(JmsThreadsEnvironmentPostProcessor.LEGACY_REMOTING_THREADS_PROPERTY);
 		final Integer legacyThreads = ((multiplier == null) && NumberUtils.isDigits(legacyValue) ? Integer.valueOf(legacyValue) : null);
-		return JmsCpuLimits.resolve(legacyThreads, multiplier, JmsRemotingThreadsEnvironmentPostProcessor.DEFAULT_REMOTING_THREADS_CPU_MULTIPLIER,
-				() -> actualCpus);
+		final Integer remotingThreads = JmsCpuLimits.resolve(legacyThreads, multiplier,
+				JmsThreadsEnvironmentPostProcessor.DEFAULT_REMOTING_THREADS_CPU_MULTIPLIER, () -> actualCpus);
+		return (remotingThreads == null ? 1 : remotingThreads);
 	}
 
 	/**
@@ -72,10 +79,11 @@ public class JmsRemotingThreadsEnvironmentPostProcessor implements EnvironmentPo
 	public void postProcessEnvironment(
 			final ConfigurableEnvironment environment,
 			final SpringApplication application) {
-		if (!environment.containsProperty(JmsRemotingThreadsEnvironmentPostProcessor.REMOTING_THREADS_PROPERTY)) {
-			environment.getPropertySources().addLast(new MapPropertySource(JmsRemotingThreadsEnvironmentPostProcessor.PROPERTY_SOURCE_NAME,
-					Map.of(JmsRemotingThreadsEnvironmentPostProcessor.REMOTING_THREADS_PROPERTY,
-							JmsRemotingThreadsEnvironmentPostProcessor.resolveRemotingThreads(environment))));
+		JmsCpuLimits.setConfiguredCpus(environment.getProperty(JmsCpuLimits.CPUS_PROPERTY, Double.class));
+		if (!environment.containsProperty(JmsThreadsEnvironmentPostProcessor.REMOTING_THREADS_PROPERTY)) {
+			environment.getPropertySources().addLast(new MapPropertySource(JmsThreadsEnvironmentPostProcessor.PROPERTY_SOURCE_NAME,
+					Map.of(JmsThreadsEnvironmentPostProcessor.REMOTING_THREADS_PROPERTY,
+							JmsThreadsEnvironmentPostProcessor.resolveRemotingThreads(environment))));
 		}
 	}
 

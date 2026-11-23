@@ -7,8 +7,11 @@ flooded queue therefore cannot keep the other queues from progressing, and the
 handlers never use more of a shared resource (typically database connections)
 than the limit allows.
 
-Everything is off by default: with `enabled=false` the listener path and the
-listener executor are exactly as before.
+The bulkhead is off by default: with `enabled=false` the listener path is
+exactly as before. The listener executor is not: it is unbounded by default
+whether or not the bulkhead is enabled, so a service that relied on the old
+thread cap as a handler limit must set `max-in-flight` when it upgrades (see
+[JMS threads](jms-threads.md#behaviour-change-and-migration)).
 
 ## When to enable it
 

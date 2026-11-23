@@ -43,8 +43,8 @@ be running.
 - **Never limit JMS load with listener threads** (`listener.executor.concurrency*`, `core-size*`,
   `unbounded=false`, all deprecated): they limit polling consumers, which can starve or stop every
   listener until a restart. The listener executor is an unbounded cached pool by default; bound
-  concurrent handlers with `listener.bulkhead.*`. JMS `*-cpu-multiplier` settings multiply one CPU
-  count (`org.coldis.library.service.cpus`, else the cgroup quota): see
+  concurrent handlers with `listener.bulkhead.*`. The bulkhead and remoting-threads multipliers
+  multiply one CPU count (`org.coldis.library.service.cpus`, else the cgroup quota): see
   [`doc/jms-threads.md`](doc/jms-threads.md).
 - **AspectJ compile-time weaving** (from the parent pom): `@Transactional` and the other aspects
   work on private methods and self-calls. Run through `test`/`install`, not a bare

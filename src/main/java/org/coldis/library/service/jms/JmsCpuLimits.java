@@ -13,10 +13,15 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 /**
- * The CPU source of the JMS thread and handler limits, and their resolution.
+ * The CPU source of the JMS limits introduced with the listener bulkhead (the
+ * bulkhead's {@code max-in-flight-cpu-multiplier} and the Artemis remoting
+ * threads), and their resolution. The deprecated legacy listener
+ * {@code concurrency-cpu-multiplier}, the bounded listener pool
+ * ({@code unbounded=false}) and the Artemis global executors keep their previous
+ * sizing from {@link Runtime#availableProcessors()}.
  * <p>
  * CPUs, first match: the property {@value #CPUS_PROPERTY} (a project can pin
- * it); the cgroup v2 quota ({@code cpu.max}: quota / period); the cgroup v1
+ * it; applied at startup by {@link JmsThreadsEnvironmentPostProcessor}); the cgroup v2 quota ({@code cpu.max}: quota / period); the cgroup v1
  * quota ({@code cpu.cfs_quota_us / cpu.cfs_period_us}); else
  * {@link Runtime#availableProcessors()}. A quota is capped at
  * {@code availableProcessors()}. The JVM rounds a fractional quota up (2.08
