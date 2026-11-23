@@ -1,10 +1,10 @@
 package org.coldis.library.test.service.jms;
 
-import org.coldis.library.thread.CpuLimits;
 import org.coldis.library.service.jms.JmsListenerBulkhead;
 import org.coldis.library.service.jms.JmsListenerBulkheadBinding;
 import org.coldis.library.service.jms.JmsListenerBulkheadProperties;
 import org.coldis.library.service.jms.JmsListenerBulkheadRegistry;
+import org.coldis.library.thread.CpuLimits;
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;

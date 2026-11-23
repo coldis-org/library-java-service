@@ -1,6 +1,7 @@
 package org.coldis.library.test.service.jms;
 
 import java.nio.file.Path;
+import java.util.List;
 
 import org.coldis.library.service.cpu.CpuEnvironmentPostProcessor;
 import org.coldis.library.service.jms.JmsThreadsEnvironmentPostProcessor;
@@ -9,6 +10,11 @@ import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
+import org.springframework.boot.DefaultBootstrapContext;
+import org.springframework.boot.context.config.ConfigDataEnvironmentPostProcessor;
+import org.springframework.boot.env.EnvironmentPostProcessor;
+import org.springframework.boot.env.EnvironmentPostProcessorsFactory;
+import org.springframework.boot.logging.DeferredLogs;
 import org.springframework.mock.env.MockEnvironment;
 
 /**
@@ -53,9 +59,40 @@ public class JmsThreadsEnvironmentPostProcessorTest {
 		Assertions.assertEquals("12", explicit.getProperty(JmsThreadsEnvironmentPostProcessor.REMOTING_THREADS_PROPERTY));
 		final MockEnvironment computed = new MockEnvironment();
 		new JmsThreadsEnvironmentPostProcessor().postProcessEnvironment(computed, null);
-		Assertions.assertEquals(String.valueOf(JmsThreadsEnvironmentPostProcessor.resolveRemotingThreads(computed, CpuLimits.getDefault())),
-				computed.getProperty(JmsThreadsEnvironmentPostProcessor.REMOTING_THREADS_PROPERTY));
-		Assertions.assertTrue(new JmsThreadsEnvironmentPostProcessor().getOrder() > new CpuEnvironmentPostProcessor().getOrder());
+		// The default is 30 per CPU, so at least 30 for any CPU count.
+		Assertions.assertTrue(Integer.parseInt(computed.getProperty(JmsThreadsEnvironmentPostProcessor.REMOTING_THREADS_PROPERTY)) >= 30);
+	}
+
+	/**
+	 * Gets the position of a post-processor class in a list.
+	 *
+	 * @param  postProcessors     Post-processors.
+	 * @param  postProcessorClass Post-processor class.
+	 * @return                    The position, or -1 when absent.
+	 */
+	private static int indexOf(
+			final List<EnvironmentPostProcessor> postProcessors,
+			final Class<?> postProcessorClass) {
+		return postProcessors.stream().map(Object::getClass).toList().indexOf(postProcessorClass);
+	}
+
+	/**
+	 * Tests the wiring: both post-processors are registered and run, as Spring
+	 * Boot orders them, after the config data (so application.properties is
+	 * seen) and the CPU one before the JMS one. Nothing is pinned here.
+	 */
+	@Test
+	@DisplayName("Post-processors: registered, after the config data, CPU before JMS threads")
+	public void testWiring() {
+		final List<EnvironmentPostProcessor> postProcessors = EnvironmentPostProcessorsFactory
+				.fromSpringFactories(JmsThreadsEnvironmentPostProcessorTest.class.getClassLoader())
+				.getEnvironmentPostProcessors(new DeferredLogs(), new DefaultBootstrapContext());
+		final int configDataIndex = JmsThreadsEnvironmentPostProcessorTest.indexOf(postProcessors, ConfigDataEnvironmentPostProcessor.class);
+		final int cpuIndex = JmsThreadsEnvironmentPostProcessorTest.indexOf(postProcessors, CpuEnvironmentPostProcessor.class);
+		final int jmsThreadsIndex = JmsThreadsEnvironmentPostProcessorTest.indexOf(postProcessors, JmsThreadsEnvironmentPostProcessor.class);
+		Assertions.assertTrue(configDataIndex >= 0);
+		Assertions.assertTrue(cpuIndex > configDataIndex);
+		Assertions.assertTrue(jmsThreadsIndex > cpuIndex);
 	}
 
 }

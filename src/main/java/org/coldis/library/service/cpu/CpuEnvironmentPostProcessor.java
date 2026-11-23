@@ -15,7 +15,9 @@ import org.springframework.core.env.ConfigurableEnvironment;
  * {@code @PropertySource} files are loaded: set the property in Spring Boot
  * config data ({@code application.properties}, profiles) or an environment
  * variable. Without it, {@link CpuLimits} detects the cgroup quota or the
- * runtime processors (doc/cpu-source.md).
+ * runtime processors (doc/cpu-source.md). The pin is process-wide: the first
+ * valid value wins, and {@link CpuLimits#pin(double)} decides which values are
+ * valid (a later different value, or one that is not positive, is ignored).
  */
 public class CpuEnvironmentPostProcessor implements EnvironmentPostProcessor, Ordered {
 
@@ -68,7 +70,7 @@ public class CpuEnvironmentPostProcessor implements EnvironmentPostProcessor, Or
 			final ConfigurableEnvironment environment,
 			final SpringApplication application) {
 		final Double cpus = environment.getProperty(CpuEnvironmentPostProcessor.CPUS_PROPERTY, Double.class);
-		if ((cpus != null) && (cpus > 0)) {
+		if (cpus != null) {
 			this.cpuLimits.pin(cpus);
 		}
 	}
