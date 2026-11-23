@@ -13,6 +13,7 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.beans.factory.config.BeanDefinition;
 import org.springframework.beans.factory.support.BeanDefinitionRegistry;
 import org.springframework.beans.factory.support.BeanDefinitionRegistryPostProcessor;
+import org.springframework.beans.factory.support.StaticListableBeanFactory;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.context.annotation.Role;
@@ -90,6 +91,32 @@ public class EnhancedJmsBootstrapConfiguration implements BeanDefinitionRegistry
 						meterRegistryProvider::getIfAvailable, bulkheadRegistryProvider::getIfAvailable);
 			}
 		};
+	}
+
+	/**
+	 * Creates the listener annotation processor without the bulkhead registry
+	 * (the signature before the JMS listener bulkhead). Its listeners are never
+	 * limited by the bulkhead.
+	 *
+	 * @param      jmsConverterProperties            JMS converter properties.
+	 * @param      staleMessageFilterServiceProvider Stale message filter service
+	 *                                                   provider.
+	 * @param      meterRegistryProvider             Meter registry provider.
+	 * @param      nonRetriableExceptionsNames       Non-retriable exception class
+	 *                                                   names.
+	 * @return                                       The processor.
+	 * @deprecated                                   Use
+	 *                                                   {@link #enhancedJmsListenerAnnotationProcessor(JmsConverterProperties, ObjectProvider, ObjectProvider, ObjectProvider, List)},
+	 *                                                   the bean Spring creates.
+	 */
+	@Deprecated
+	public JmsListenerAnnotationBeanPostProcessor enhancedJmsListenerAnnotationProcessor(
+			final JmsConverterProperties jmsConverterProperties,
+			final ObjectProvider<StaleMessageFilterService> staleMessageFilterServiceProvider,
+			final ObjectProvider<MeterRegistry> meterRegistryProvider,
+			final List<String> nonRetriableExceptionsNames) {
+		return this.enhancedJmsListenerAnnotationProcessor(jmsConverterProperties, staleMessageFilterServiceProvider, meterRegistryProvider,
+				new StaticListableBeanFactory().getBeanProvider(JmsListenerBulkheadRegistry.class), nonRetriableExceptionsNames);
 	}
 
 }

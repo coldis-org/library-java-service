@@ -21,14 +21,14 @@ public class JmsListenerBulkheadGroupProperties {
 	public static final Integer DEFAULT_MAX_WAIT_DELIVERIES = 3;
 
 	/**
-	 * Maximum concurrent handler executions of the group. Unset or not positive
-	 * (and no multiplier): the group is not limited.
+	 * Maximum concurrent handler executions of the group. Wins over the
+	 * multiplier when positive.
 	 */
 	private Integer maxInFlight;
 
 	/**
-	 * Maximum concurrent handler executions per available processor. When set,
-	 * wins over {@link #maxInFlight}.
+	 * Maximum concurrent handler executions per CPU ({@link JmsCpuLimits}), used
+	 * when {@link #maxInFlight} is not set.
 	 */
 	private Double maxInFlightCpuMultiplier;
 
@@ -173,21 +173,25 @@ public class JmsListenerBulkheadGroupProperties {
 	}
 
 	/**
+	 * Default limit per CPU of the group when neither {@code max-in-flight} nor
+	 * {@code max-in-flight-cpu-multiplier} is set (null: not limited by default).
+	 *
+	 * @return The default ratio.
+	 */
+	protected Double getDefaultMaxInFlightCpuMultiplier() {
+		return null;
+	}
+
+	/**
 	 * Gets the current limit of the group, read on every call (so a changed
-	 * property applies live): the CPU multiplier (rounded up) wins over the fixed
-	 * value.
+	 * property applies live), resolved by {@link JmsCpuLimits#resolve}: the
+	 * explicit {@code max-in-flight}, else {@code max-in-flight-cpu-multiplier},
+	 * else the default ratio, times the CPUs.
 	 *
 	 * @return The current limit, or null when the group is not limited.
 	 */
 	public Integer getActualMaxInFlight() {
-		Integer actualMaxInFlight = null;
-		if (this.getMaxInFlightCpuMultiplier() != null) {
-			actualMaxInFlight = (int) Math.ceil(Runtime.getRuntime().availableProcessors() * this.getMaxInFlightCpuMultiplier());
-		}
-		else {
-			actualMaxInFlight = this.getMaxInFlight();
-		}
-		return ((actualMaxInFlight == null) || (actualMaxInFlight <= 0) ? null : actualMaxInFlight);
+		return JmsCpuLimits.resolve(this.getMaxInFlight(), this.getMaxInFlightCpuMultiplier(), this.getDefaultMaxInFlightCpuMultiplier());
 	}
 
 }
