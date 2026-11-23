@@ -1,5 +1,5 @@
 # Review policy for coldis-org/library-java-service. Read from master by the local review
-# (../supersim-infrastructure-code-reviewer/local-review/REVIEW.md), so a
+# (<code-reviewer>/local-review/REVIEW.md), so a
 # branch can't weaken its own review. Gate names are the prompt filenames.
 
 [project]

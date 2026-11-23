@@ -15,7 +15,7 @@ import jakarta.persistence.IdClass;
 import jakarta.persistence.Table;
 
 /**
- * Tiered entity with a composite key (owner + moment) and a JSONB payload: the data-gathering
+ * Tiered entity with a composite key (owner + moment) and a JSONB payload: the snapshot
  * shape (snapshots read by key, latest and as-of).
  */
 @Entity

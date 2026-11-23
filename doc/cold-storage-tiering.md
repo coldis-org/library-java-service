@@ -1,8 +1,7 @@
 # Cold storage tiering (hot Postgres table → S3 cold tier)
 
 Status: step 1 implemented (row tiering, library-owned scheduling, repository fragment, in-memory and
-S3 storage), 2026-11-08, branch `feature/cold-storage-tiering`, package
-`org.coldis.library.service.tiering`. Steps 2 to 4 pending.
+S3 storage), 2026-11-08, package `org.coldis.library.service.tiering`. Steps 2 to 4 pending.
 
 ## Summary
 
@@ -22,16 +21,16 @@ The library owns the scheduling: every batch (backfill, eviction, later window e
 and properties, and writes no batch component of its own.
 
 Two kinds of tiering are distinguished (*Row and window tiering*): **row tiering** (one object per
-row, random access by key, rehydrate; data-gathering) is v1 in full; **window tiering** (a time
+row, random access by key, rehydrate; the first consumer) is v1 in full; **window tiering** (a time
 window of rows exported as one file, read by scanning, partition dropped; the log service) is
 specified here, shares most of v1's parts, and is built right after v1 as the log service's step.
 
-It is the generalisation of data-gathering's Boa Vista online tiering
-(`supersim-service-data-gathering-pom`, branch `feature/boa-vista-online-report-tiering`,
-`doc/boa-vista-online-report-tiering.md`), which is copied into the library and parameterised. The
-first consumers, in order: data-gathering's Boa Vista online reports (row delete), the log
-service's conversion steps (partition drop), data-gathering's Boa Vista *full* reports
-(`boa_vista_report_full*`, monthly partitions, ~240 M rows a month: partition drop).
+It is the generalisation of the online report tiering of a data-collection service (the first
+consumer, described in the consumer's design doc), which is copied into the library and
+parameterised. The first consumers, in order: the online reports of an external report provider in
+that data-collection service (row delete), a log service's conversion steps (partition drop), the
+same provider's *full* reports (`report_full*`, monthly partitions, hundreds of millions of rows
+per monthly delivery: partition drop).
 
 ## Goals / non-goals
 
@@ -39,7 +38,7 @@ Goals:
 - One implementation of archive, touch, eviction, backfill and rehydration, configured per table
   by a small definition bean and properties. A consumer adds a table with a definition, two columns
   and properties, not with code copied from another service. Nothing in the library knows a
-  consumer's columns: Boa Vista only supplies key columns, the version column, the clock and the
+  consumer's columns: a consumer only supplies key columns, the version column, the clock and the
   rehydration.
 - Every guarantee of the reference implementation kept: never evict unconfirmed content, idempotent
   re-uploads, rewrite-after-archive safe. Integrity in transit is the SDK's transfer checksums.
@@ -57,22 +56,22 @@ Non-goals:
 
 ## Reference implementation (what gets generalised)
 
-Data-gathering, branch `feature/boa-vista-online-report-tiering` (master has since dropped the
-`_new` suffix and added Flyway; names below are the branch's):
+The first consumer's own implementation, for two online report tables of an external report
+provider (a report and a detailed report; class names below are placeholders for the consumer's):
 
-| Piece | Where | Does |
-|---|---|---|
-| `BoaVistaOnlineTieringServiceComponent` | `component/person/finance/boavista/online/` | `saveCadastroPositivo` (touch on write, JPA save, upload request after commit); `archive` (lock row `FOR UPDATE`, `data::text` → sha256 → skip PUT if the index has the same sha → PUT → upsert index → `markArchived WHERE updated_at = read`); `@JmsListener upload` and `touch`; `findReport`/`findCadastroPositivo` (newer of index and hot; hot hit → touch if stale; miss → `GET`, digest check, native `INSERT … ON CONFLICT DO NOTHING` with the original timestamps) |
-| `BoaVistaOnlineTieringBatchServiceComponent` | same | Hourly `@Scheduled` eviction (`BatchExecutor<Long>`, GET = `existsEvictable`, EXECUTE = `evictExpired(before, chunk)`); hourly backfill (`BatchExecutor<SnapshotKey>`, GET = `findNextUnarchivedKeys` after the cursor in PK order, EXECUTE = `archive`); bean name `boaVistaOnlineTieringBatchServiceComponent`, `BatchExecutor.withFixedRate`, `cleansWithin` 30 d |
-| `BoaVistaOnlineSnapshotKey` | same | `record(table, taxId, version, cachedAt)`: JMS message and batch item |
-| `BoaVistaOnlineReportColdRepository` / `BoaVistaOnlineReportS3Repository` | `repository/person/finance/boavista/` | `store(table, existingKey, payload) → StoredObject(key, sha256, sizeBytes)`, `load(key, expectedSha256)`, `digest`; gzip; key `<prefix><table>/<uuid[0:2]>/<uuid>.json.gz`; uses the batch mirror's `BoaVistaBatchObjectStorage` (`S3Client`, SDK v2 `software.amazon.awssdk:s3`, BOM 2.55.11) |
-| `BoaVistaReportNewIndex` + `*IndexRepository` | `model/person/boavista/`, `repository/…` | JPA index entity: PK columns, `s3_key`, `sha256`, `size_bytes`, `row_created_at`, `row_updated_at`, `row_expired_at`, `archived_at` (+ `origin`); `findFirstBy…OrderByCachedAtDesc`, as-of variant, timeline |
-| Native queries on the hot repositories | `BoaVistaReportNewRepository`, `…CadastroPositivo…` | `findForArchive` (`PESSIMISTIC_WRITE`), `findDataText`, `markArchived`, `touch` (`GREATEST`), `rehydrate`, `existsEvictable`, `evictExpired` (`ctid = ANY(ARRAY(SELECT ctid … LIMIT))`), `findNextUnarchivedKeys` (row-value cursor); `BoaVistaOnlineUnarchivedKey` projection |
-| Entity columns | `BoaVistaReportNew`, `…CadastroPositivoReportNew` | `last_accessed_at`, `archived_at` (`@JsonIgnore`, `@DtoAttribute(ignore)`), `touchOnWrite` |
-| `scripts/migration/boa_vista_online_tiering.sql` | | `ADD COLUMN`s, partial index `((COALESCE(last_accessed_at, updated_at))) WHERE archived_at IS NOT NULL`, index tables |
-| `BoaVistaOnlineReportService` | `service/…/online` | Read endpoints; stays in the consumer |
-| Tests | `BoaVistaCadastroPositivoReportNewMigrationClientTest` | write → archived; clock +20 d → `evict()` → row gone; read → rehydrated; clock +2 d read → touched; backfill; corrupted digest fails; `BoaVistaBatchInMemoryObjectStorage` (`@Primary`, `@Profile("!s3-integration")`) instead of S3 |
-| Properties | `br.com.supersim.service.datagathering.boavista.online-tiering.*` | `enabled`, `ttl P15D`, `touch-threshold P1D`, `s3.prefix`, `upload/touch.concurrency`, `cold-read.enabled`, `eviction.{enabled,cron,chunk-size,delay-between-chunks,finish-within,safety-margin}`, `backfill.{enabled,cron,chunk-size,delay-between-chunks,finish-within}` |
+| Piece | Does |
+|---|---|
+| `ReportOnlineTieringServiceComponent` | `saveDetailedReport` (touch on write, JPA save, upload request after commit); `archive` (lock row `FOR UPDATE`, `data::text` → sha256 → skip PUT if the index has the same sha → PUT → upsert index → `markArchived WHERE updated_at = read`); `@JmsListener upload` and `touch`; `findReport`/`findDetailedReport` (newer of index and hot; hot hit → touch if stale; miss → `GET`, digest check, native `INSERT … ON CONFLICT DO NOTHING` with the original timestamps) |
+| `ReportOnlineTieringBatchServiceComponent` | Hourly `@Scheduled` eviction (`BatchExecutor<Long>`, GET = `existsEvictable`, EXECUTE = `evictExpired(before, chunk)`); hourly backfill (`BatchExecutor<SnapshotKey>`, GET = `findNextUnarchivedKeys` after the cursor in PK order, EXECUTE = `archive`); `BatchExecutor.withFixedRate`, `cleansWithin` 30 d |
+| `ReportOnlineSnapshotKey` | `record(table, taxId, version, cachedAt)`: JMS message and batch item |
+| `ReportOnlineColdRepository` / `ReportOnlineS3Repository` | `store(table, existingKey, payload) → StoredObject(key, sha256, sizeBytes)`, `load(key, expectedSha256)`, `digest`; gzip; key `<prefix><table>/<uuid[0:2]>/<uuid>.json.gz`; on the consumer's own object storage wrapper (`S3Client`, SDK v2 `software.amazon.awssdk:s3`, BOM 2.55.11) |
+| `ReportOnlineIndex` + `*IndexRepository` | JPA index entity: PK columns, `s3_key`, `sha256`, `size_bytes`, `row_created_at`, `row_updated_at`, `row_expired_at`, `archived_at` (+ `origin`); `findFirstBy…OrderByCachedAtDesc`, as-of variant, timeline |
+| Native queries on the two hot repositories | `findForArchive` (`PESSIMISTIC_WRITE`), `findDataText`, `markArchived`, `touch` (`GREATEST`), `rehydrate`, `existsEvictable`, `evictExpired` (`ctid = ANY(ARRAY(SELECT ctid … LIMIT))`), `findNextUnarchivedKeys` (row-value cursor); `ReportOnlineUnarchivedKey` projection |
+| Entity columns (both report entities) | `last_accessed_at`, `archived_at` (`@JsonIgnore`, `@DtoAttribute(ignore)`), `touchOnWrite` |
+| Migration script | `ADD COLUMN`s, partial index `((COALESCE(last_accessed_at, updated_at))) WHERE archived_at IS NOT NULL`, index tables |
+| `ReportOnlineService` | Read endpoints; stays in the consumer |
+| Tests | write → archived; clock +20 d → `evict()` → row gone; read → rehydrated; clock +2 d read → touched; backfill; corrupted digest fails; an in-memory object storage (`@Primary`, `@Profile("!s3-integration")`) instead of S3 |
+| Properties (the consumer's own tiering properties) | `enabled`, `ttl P15D`, `touch-threshold P1D`, `s3.prefix`, `upload/touch.concurrency`, `cold-read.enabled`, `eviction.{enabled,cron,chunk-size,delay-between-chunks,finish-within,safety-margin}`, `backfill.{enabled,cron,chunk-size,delay-between-chunks,finish-within}` |
 
 Everything is duplicated per table (two `archive*`, two `read*`, two `find*`, two index
 entities, two sets of native queries). That duplication is what the generic version removes. The
@@ -81,8 +80,8 @@ key is derived from the primary key, the object holds the whole row, and the SDK
 
 ## Log service
 
-`supersim-service-log-pom`, `origin/master` (branch `feature/conversion-s3-tier-down`, merged;
-design in `doc/CONVERSION_LOGS.md`, "Tier-down batch" and "Lifecycle of a day's partition"):
+A log service that already tiers its conversion steps down to S3 on its own (design in the
+consumer's design doc, "Tier-down batch" and "Lifecycle of a day's partition"):
 
 - `conversion_journey_step` is `PARTITION BY RANGE (journey_started_on)`, one partition per day,
   insert-only, raw retention `P30D` (per goal up to `P120D`). A day's partition is *final* once
@@ -213,7 +212,7 @@ lists the consumer's columns. Object metadata: `table`, `updated-at` (the waterm
 
 | | Row tiering (v1, built) | Window tiering (step 3) |
 |---|---|---|
-| Consumer | Boa Vista online, Boa Vista full | Log service conversion steps |
+| Consumer | online reports, full reports | Log service conversion steps |
 | Archive unit | one row → one object | one leaf partition (× optional group, e.g. `goal`) → one file |
 | Trigger | write-through after commit + backfill batch | export batch over *final* windows |
 | Object key | `<table>/<key segments>` | `<table>/<group>/<window>` through the same `ObjectKeyStrategy` |
@@ -264,7 +263,7 @@ Flyway and `CREATE INDEX CONCURRENTLY`: the eviction index must be built outside
 Put it in its own migration with a `V<n>__….sql.conf` holding `executeInTransaction=false`, and set
 `spring.flyway.postgresql.transactional-lock=false`: Flyway's default transactional advisory lock
 keeps a transaction open on its lock connection, and the concurrent build waits on it until the
-lock timeout (found by the first consumer, data-gathering).
+lock timeout (found by the first consumer).
 
 ```sql
 ALTER TABLE <hot> ADD COLUMN IF NOT EXISTS last_accessed_at TIMESTAMPTZ,   -- LAST_ACCESS only
@@ -410,7 +409,7 @@ keep the queue bounded. Still, a rate near what the consumers drain avoids long 
 `chunk-size / delay-between-chunks ≈ consumers × 1 / per-row latency`
 
 with consumers = `backfill.concurrency` × instances and the per-row latency that of one archive
-(lock, `row_to_json`, gzip, `PUT`, mark: ~30 ms in production). Keep `max-pending` at a few
+(lock, `row_to_json`, gzip, `PUT`, mark: tens of milliseconds). Keep `max-pending` at a few
 minutes of drain (the default `10000` is ~10 s at 1,000 rows/s, ~5 min for one consumer): a
 deeper backlog buys nothing, and every key in it is one a restarted run may enqueue again. The
 defaults suit one consumer: `1000` keys every `PT30S` ≈ 33 keys/s ≈ one consumer at ~30 ms per
@@ -424,10 +423,11 @@ org.coldis.library.service.tiering.table.<tableId>.backfill.delay-between-chunks
 org.coldis.library.service.tiering.table.<tableId>.backfill.max-pending=20000
 ```
 
-Why the bound matters: without it, a backfill enqueueing ~2,000 keys/s against ~1,000/s consumed,
+Why the bound matters: without it, a backfill enqueueing about twice as fast as it was consumed,
 restarted hourly from the beginning of the table (re-enqueueing every key not yet archived,
-including keys already waiting), once queued ~260 M messages for ~165 M rows; 48 consumers locking
-mostly evicted or archived keys loaded the database until an unrelated batch timed out. The
+including keys already waiting), once queued far more messages than the table had rows; dozens of
+consumers locking mostly evicted or archived keys loaded the database until an unrelated batch
+timed out. The
 backlog guard stops the growth, the postponed run keeps the hourly crons from restarting it, and
 the lock-free read drops the duplicates without a lock.
 
@@ -497,32 +497,32 @@ first consumer's tests, the folder storage exercises the same interface contract
 
 | Reference | Library |
 |---|---|
-| `BoaVistaOnlineSnapshotKey` | `TieredRowKey` |
-| `BoaVistaOnlineReportColdRepository`, `*S3Repository`, `BoaVistaBatchObjectStorage` | `ColdStorageRepository`, `S3ColdStorageRepository` (consumer's `S3Client`), `InMemoryColdStorageRepository`, `GzipJsonPayloadCodec`, `PathObjectKeyStrategy` |
-| `BoaVista*Index` entities and repositories, `s3_key`/`sha256`/`size_bytes` | dropped: derived keys, whole-row objects, SDK checksums |
-| Native queries on the hot repositories, `BoaVistaOnlineUnarchivedKey` | `HotTierRepository` |
-| `BoaVistaOnlineTieringServiceComponent` | `ColdTieringServiceComponent` (policy) + `TieredRepository` (access) |
-| `BoaVistaOnlineTieringBatchServiceComponent` (`@Scheduled`) | `ColdTieringBatchServiceComponent` (crons per table) |
-| `findReport` / `findCadastroPositivo` | `ColdTieringServiceComponent.findNewestTiered` / `findByIdTiered` |
+| `ReportOnlineSnapshotKey` | `TieredRowKey` |
+| `ReportOnlineColdRepository`, `*S3Repository`, the consumer's object storage wrapper | `ColdStorageRepository`, `S3ColdStorageRepository` (consumer's `S3Client`), `InMemoryColdStorageRepository`, `GzipJsonPayloadCodec`, `PathObjectKeyStrategy` |
+| `ReportOnline*Index` entities and repositories, `s3_key`/`sha256`/`size_bytes` | dropped: derived keys, whole-row objects, SDK checksums |
+| Native queries on the hot repositories, `ReportOnlineUnarchivedKey` | `HotTierRepository` |
+| `ReportOnlineTieringServiceComponent` | `ColdTieringServiceComponent` (policy) + `TieredRepository` (access) |
+| `ReportOnlineTieringBatchServiceComponent` (`@Scheduled`) | `ColdTieringBatchServiceComponent` (crons per table) |
+| `findReport` / `findDetailedReport` | `ColdTieringServiceComponent.findNewestTiered` / `findByIdTiered` |
 | Entity `touchOnWrite` | `afterWrite(key)` |
-| `boa_vista_online_tiering.sql` | `ColdTieringSchema.statements` in the consumer's Flyway migration |
-| `…boavista.online-tiering.*` | `org.coldis.library.service.tiering.*` |
+| The consumer's migration script | `ColdTieringSchema.statements` in the consumer's Flyway migration |
+| The consumer's own tiering properties | `org.coldis.library.service.tiering.*` |
 
-**Step 2 — data-gathering**: bump the library; two beans (`boa-vista-report`: key `tax_id,
-version, cached_at`, versioned; `boa-vista-cadastro-positivo-report`: key `tax_id, cached_at`,
-versioned; both `LAST_ACCESS`, `INSERT`); Flyway migration from the schema helper (drop the
-`*_index` tables of the branch); `upsertReport` calls `afterWrite`; `BoaVistaOnlineReportService`
+**Step 2 — the first consumer**: bump the library; two beans (`report-online`: key `tax_id,
+version, cached_at`, versioned; `detailed-report-online`: key `tax_id, cached_at`, versioned;
+both `LAST_ACCESS`, `INSERT`); Flyway migration from the schema helper (drop the `*_index` tables
+of its own implementation); `upsertReport` calls `afterWrite`; `ReportOnlineService`
 on the component's `findNewestTiered` / `findByIdTiered`; business deletes through `delete(key)`; delete the two components, the index entities, the
-cold/S3 repositories and the tiering native queries; the batch mirror's `S3Client` exposed as a
-bean for `s3.client-bean`; flags off; rollout as the reference doc (backfill, verify, `TRUNCATE`,
-eviction). Object keys carry the tax id as a path segment: see open question 1.
+cold/S3 repositories and the tiering native queries; the consumer's `S3Client` exposed as a
+bean for `s3.client-bean`; flags off; rollout as the consumer's design doc (backfill, verify,
+`TRUNCATE`, eviction). Object keys carry the tax id as a path segment: see open question 1.
 
 **Step 3 — window tiering and the log service**: `WindowTieredTable`, the export batch,
 `WindowExporter`; the log service registers `conversion_journey_step` with its Parquet writer,
 key layout `goal=<goal>/date=<day>/part-0.parquet` kept, rehydration none; its
 `ConversionLogTierDownServiceComponent` and advisory lock go away.
 
-**Step 4 — Boa Vista full**: `PARTITION_DROP` eviction (detach concurrently, drop only when no
+**Step 4 — full reports**: `PARTITION_DROP` eviction (detach concurrently, drop only when no
 row in the partition is unarchived or recently accessed; rehydration into a default partition
 evicted by row delete), then the two full tables as row-tiered, versioned, `INSERT`.
 
@@ -539,19 +539,19 @@ evicted by row delete), then the two full tables as row-tiered, versioned, `INSE
 - Table structure in a bean, tunables in properties; access logic in the repository package, policy
   in the component, reads on the component by entity class (no repository fragment).
 - The backfill enqueues keys to its own queue (`cold-tiering/backfill`) instead of archiving inline in the chunk's
-  transaction: inline archiving ran one row at a time (~26 rows/s in production) and held every
+  transaction: inline archiving ran one row at a time (a few dozen rows per second) and held every
   row lock of a chunk until it committed; queued, the listeners set the throughput and each lock
   covers one row (2026-11-09).
 
 ## Open questions
 
-1. **`LIST` cost of "newest on or before"** on keys with many versions (one Boa Vista CPF has at
-   most a few hundred snapshots: one page). A `start-after` optimisation from the ceiling is
-   possible later.
+1. **`LIST` cost of "newest on or before"** on keys with many versions (one tax id of the first
+   consumer has at most a few hundred snapshots: one page). A `start-after` optimisation from the
+   ceiling is possible later.
 2. **Micrometer metrics** (`cold.tiering.read{tier}`, `upload{result}`, `evicted`,
    `unarchived.rows`): names proposed, not built.
 3. **Negative integer keys** break the fixed-width ordering of the default layout; versioned tables
    are restricted to temporal last columns, so it only matters for listing-free tables (cosmetic).
 4. **Default partition for `PARTITION_DROP` with rehydration** (step 4): add one to
-   `boa_vista_report_full`, or rehydrate into a separate table.
+   `report_full`, or rehydrate into a separate table.
 5. **Log service move (step 3)**: worth it, or does only the row tiering move to the library?
