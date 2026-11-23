@@ -33,7 +33,7 @@ import jakarta.jms.TextMessage;
 /**
  * {@link JmsMessageHelper} tests, with messages from a real broker session.
  */
-@TestWithContainer(reuse = true)
+@TestWithContainer(reuse = true, stopDelay = ContainerTestHelper.CONTAINER_STOP_DELAY_SECONDS)
 @ExtendWith(StartTestWithContainerExtension.class)
 @SpringBootTest(webEnvironment = WebEnvironment.RANDOM_PORT)
 @DisplayName("JmsMessageHelper — copy and long property")

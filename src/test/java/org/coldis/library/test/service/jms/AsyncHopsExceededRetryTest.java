@@ -40,7 +40,7 @@ import jakarta.jms.TextMessage;
  * operation) of messages sent to the async hops exceeded queue. Listeners are
  * in {@link AsyncHopsExceededRetryTestListener}.
  */
-@TestWithContainer(reuse = true)
+@TestWithContainer(reuse = true, stopDelay = ContainerTestHelper.CONTAINER_STOP_DELAY_SECONDS)
 @ExtendWith(StartTestWithContainerExtension.class)
 @SpringBootTest(webEnvironment = WebEnvironment.RANDOM_PORT)
 @DisplayName("Async hops exceeded queue — broker retry")

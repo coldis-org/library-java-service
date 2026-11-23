@@ -23,7 +23,7 @@ import io.micrometer.core.instrument.Timer;
  * Server request latency histogram in the shared test context: a real request through the server, measured by Spring
  * Boot's server request observation, with the library's default service level objectives.
  */
-@TestWithContainer(reuse = true)
+@TestWithContainer(reuse = true, stopDelay = ContainerTestHelper.CONTAINER_STOP_DELAY_SECONDS)
 @ExtendWith(StartTestWithContainerExtension.class)
 @SpringBootTest(webEnvironment = WebEnvironment.RANDOM_PORT)
 @DisplayName("Server request latency histogram")

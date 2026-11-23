@@ -22,7 +22,7 @@ import org.springframework.core.env.ConfigurableEnvironment;
 /**
  * Request-thread floor test, on the running server.
  */
-@TestWithContainer(reuse = true)
+@TestWithContainer(reuse = true, stopDelay = ContainerTestHelper.CONTAINER_STOP_DELAY_SECONDS)
 @ExtendWith(StartTestWithContainerExtension.class)
 @SpringBootTest(webEnvironment = WebEnvironment.RANDOM_PORT)
 @DisplayName("Request-thread floor on the running server")

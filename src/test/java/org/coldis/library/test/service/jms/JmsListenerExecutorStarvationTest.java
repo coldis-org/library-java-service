@@ -58,7 +58,7 @@ import jakarta.jms.ConnectionFactory;
  * after a Spring upgrade, check whether the throttle changed before suspecting
  * the bulkhead, and remove the case once the legacy setting is gone.
  */
-@TestWithContainer(reuse = true)
+@TestWithContainer(reuse = true, stopDelay = ContainerTestHelper.CONTAINER_STOP_DELAY_SECONDS)
 @ExtendWith(StartTestWithContainerExtension.class)
 @SpringBootTest(webEnvironment = WebEnvironment.RANDOM_PORT)
 @DisplayName("JMS listener executor — starvation with the legacy limit, progress with the bulkhead")

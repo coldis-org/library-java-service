@@ -27,7 +27,7 @@ import org.springframework.util.StringValueResolver;
 /**
  * Security test.
  */
-@TestWithContainer(reuse = true)
+@TestWithContainer(reuse = true, stopDelay = ContainerTestHelper.CONTAINER_STOP_DELAY_SECONDS)
 @ExtendWith(StartTestWithContainerExtension.class)
 @SpringBootTest(webEnvironment = WebEnvironment.RANDOM_PORT)
 public class MandatoryHeaderSecurityTest extends ContainerTestHelper {

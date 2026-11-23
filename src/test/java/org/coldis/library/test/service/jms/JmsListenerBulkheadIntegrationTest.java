@@ -32,7 +32,7 @@ import io.micrometer.core.instrument.Timer;
  * ({@link JmsListenerBulkheadTestListener}): group {@code bulkhead-test}, limit
  * 2, selected by its factory bean name. The default group is not limited.
  */
-@TestWithContainer(reuse = true)
+@TestWithContainer(reuse = true, stopDelay = ContainerTestHelper.CONTAINER_STOP_DELAY_SECONDS)
 @ExtendWith(StartTestWithContainerExtension.class)
 @SpringBootTest(webEnvironment = WebEnvironment.RANDOM_PORT)
 @DisplayName("JMS listener bulkhead — @JmsListener integration")

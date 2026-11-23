@@ -52,7 +52,7 @@ import io.micrometer.core.instrument.MeterRegistry;
  * of the connection factory, the listener executor and the listener container
  * factory.
  */
-@TestWithContainer(reuse = true)
+@TestWithContainer(reuse = true, stopDelay = ContainerTestHelper.CONTAINER_STOP_DELAY_SECONDS)
 @ExtendWith(StartTestWithContainerExtension.class)
 @SpringBootTest(webEnvironment = WebEnvironment.RANDOM_PORT)
 @DisplayName("JmsConfigurationHelper — deserialization allow list, listener executor and container factory")
