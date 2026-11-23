@@ -25,8 +25,8 @@ settings configure the group named `default`.
 | Property | Default | Meaning |
 |---|---|---|
 | `enabled` | `false` | Master switch, read at startup. `false`: no group is limited. |
-| `max-in-flight` | unset | Maximum concurrent handlers of the group. Wins over the multiplier when positive. With neither set, the group is not limited. |
-| `max-in-flight-cpu-multiplier` | unset | Handlers per CPU, used when `max-in-flight` is not set: `ceil(CPUs × multiplier)` (see [Limits and CPUs](#limits-and-cpus)). |
+| `max-in-flight` | unset | Maximum concurrent handlers of the group. Wins over the multiplier when positive. |
+| `max-in-flight-cpu-multiplier` | `2` | Handlers per CPU, used when `max-in-flight` is not set: `ceil(CPUs × multiplier)` (CPUs: [JMS threads](jms-threads.md#cpus)). Tune between 1.5 and 3, toward 3 for database-heavy modules. `0`: the group is not limited. |
 | `max-wait` | unset | Unset or `0`: wait until a permit, the container stop or shutdown. Set: on timeout the message is rolled back to the broker (see [Delivery attempts](#delivery-attempts)). |
 | `max-wait-deliveries` | `3` | `max-wait` applies only while the message's `JMSXDeliveryCount` is at most this value; later deliveries wait without timeout. |
 | `reserved.<name>.permits` | — | Permits only the matching listeners may use (at least 1). |
@@ -35,56 +35,17 @@ settings configure the group named `default`.
 | `groups.<group>.factories` | — | Container factory bean names whose listeners use this group instead of `default`. |
 | `groups.<group>.max-in-flight`, `.max-in-flight-cpu-multiplier`, `.max-wait`, `.max-wait-deliveries`, `.reserved.*` | as above | The same settings for a group. Nothing is inherited from `default`. |
 
-Related, prefix `org.coldis.library.service.jms.listener.executor` (the threads
-of every listener container's polling consumers, which also run the handlers):
-
-| Property | Default | Meaning |
-|---|---|---|
-| `unbounded` | unset (unbounded) | Not set: a cached pool with no thread maximum, one thread per polling consumer, idle threads released after `keep-alive-seconds`. `true`: the same, with `core-size*` core threads if set. `false`: the bounded pool below. |
-| `core-size`, `core-size-cpu-multiplier` | unset | Set by the application (with `unbounded` not set) or with `unbounded=false`: a **bounded** pool of that many threads (20 per CPU when neither is set), with a WARN at startup. `parallelism*` / `min-runnable*` apply only to a bounded pool (`parallelism*` makes it a fork-join pool). |
-| `name`, `keep-alive-seconds`, `virtual` | `jms-listener-thread`, `60`, `false` | Thread name prefix, idle keep-alive, virtual threads. |
-| `priority` | `5` | Thread priority. Effectively ignored, see below. |
-| `concurrency`, `concurrency-cpu-multiplier` | unset | **Deprecated.** Still honoured (a shared `SimpleAsyncTaskExecutor` limited to that many consumers), with a WARN at startup. See [Why not `listener.executor.concurrency`](#why-not-listenerexecutorconcurrency). |
-
 The listener executor is **unbounded by default**, with or without the
 bulkhead: the bulkhead, not the thread count, is the concurrency limit. A
 consumer waiting for a permit holds its thread, and an idle poller holds one
 too, so a thread cap lets those threads keep other queues' consumers from
-running at all. The library leaves `unbounded` and `core-size*` unset on
-purpose, so only an application's own value selects the bounded pool.
-
-**Behaviour change on upgrade.** Before this version the default was a fixed
-pool of 20 threads per CPU, which some services may rely on as an implicit
-handler limit. Without a bulkhead limit they can now run more handlers at once
-(up to the sum of the maximum consumers of every listener container). Before
-upgrading such a service, set `listener.bulkhead.enabled=true` and
-`listener.bulkhead.max-in-flight` (or the multiplier) to the old effective cap,
-then lower it while watching the metrics; or, temporarily, set
-`listener.executor.unbounded=false` to keep the old pool (with a WARN).
-
-**Thread priority and prioritisation.** `priority` (and the other executors'
-`priority`) is effectively ignored on Linux: the JVM maps Java priorities to OS
-priorities only with `-XX:ThreadPriorityPolicy=1`, and lowering a thread's
-priority below the process's usually needs `CAP_SYS_NICE`; virtual threads
-have no priority at all. Do not rely on it to favour some queues. Prioritise
-with bulkhead reservations (a guaranteed minimum) and groups (separate limits),
-or deploy the low-priority listeners separately.
-
-### Limits and CPUs
-
-Every limit resolves, first match: the explicit absolute value (`max-in-flight`,
-`core-size`, …), the explicit ratio (`*-cpu-multiplier`, per CPU), then the
-default ratio (per CPU, where the setting has one); a ratio is multiplied by the
-number of CPUs and rounded up. The CPU count comes from one place,
-`JmsCpuLimits`, which uses `Runtime.availableProcessors()` by default; a service
-whose container reports more CPUs than it may use (CPU shares rather than a
-quota) replaces it with `JmsCpuLimits.setAvailableCpusSupplier(...)` before the
-JMS configuration is created. The deprecated `executor.concurrency*` keeps its
-old rule (the multiplier wins, `availableProcessors()`).
+running at all. Executor settings, deprecations, the CPU source, metrics and
+the migration for services that relied on the old thread cap:
+[JMS threads](jms-threads.md).
 
 The startup fails (`IllegalArgumentException` naming the property) when the
 bulkhead is enabled and: a group's reserved permits leave no shared permit
-(`sum(reserved) >= max-in-flight`, or reservations without a limit); a
+(`sum(reserved) >= max-in-flight`, or reservations on a group whose multiplier is 0); a
 destination or factory is in two reservations of a group; a factory is in two
 groups; `permits < 1`; `max-wait-deliveries < 1`; `max-wait` is negative;
 `groups.default` is used; or the top-level `factories` is set.
@@ -108,7 +69,8 @@ set on a factory but missing from the properties is not limited (WARN).
 `JmsListenerBulkheadProperties` is a `@ConfigurationProperties` bean
 (`jmsListenerBulkheadProperties`) and the bulkhead reads its limit on use, so
 `PUT /properties/integer/jmsListenerBulkheadProperties/maxInFlight` changes the
-`default` group's limit live (it wins over the multiplier). A raised limit is seen by waiters within 250 ms; a lowered one as
+`default` group's limit live (it wins over the multiplier;
+`maxInFlightCpuMultiplier` is changed the same way through the `double` endpoint). A raised limit is seen by waiters within 250 ms; a lowered one as
 handlers finish. Whether a group is limited at all is decided at its first use
 and needs a restart; `enabled` is read at startup. Other groups are only
 reachable through the properties at startup.
