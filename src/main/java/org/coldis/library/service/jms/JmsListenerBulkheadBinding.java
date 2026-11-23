@@ -154,7 +154,7 @@ public class JmsListenerBulkheadBinding {
 	 * permit was immediate) or the aborted wait.
 	 *
 	 * @param  message                      Received message.
-	 * @param  stopped                      If the listener container stopped.
+	 * @param  isContainerStopped           If the listener container stopped.
 	 * @return                              The permit, to be closed when the
 	 *                                      handler ends.
 	 * @throws JMSException                 If the message cannot be read.
@@ -162,11 +162,11 @@ public class JmsListenerBulkheadBinding {
 	 */
 	public JmsListenerBulkheadPermit acquire(
 			final Message message,
-			final BooleanSupplier stopped) throws JMSException, JmsListenerBulkheadException {
+			final BooleanSupplier isContainerStopped) throws JMSException, JmsListenerBulkheadException {
 		final Duration maxWait = this.getMaxWait(message);
 		JmsListenerBulkheadPermit permit = null;
 		try {
-			permit = this.bulkhead.acquire(this.reservation, this.destination, maxWait, stopped);
+			permit = this.bulkhead.acquire(this.reservation, this.destination, maxWait, isContainerStopped);
 		}
 		catch (final JmsListenerBulkheadException exception) {
 			this.countAbortedWait(exception.getReason());

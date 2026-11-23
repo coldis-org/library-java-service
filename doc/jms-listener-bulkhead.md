@@ -42,7 +42,9 @@ Related, prefix `org.coldis.library.service.jms.listener.executor`:
 | `unbounded` | the value of `bulkhead.enabled` | `true`: the listener threads are not capped (a cached pool: `core-size*` core threads, no maximum; `parallelism*` is ignored). `false`: the fixed pool of `core-size*` threads (20 per processor by default). Ignored when `concurrency*` is set. |
 | `concurrency`, `concurrency-cpu-multiplier` | unset | **Legacy, discouraged.** Still honoured, with a WARN at startup. |
 
-`unbounded` follows the bulkhead switch on purpose: a consumer waiting for a
+`unbounded` follows the bulkhead switch, not whether a limit is set: enabling
+the bulkhead without any limit removes the thread cap and limits nothing, so set
+a limit together with `enabled`. It follows the switch on purpose: a consumer waiting for a
 permit holds its thread, so with a capped pool the threads of waiting
 consumers keep other queues' consumers from running at all. Set
 `executor.unbounded=false` explicitly only if you know the pool is larger than
@@ -102,8 +104,8 @@ reachable through the properties at startup.
   is proportional to its consumers, so a queue's share follows its concurrency
   range. Reservations are the tool to guarantee a minimum to a listener.
 - **Reserved permits** are strict: a listener of reservation `k` gets a
-  reserved permit at once whenever fewer than `R_k` of its handlers run,
-  whatever the queue holds; beyond that it competes for shared permits in
+  reserved permit at once whenever fewer of its handlers run than the
+  reservation's `permits`, whatever the queue holds; beyond that it competes for shared permits in
   arrival order. An idle reserved permit is never lent.
 - **The limit is never below** the reserved permits plus one; a lower value is
   raised to it, with a WARN.

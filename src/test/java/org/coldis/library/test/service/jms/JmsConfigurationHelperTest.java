@@ -1,6 +1,9 @@
 package org.coldis.library.test.service.jms;
 
+import java.lang.reflect.Method;
+import java.util.Arrays;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.SynchronousQueue;
 import java.util.concurrent.ThreadPoolExecutor;
 
@@ -20,8 +23,12 @@ import org.springframework.beans.factory.BeanNameAware;
 import org.springframework.beans.factory.ListableBeanFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Qualifier;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.context.SpringBootTest.WebEnvironment;
+import org.springframework.core.env.MapPropertySource;
+import org.springframework.core.env.StandardEnvironment;
+import org.springframework.core.io.support.ResourcePropertySource;
 import org.springframework.core.task.SimpleAsyncTaskExecutor;
 import org.springframework.jms.config.DefaultJmsListenerContainerFactory;
 import org.springframework.jms.listener.DefaultMessageListenerContainer;
@@ -183,6 +190,42 @@ public class JmsConfigurationHelperTest extends ContainerTestHelper {
 				listenerContainer.getMessageListener());
 		Assertions.assertEquals("lowFactory", messageListener.getFactoryBeanName());
 		Assertions.assertEquals("low", messageListener.getBulkheadGroup());
+	}
+
+	/**
+	 * Resolves the default of the listener executor's unbounded setting, as the
+	 * executor setter declares it and as service.properties sets it.
+	 *
+	 * @param  properties Properties of the environment.
+	 * @return            The resolved values (setter default, service.properties).
+	 * @throws Exception  If the resolution fails.
+	 */
+	private static List<String> resolveUnbounded(
+			final Map<String, Object> properties) throws Exception {
+		final Method setter = Arrays.stream(JmsConfigurationHelper.class.getMethods())
+				.filter(method -> "setJmsListenerExecutor".equals(method.getName()) && (method.getParameterCount() == 13)).findFirst().orElseThrow();
+		final String placeholder = setter.getParameters()[12].getAnnotation(Value.class).value();
+		final StandardEnvironment environment = new StandardEnvironment();
+		environment.getPropertySources().addFirst(new MapPropertySource("test", properties));
+		environment.getPropertySources().addLast(new ResourcePropertySource("classpath:service.properties"));
+		return List.of(environment.resolvePlaceholders(placeholder),
+				environment.getProperty("org.coldis.library.service.jms.listener.executor.unbounded"));
+	}
+
+	/**
+	 * Tests that the listener executor's unbounded setting follows the bulkhead
+	 * switch unless set.
+	 *
+	 * @throws Exception If the test fails.
+	 */
+	@Test
+	@DisplayName("executor.unbounded defaults to bulkhead.enabled, and an explicit value wins")
+	public void testUnboundedFollowsBulkheadSwitch() throws Exception {
+		Assertions.assertEquals(List.of("false", "false"), JmsConfigurationHelperTest.resolveUnbounded(Map.of()));
+		Assertions.assertEquals(List.of("true", "true"),
+				JmsConfigurationHelperTest.resolveUnbounded(Map.of("org.coldis.library.service.jms.listener.bulkhead.enabled", "true")));
+		Assertions.assertEquals(List.of("false", "false"), JmsConfigurationHelperTest.resolveUnbounded(Map.of(
+				"org.coldis.library.service.jms.listener.bulkhead.enabled", "true", "org.coldis.library.service.jms.listener.executor.unbounded", "false")));
 	}
 
 }

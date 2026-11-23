@@ -53,7 +53,10 @@ import jakarta.jms.ConnectionFactory;
  * concurrency never exceeds the limit.</li>
  * </ul>
  * The containers are built in the test, so the shared context's listeners are
- * untouched.
+ * untouched. The legacy case characterizes Spring's concurrency throttle (it
+ * finds parked threads by the throttle's internal method name): if it fails
+ * after a Spring upgrade, check whether the throttle changed before suspecting
+ * the bulkhead, and remove the case once the legacy setting is gone.
  */
 @TestWithContainer(reuse = true)
 @ExtendWith(StartTestWithContainerExtension.class)

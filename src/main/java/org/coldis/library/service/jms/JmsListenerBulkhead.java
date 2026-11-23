@@ -317,24 +317,24 @@ public class JmsListenerBulkhead {
 	}
 
 	/**
-	 * Checks, after a waiter woke up without a permit, whether its wait must end:
-	 * the container stopped or the maximum wait elapsed. Otherwise applies a
-	 * changed limit. Under the lock.
+	 * After a waiter woke up without a permit: resolves whether its wait must end
+	 * (the container stopped or the maximum wait elapsed), otherwise applies the
+	 * current limit and grants the queued waiters it admits. Under the lock.
 	 *
 	 * @param  waiter       Waiter.
 	 * @param  startNanos   When the wait started.
 	 * @param  maxWaitNanos Maximum wait (0 for none).
-	 * @param  stopped      If the listener container stopped.
+	 * @param  isContainerStopped If the listener container stopped.
 	 * @return              Why the wait must end, or null to keep waiting.
 	 */
-	private JmsListenerBulkheadException.Reason checkWaiter(
+	private JmsListenerBulkheadException.Reason resolveAbortReasonOrGrant(
 			final Waiter waiter,
 			final long startNanos,
 			final long maxWaitNanos,
-			final BooleanSupplier stopped) {
+			final BooleanSupplier isContainerStopped) {
 		JmsListenerBulkheadException.Reason abortReason = null;
 		if (!waiter.isGranted) {
-			if (stopped.getAsBoolean()) {
+			if (isContainerStopped.getAsBoolean()) {
 				abortReason = JmsListenerBulkheadException.Reason.CONTAINER_STOPPED;
 			}
 			else if ((maxWaitNanos > 0) && ((System.nanoTime() - startNanos) >= maxWaitNanos)) {
@@ -385,7 +385,7 @@ public class JmsListenerBulkhead {
 	 *                                          exception).
 	 * @param  startNanos                   When the wait started.
 	 * @param  maxWaitNanos                 Maximum wait (0 for none).
-	 * @param  stopped                      If the listener container stopped.
+	 * @param  isContainerStopped           If the listener container stopped.
 	 * @return                              The permit.
 	 * @throws JmsListenerBulkheadException If the wait ended without a permit.
 	 */
@@ -394,7 +394,7 @@ public class JmsListenerBulkhead {
 			final String destination,
 			final long startNanos,
 			final long maxWaitNanos,
-			final BooleanSupplier stopped) throws JmsListenerBulkheadException {
+			final BooleanSupplier isContainerStopped) throws JmsListenerBulkheadException {
 		this.waiters.add(waiter);
 		if (waiter.reservation != null) {
 			this.queuedReservedWaiters++;
@@ -410,7 +410,7 @@ public class JmsListenerBulkhead {
 				if (sliceNanos > 0) {
 					waiter.condition.awaitNanos(sliceNanos);
 				}
-				abortReason = this.checkWaiter(waiter, startNanos, maxWaitNanos, stopped);
+				abortReason = this.resolveAbortReasonOrGrant(waiter, startNanos, maxWaitNanos, isContainerStopped);
 			}
 			// The interrupt flag is deliberately not re-asserted. The interrupt comes
 			// from the container shutdown, which then rolls the JMS session back: that
@@ -439,7 +439,7 @@ public class JmsListenerBulkhead {
 	 * @param  destination                  Listener destination (only used to
 	 *                                          describe an aborted wait).
 	 * @param  maxWait                      Maximum wait (null or zero for none).
-	 * @param  stopped                      If the listener container stopped
+	 * @param  isContainerStopped           If the listener container stopped
 	 *                                          (checked while waiting; never
 	 *                                          null).
 	 * @return                              The permit, to be closed when the
@@ -452,7 +452,7 @@ public class JmsListenerBulkhead {
 			final String reservation,
 			final String destination,
 			final Duration maxWait,
-			final BooleanSupplier stopped) throws JmsListenerBulkheadException {
+			final BooleanSupplier isContainerStopped) throws JmsListenerBulkheadException {
 		final long startNanos = System.nanoTime();
 		final String actualReservation = ((reservation != null) && this.reservedPermits.containsKey(reservation) ? reservation : null);
 		final long maxWaitNanos = ((maxWait == null) || maxWait.isNegative() ? 0L : maxWait.toNanos());
@@ -468,7 +468,7 @@ public class JmsListenerBulkhead {
 			}
 			else {
 				permit = this.awaitPermit(new Waiter(actualReservation, this.lock.newCondition()), destination, startNanos, maxWaitNanos,
-						Objects.requireNonNull(stopped));
+						Objects.requireNonNull(isContainerStopped));
 			}
 		}
 		finally {
