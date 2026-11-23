@@ -2,13 +2,18 @@ package org.coldis.library.service.jms;
 
 import org.springframework.beans.factory.BeanNameAware;
 import org.springframework.jms.config.DefaultJmsListenerContainerFactory;
+import org.springframework.jms.config.JmsListenerEndpoint;
 import org.springframework.jms.listener.DefaultMessageListenerContainer;
 
 /**
- * Listener container factory that creates {@link ExtendedMessageListenerContainer}
- * instances tagged with the factory bean name and its JMS listener bulkhead
- * group. Built by {@link JmsListenerContainerFactoryBuilder}; behaves exactly
- * as {@link DefaultJmsListenerContainerFactory} otherwise.
+ * Listener container factory that tags the listeners it sets up
+ * ({@link ExtendedMessagingMessageListenerAdapter}) with the factory bean name
+ * and its JMS listener bulkhead group, used to resolve the listener's bulkhead
+ * group and reservation (see {@link JmsListenerBulkheadRegistry}). Built by
+ * {@link JmsListenerContainerFactoryBuilder}. The containers are plain
+ * {@link DefaultMessageListenerContainer} instances (same class, same log
+ * category); the factory behaves exactly as
+ * {@link DefaultJmsListenerContainerFactory} otherwise.
  */
 public class ExtendedJmsListenerContainerFactory extends DefaultJmsListenerContainerFactory implements BeanNameAware {
 
@@ -18,7 +23,7 @@ public class ExtendedJmsListenerContainerFactory extends DefaultJmsListenerConta
 	private String beanName;
 
 	/**
-	 * Bulkhead group of the containers (null to resolve it from the properties).
+	 * Bulkhead group of the listeners (null to resolve it from the properties).
 	 */
 	private String bulkheadGroup;
 
@@ -60,16 +65,20 @@ public class ExtendedJmsListenerContainerFactory extends DefaultJmsListenerConta
 	}
 
 	/**
-	 * Creates the container already tagged: the listener adapter is created
-	 * before the container is initialized.
+	 * Creates the container as the parent does, then tags its listener (set up
+	 * by the endpoint) with the factory bean name and bulkhead group. The
+	 * listener resolves its bulkhead on its first message, after this.
 	 *
-	 * @see org.springframework.jms.config.DefaultJmsListenerContainerFactory#createContainerInstance()
+	 * @see org.springframework.jms.config.AbstractJmsListenerContainerFactory#createListenerContainer(org.springframework.jms.config.JmsListenerEndpoint)
 	 */
 	@Override
-	protected DefaultMessageListenerContainer createContainerInstance() {
-		final ExtendedMessageListenerContainer listenerContainer = new ExtendedMessageListenerContainer();
-		listenerContainer.setFactoryBeanName(this.beanName);
-		listenerContainer.setBulkheadGroup(this.bulkheadGroup);
+	public DefaultMessageListenerContainer createListenerContainer(
+			final JmsListenerEndpoint endpoint) {
+		final DefaultMessageListenerContainer listenerContainer = super.createListenerContainer(endpoint);
+		if (listenerContainer.getMessageListener() instanceof final ExtendedMessagingMessageListenerAdapter messageListener) {
+			messageListener.setFactoryBeanName(this.beanName);
+			messageListener.setBulkheadGroup(this.bulkheadGroup);
+		}
 		return listenerContainer;
 	}
 

@@ -21,13 +21,13 @@ import io.micrometer.core.instrument.MeterRegistry;
  * JMS listener bulkheads of the process, one per limited group (see
  * {@code doc/jms-listener-bulkhead.md}). Validates the properties at startup
  * (only when the bulkhead is enabled), resolves the group and reservation of
- * each listener container, creates each group's bulkhead on first use and
+ * each listener, creates each group's bulkhead on first use and
  * registers its metrics.
  * <p>
- * Group of a listener container, first match: the group set on its factory
+ * Group of a listener, first match: the group set on its container factory
  * ({@link JmsListenerContainerFactoryBuilder#bulkheadGroup}), the group whose
  * {@code factories} contain its factory bean name, the
- * {@value JmsListenerBulkheadProperties#DEFAULT_GROUP} group. Containers from a
+ * {@value JmsListenerBulkheadProperties#DEFAULT_GROUP} group. Listeners of a
  * factory not built by {@link JmsListenerContainerFactoryBuilder} carry no
  * factory name: they use the default group, without reservations by factory.
  */
@@ -255,22 +255,23 @@ public class JmsListenerBulkheadRegistry {
 	}
 
 	/**
-	 * Gets the group of a listener container: the group set on its factory, the
-	 * group listing its factory, or the default group.
+	 * Gets the group of a listener: the group set on its factory, the group
+	 * listing its factory, or the default group.
 	 *
-	 * @param  listenerContainer Listener container.
-	 * @return                   The group.
+	 * @param  factoryBeanName Bean name of the listener's container factory (may
+	 *                             be null).
+	 * @param  bulkheadGroup   Group set on the factory (may be null).
+	 * @return                 The group.
 	 */
 	public String resolveGroup(
-			final AbstractMessageListenerContainer listenerContainer) {
+			final String factoryBeanName,
+			final String bulkheadGroup) {
 		String group = JmsListenerBulkheadProperties.DEFAULT_GROUP;
-		if (listenerContainer instanceof final ExtendedMessageListenerContainer extendedListenerContainer) {
-			if (StringUtils.isNotBlank(extendedListenerContainer.getBulkheadGroup())) {
-				group = extendedListenerContainer.getBulkheadGroup();
-			}
-			else if (extendedListenerContainer.getFactoryBeanName() != null) {
-				group = this.factoryGroups.getOrDefault(extendedListenerContainer.getFactoryBeanName(), group);
-			}
+		if (StringUtils.isNotBlank(bulkheadGroup)) {
+			group = bulkheadGroup;
+		}
+		else if (factoryBeanName != null) {
+			group = this.factoryGroups.getOrDefault(factoryBeanName, group);
 		}
 		return group;
 	}
@@ -370,18 +371,23 @@ public class JmsListenerBulkheadRegistry {
 	}
 
 	/**
-	 * Binds a listener container to its bulkhead.
+	 * Binds a listener to its bulkhead.
 	 *
-	 * @param  listenerContainer Listener container.
+	 * @param  listenerContainer Listener container (gives the destination).
+	 * @param  factoryBeanName   Bean name of the listener's container factory
+	 *                               (may be null).
+	 * @param  bulkheadGroup     Group set on the factory (may be null).
 	 * @return                   The binding, or null when the listener is not
 	 *                           limited (bulkhead disabled, group unknown or not
 	 *                           limited).
 	 */
 	public JmsListenerBulkheadBinding bind(
-			final AbstractMessageListenerContainer listenerContainer) {
+			final AbstractMessageListenerContainer listenerContainer,
+			final String factoryBeanName,
+			final String bulkheadGroup) {
 		JmsListenerBulkheadBinding binding = null;
 		if (this.enabled) {
-			final String group = this.resolveGroup(listenerContainer);
+			final String group = this.resolveGroup(factoryBeanName, bulkheadGroup);
 			final JmsListenerBulkheadGroupProperties groupProperties = this.getGroupProperties(group);
 			final JmsListenerBulkhead bulkhead = this.getBulkhead(group);
 			final String destination = Objects.toString(listenerContainer.getDestinationName(), JmsListenerBulkheadRegistry.UNKNOWN_DESTINATION);
@@ -390,9 +396,6 @@ public class JmsListenerBulkheadRegistry {
 						group, destination);
 			}
 			else if (bulkhead != null) {
-				final String factoryBeanName = (listenerContainer instanceof final ExtendedMessageListenerContainer extendedListenerContainer
-						? extendedListenerContainer.getFactoryBeanName()
-						: null);
 				binding = new JmsListenerBulkheadBinding(bulkhead, JmsListenerBulkheadRegistry.resolveReservation(groupProperties, destination, factoryBeanName),
 						destination, groupProperties, (this.meterRegistryProvider == null ? null : this.meterRegistryProvider.getIfAvailable()));
 				JmsListenerBulkheadRegistry.LOGGER.debug("JMS listener of '{}' bound to bulkhead group '{}' (reservation '{}').", destination, group,

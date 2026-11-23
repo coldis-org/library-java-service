@@ -1,6 +1,5 @@
 package org.coldis.library.test.service.jms;
 
-import org.coldis.library.service.jms.ExtendedMessageListenerContainer;
 import org.coldis.library.service.jms.JmsListenerBulkhead;
 import org.coldis.library.service.jms.JmsListenerBulkheadBinding;
 import org.coldis.library.service.jms.JmsListenerBulkheadProperties;
@@ -60,19 +59,13 @@ public class JmsListenerBulkheadRegistryTest {
 	/**
 	 * Creates a listener container (never started).
 	 *
-	 * @param  destination   Destination.
-	 * @param  factory       Factory bean name.
-	 * @param  bulkheadGroup Bulkhead group set on the factory.
-	 * @return               The container.
+	 * @param  destination Destination.
+	 * @return             The container.
 	 */
-	private static ExtendedMessageListenerContainer container(
-			final String destination,
-			final String factory,
-			final String bulkheadGroup) {
-		final ExtendedMessageListenerContainer listenerContainer = new ExtendedMessageListenerContainer();
+	private static DefaultMessageListenerContainer container(
+			final String destination) {
+		final DefaultMessageListenerContainer listenerContainer = new DefaultMessageListenerContainer();
 		listenerContainer.setDestinationName(destination);
-		listenerContainer.setFactoryBeanName(factory);
-		listenerContainer.setBulkheadGroup(bulkheadGroup);
 		return listenerContainer;
 	}
 
@@ -102,8 +95,8 @@ public class JmsListenerBulkheadRegistryTest {
 		this.contextRunner.run(context -> {
 			final JmsListenerBulkheadRegistry registry = context.getBean(JmsListenerBulkheadRegistry.class);
 			Assertions.assertFalse(registry.isEnabled());
-			Assertions.assertNull(registry.bind(JmsListenerBulkheadRegistryTest.container("queue", "factory", null)));
-			Assertions.assertNull(registry.bind(new DefaultMessageListenerContainer()));
+			Assertions.assertNull(registry.bind(JmsListenerBulkheadRegistryTest.container("queue"), "factory", null));
+			Assertions.assertNull(registry.bind(new DefaultMessageListenerContainer(), null, null));
 			Assertions.assertNull(registry.getBulkhead(JmsListenerBulkheadProperties.DEFAULT_GROUP));
 		});
 	}
@@ -115,7 +108,7 @@ public class JmsListenerBulkheadRegistryTest {
 	@DisplayName("A limit without enabled=true limits nothing")
 	public void testLimitWithoutEnabled() {
 		this.contextRunner.withPropertyValues(JmsListenerBulkheadRegistryTest.PREFIX + "max-in-flight=4").run(context -> {
-			Assertions.assertNull(context.getBean(JmsListenerBulkheadRegistry.class).bind(JmsListenerBulkheadRegistryTest.container("queue", null, null)));
+			Assertions.assertNull(context.getBean(JmsListenerBulkheadRegistry.class).bind(JmsListenerBulkheadRegistryTest.container("queue"), null, null));
 		});
 	}
 
@@ -128,7 +121,7 @@ public class JmsListenerBulkheadRegistryTest {
 		this.contextRunner.withPropertyValues(JmsListenerBulkheadRegistryTest.PREFIX + "enabled=true").run(context -> {
 			final JmsListenerBulkheadRegistry registry = context.getBean(JmsListenerBulkheadRegistry.class);
 			Assertions.assertTrue(registry.isEnabled());
-			Assertions.assertNull(registry.bind(JmsListenerBulkheadRegistryTest.container("queue", null, null)));
+			Assertions.assertNull(registry.bind(JmsListenerBulkheadRegistryTest.container("queue"), null, null));
 			Assertions.assertNull(registry.getBulkhead(JmsListenerBulkheadProperties.DEFAULT_GROUP));
 		});
 	}
@@ -143,14 +136,14 @@ public class JmsListenerBulkheadRegistryTest {
 				.run(context -> {
 					final JmsListenerBulkheadRegistry registry = context.getBean(JmsListenerBulkheadRegistry.class);
 					final MeterRegistry meterRegistry = context.getBean(MeterRegistry.class);
-					final JmsListenerBulkheadBinding binding = registry.bind(JmsListenerBulkheadRegistryTest.container("queue", "factory", null));
+					final JmsListenerBulkheadBinding binding = registry.bind(JmsListenerBulkheadRegistryTest.container("queue"), "factory", null);
 					Assertions.assertNotNull(binding);
 					Assertions.assertEquals(JmsListenerBulkheadProperties.DEFAULT_GROUP, binding.getBulkhead().getGroup());
 					Assertions.assertEquals("queue", binding.getDestination());
 					Assertions.assertNull(binding.getReservation());
 					Assertions.assertEquals(4, binding.getBulkhead().getMaxInFlight());
-					Assertions.assertSame(binding.getBulkhead(), registry.bind(new DefaultMessageListenerContainer()).getBulkhead());
-					Assertions.assertEquals("unknown", registry.bind(new DefaultMessageListenerContainer()).getDestination());
+					Assertions.assertSame(binding.getBulkhead(), registry.bind(new DefaultMessageListenerContainer(), null, null).getBulkhead());
+					Assertions.assertEquals("unknown", registry.bind(new DefaultMessageListenerContainer(), null, null).getDestination());
 					Assertions.assertEquals(4D, JmsListenerBulkheadRegistryTest.gauge(meterRegistry, JmsListenerBulkheadRegistry.MAX_IN_FLIGHT_METRIC,
 							JmsListenerBulkheadProperties.DEFAULT_GROUP));
 					Assertions.assertEquals(0D, JmsListenerBulkheadRegistryTest.gauge(meterRegistry, JmsListenerBulkheadRegistry.IN_FLIGHT_METRIC,
@@ -187,17 +180,17 @@ public class JmsListenerBulkheadRegistryTest {
 				JmsListenerBulkheadRegistryTest.PREFIX + "groups.high.max-in-flight=5", JmsListenerBulkheadRegistryTest.PREFIX + "groups.unlimited.factories=freeFactory")
 				.run(context -> {
 					final JmsListenerBulkheadRegistry registry = context.getBean(JmsListenerBulkheadRegistry.class);
-					Assertions.assertEquals("low", registry.resolveGroup(JmsListenerBulkheadRegistryTest.container("queue", "lowFactory", null)));
-					Assertions.assertEquals(2, registry.bind(JmsListenerBulkheadRegistryTest.container("queue", "lowFactory", null)).getBulkhead().getMaxInFlight());
-					Assertions.assertEquals("high", registry.resolveGroup(JmsListenerBulkheadRegistryTest.container("queue", "lowFactory", "high")));
-					Assertions.assertEquals(5, registry.bind(JmsListenerBulkheadRegistryTest.container("queue", "lowFactory", "high")).getBulkhead().getMaxInFlight());
+					Assertions.assertEquals("low", registry.resolveGroup("lowFactory", null));
+					Assertions.assertEquals(2, registry.bind(JmsListenerBulkheadRegistryTest.container("queue"), "lowFactory", null).getBulkhead().getMaxInFlight());
+					Assertions.assertEquals("high", registry.resolveGroup("lowFactory", "high"));
+					Assertions.assertEquals(5, registry.bind(JmsListenerBulkheadRegistryTest.container("queue"), "lowFactory", "high").getBulkhead().getMaxInFlight());
 					Assertions.assertEquals(JmsListenerBulkheadProperties.DEFAULT_GROUP,
-							registry.resolveGroup(JmsListenerBulkheadRegistryTest.container("queue", "otherFactory", null)));
-					Assertions.assertEquals(JmsListenerBulkheadProperties.DEFAULT_GROUP, registry.resolveGroup(new DefaultMessageListenerContainer()));
+							registry.resolveGroup("otherFactory", null));
+					Assertions.assertEquals(JmsListenerBulkheadProperties.DEFAULT_GROUP, registry.resolveGroup(null, null));
 					Assertions.assertEquals(10,
-							registry.bind(JmsListenerBulkheadRegistryTest.container("queue", "otherFactory", null)).getBulkhead().getMaxInFlight());
-					Assertions.assertNull(registry.bind(JmsListenerBulkheadRegistryTest.container("queue", "freeFactory", null)));
-					Assertions.assertNull(registry.bind(JmsListenerBulkheadRegistryTest.container("queue", "lowFactory", "missing")));
+							registry.bind(JmsListenerBulkheadRegistryTest.container("queue"), "otherFactory", null).getBulkhead().getMaxInFlight());
+					Assertions.assertNull(registry.bind(JmsListenerBulkheadRegistryTest.container("queue"), "freeFactory", null));
+					Assertions.assertNull(registry.bind(JmsListenerBulkheadRegistryTest.container("queue"), "lowFactory", "missing"));
 				});
 	}
 
@@ -214,12 +207,12 @@ public class JmsListenerBulkheadRegistryTest {
 				.run(context -> {
 					final JmsListenerBulkheadRegistry registry = context.getBean(JmsListenerBulkheadRegistry.class);
 					final MeterRegistry meterRegistry = context.getBean(MeterRegistry.class);
-					Assertions.assertEquals("by-destination", registry.bind(JmsListenerBulkheadRegistryTest.container("queue/a", "factoryB", null)).getReservation());
-					Assertions.assertEquals("by-destination", registry.bind(JmsListenerBulkheadRegistryTest.container("queue/b", null, null)).getReservation());
-					Assertions.assertEquals("by-factory", registry.bind(JmsListenerBulkheadRegistryTest.container("queue/c", "factoryB", null)).getReservation());
+					Assertions.assertEquals("by-destination", registry.bind(JmsListenerBulkheadRegistryTest.container("queue/a"), "factoryB", null).getReservation());
+					Assertions.assertEquals("by-destination", registry.bind(JmsListenerBulkheadRegistryTest.container("queue/b"), null, null).getReservation());
+					Assertions.assertEquals("by-factory", registry.bind(JmsListenerBulkheadRegistryTest.container("queue/c"), "factoryB", null).getReservation());
 					Assertions.assertEquals("by-destination",
-							registry.bind(JmsListenerBulkheadRegistryTest.container("address/a::queue/a", null, null)).getReservation());
-					Assertions.assertNull(registry.bind(JmsListenerBulkheadRegistryTest.container("queue/c", null, null)).getReservation());
+							registry.bind(JmsListenerBulkheadRegistryTest.container("address/a::queue/a"), null, null).getReservation());
+					Assertions.assertNull(registry.bind(JmsListenerBulkheadRegistryTest.container("queue/c"), null, null).getReservation());
 					Assertions.assertEquals(2D, meterRegistry.find(JmsListenerBulkheadRegistry.RESERVED_PERMITS_METRIC)
 							.tag("group", JmsListenerBulkheadProperties.DEFAULT_GROUP).tag("reservation", "by-factory").gauge().value());
 					Assertions.assertEquals(0D, meterRegistry.find(JmsListenerBulkheadRegistry.RESERVED_IN_FLIGHT_METRIC)
