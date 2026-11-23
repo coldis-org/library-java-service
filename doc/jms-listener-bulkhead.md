@@ -262,15 +262,3 @@ threads busy queues wait behind them.
 - `ExtendedJmsListenerContainerFactory`: built by
   `JmsListenerContainerFactoryBuilder`; tags its listeners with the factory bean
   name and group. Its containers are plain `DefaultMessageListenerContainer`.
-
-## Tests
-
-- `JmsListenerBulkheadTest`: the limiter alone (limit, order, timeout, stop,
-  interrupt, a grant racing an interrupt, reservations, live limit).
-- `JmsListenerBulkheadRegistryTest`: properties, validation, resolution, gauges.
-- `JmsListenerExecutorStarvationTest`: the legacy limit stopping every queue,
-  and the same scenario progressing with the bulkhead.
-- `JmsListenerBulkheadContainerTest`: no loss or duplicate on wait timeout, stop
-  and shutdown; failures; reservations; the stale filter around the permit.
-- `JmsListenerBulkheadIntegrationTest`: real `@JmsListener` methods, the permit
-  taken before the transaction, metrics.
