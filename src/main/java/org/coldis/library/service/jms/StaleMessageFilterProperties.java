@@ -66,6 +66,12 @@ public class StaleMessageFilterProperties {
 	private Integer initialCapacity;
 
 	/**
+	 * Timeout of each shared store statement (whole seconds, zero for none), so
+	 * a slow database cannot hold the synchronization for long.
+	 */
+	private Duration queryTimeout;
+
+	/**
 	 * Gets the enabled.
 	 *
 	 * @return The enabled.
@@ -223,6 +229,26 @@ public class StaleMessageFilterProperties {
 	public void setInitialCapacity(
 			final Integer initialCapacity) {
 		this.initialCapacity = initialCapacity;
+	}
+
+	/**
+	 * Gets the queryTimeout.
+	 *
+	 * @return The queryTimeout.
+	 */
+	public Duration getQueryTimeout() {
+		this.queryTimeout = (this.queryTimeout == null ? Duration.ofSeconds(5) : this.queryTimeout);
+		return this.queryTimeout;
+	}
+
+	/**
+	 * Sets the queryTimeout.
+	 *
+	 * @param queryTimeout New queryTimeout.
+	 */
+	public void setQueryTimeout(
+			final Duration queryTimeout) {
+		this.queryTimeout = queryTimeout;
 	}
 
 }

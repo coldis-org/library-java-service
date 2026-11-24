@@ -53,9 +53,17 @@ public class ExtendedMessagingMessageListenerAdapter extends MessagingMessageLis
 	public static final String DROPPED_MESSAGES_METRIC = "jms.listener.messages.dropped";
 
 	/**
-	 * Messages dropped by the stale message filter (tag: destination).
+	 * Messages dropped by the stale message filter (tags: destination, source:
+	 * local when the newer processing was recorded by this instance, pulled when
+	 * it came from the shared store).
 	 */
 	public static final String STALE_DROPPED_MESSAGES_METRIC = "jms.stale.filter.dropped";
+
+	/**
+	 * Keyed messages checked by the stale message filter, once per delivery
+	 * (tags: destination, outcome: dropped or processed).
+	 */
+	public static final String STALE_CHECKED_MESSAGES_METRIC = "jms.stale.filter.checked";
 
 	/**
 	 * JMS converter properties.
@@ -138,8 +146,9 @@ public class ExtendedMessagingMessageListenerAdapter extends MessagingMessageLis
 	}
 
 	/**
-	 * Sets the meter registry supplier, used to count dropped messages
-	 * ({@value #DROPPED_MESSAGES_METRIC} and {@value #STALE_DROPPED_MESSAGES_METRIC}).
+	 * Sets the meter registry supplier, used to count dropped and checked messages
+	 * ({@value #DROPPED_MESSAGES_METRIC}, {@value #STALE_DROPPED_MESSAGES_METRIC}
+	 * and {@value #STALE_CHECKED_MESSAGES_METRIC}).
 	 *
 	 * @param meterRegistrySupplier Meter registry supplier.
 	 */
@@ -249,13 +258,13 @@ public class ExtendedMessagingMessageListenerAdapter extends MessagingMessageLis
 	}
 
 	/**
-	 * Counts a dropped message, when a meter registry is available.
+	 * Counts a message, when a meter registry is available.
 	 *
 	 * @param metricName Metric name.
-	 * @param message    Dropped message.
+	 * @param message    Message.
 	 * @param tags       Extra tags (key, value pairs).
 	 */
-	private void countDroppedMessage(
+	private void countMessage(
 			final String metricName,
 			final Message message,
 			final String... tags) {
@@ -266,7 +275,7 @@ public class ExtendedMessagingMessageListenerAdapter extends MessagingMessageLis
 				destination = Objects.toString(((ActiveMQDestination) message.getJMSDestination()).getAddress(), destination);
 			}
 			catch (final JMSException exception) {
-				ExtendedMessagingMessageListenerAdapter.LOGGER.debug("Dropped message destination could not be read.", exception);
+				ExtendedMessagingMessageListenerAdapter.LOGGER.debug("Counted message destination could not be read.", exception);
 			}
 			Counter.builder(metricName).tag("destination", destination).tags(tags).register(meterRegistry).increment();
 		}
@@ -345,30 +354,58 @@ public class ExtendedMessagingMessageListenerAdapter extends MessagingMessageLis
 	}
 
 	/**
+	 * If the stale message filter is enabled and the message carries a stale
+	 * filter key.
+	 */
+	private boolean isStaleFilterKeyed(
+			final Message message) throws JMSException {
+		return (this.staleMessageFilterService != null) && this.staleMessageFilterService.isEnabled()
+				&& message.propertyExists(JmsMessage.STALE_FILTER_KEY_PROPERTY);
+	}
+
+	/**
 	 * Checks if the message carries a stale filter key and a same-key message
 	 * started successful processing after this one was posted (in which case the
 	 * processing already reflected the state that originated this message and it
 	 * can be dropped). Fails open on any error.
+	 *
+	 * @return Where the newer processing record came from, or null when the
+	 *         message is not superseded.
 	 */
-	private boolean isSupersededByNewerProcessing(
+	private StaleMessageFilterService.Source getSupersedingSource(
 			final Message message) {
-		boolean superseded = false;
-		if ((this.staleMessageFilterService != null) && this.staleMessageFilterService.isEnabled()) {
-			try {
-				if (message.propertyExists(JmsMessage.STALE_FILTER_KEY_PROPERTY)) {
-					final Long postedAt = this.getStaleFilterPostedAt(message);
-					if (postedAt != null) {
-						final String destination = ((ActiveMQDestination) message.getJMSDestination()).getAddress();
-						superseded = this.staleMessageFilterService.hasNewerProcessing(destination,
-								message.getStringProperty(JmsMessage.STALE_FILTER_KEY_PROPERTY), postedAt);
-					}
+		StaleMessageFilterService.Source source = null;
+		try {
+			if (this.isStaleFilterKeyed(message)) {
+				final Long postedAt = this.getStaleFilterPostedAt(message);
+				if (postedAt != null) {
+					final String destination = ((ActiveMQDestination) message.getJMSDestination()).getAddress();
+					source = this.staleMessageFilterService.getNewerProcessingSource(destination,
+							message.getStringProperty(JmsMessage.STALE_FILTER_KEY_PROPERTY), postedAt);
 				}
 			}
-			catch (final JMSException exception) {
-				ExtendedMessagingMessageListenerAdapter.LOGGER.debug("Stale message filter check failed (processing the message).", exception);
+		}
+		catch (final JMSException exception) {
+			ExtendedMessagingMessageListenerAdapter.LOGGER.debug("Stale message filter check failed (processing the message).", exception);
+		}
+		return source;
+	}
+
+	/**
+	 * Counts a keyed message the stale message filter let through to processing.
+	 *
+	 * @param message Message.
+	 */
+	private void countStaleFilterProcessed(
+			final Message message) {
+		try {
+			if (this.isStaleFilterKeyed(message)) {
+				this.countMessage(ExtendedMessagingMessageListenerAdapter.STALE_CHECKED_MESSAGES_METRIC, message, "outcome", "processed");
 			}
 		}
-		return superseded;
+		catch (final JMSException exception) {
+			ExtendedMessagingMessageListenerAdapter.LOGGER.debug("Stale message filter check could not be counted.", exception);
+		}
 	}
 
 	/**
@@ -400,11 +437,14 @@ public class ExtendedMessagingMessageListenerAdapter extends MessagingMessageLis
 	 * same-key processing, and counts it.
 	 *
 	 * @param message Message.
+	 * @param source  Where the newer processing record came from.
 	 */
 	private void dropSupersededMessage(
-			final Message message) {
+			final Message message,
+			final StaleMessageFilterService.Source source) {
 		ExtendedMessagingMessageListenerAdapter.LOGGER.debug("Dropping stale message superseded by a newer same-key processing.");
-		this.countDroppedMessage(ExtendedMessagingMessageListenerAdapter.STALE_DROPPED_MESSAGES_METRIC, message);
+		this.countMessage(ExtendedMessagingMessageListenerAdapter.STALE_DROPPED_MESSAGES_METRIC, message, "source", source.getTag());
+		this.countMessage(ExtendedMessagingMessageListenerAdapter.STALE_CHECKED_MESSAGES_METRIC, message, "outcome", "dropped");
 	}
 
 	/**
@@ -420,8 +460,9 @@ public class ExtendedMessagingMessageListenerAdapter extends MessagingMessageLis
 
 			// Drops (acknowledges without processing) messages superseded by a newer
 			// same-key processing. Checked before the bulkhead: it takes no permit.
-			if (this.isSupersededByNewerProcessing(message)) {
-				this.dropSupersededMessage(message);
+			final StaleMessageFilterService.Source supersedingSource = this.getSupersedingSource(message);
+			if (supersedingSource != null) {
+				this.dropSupersededMessage(message, supersedingSource);
 			}
 			else {
 
@@ -439,12 +480,16 @@ public class ExtendedMessagingMessageListenerAdapter extends MessagingMessageLis
 						: actualBulkheadBinding.acquire(message, this.getCurrentAdmission(), this::isListenerContainerStopped))) {
 
 					// A message that waited for its permit may have been superseded meanwhile.
-					if ((permit != null) && permit.hasWaited() && this.isSupersededByNewerProcessing(message)) {
-						this.dropSupersededMessage(message);
+					final StaleMessageFilterService.Source waitedSupersedingSource = ((permit != null) && permit.hasWaited()
+							? this.getSupersedingSource(message)
+							: null);
+					if (waitedSupersedingSource != null) {
+						this.dropSupersededMessage(message, waitedSupersedingSource);
 					}
 					else {
 						// Processes the message. The JMS timestamp is producer wall-clock: the
 						// clock skew margin absorbs small divergences from the local clock.
+						this.countStaleFilterProcessed(message);
 						final long processingStartTimestamp = DateTimeHelper.toTimestamp(DateTimeHelper.getCurrentLocalDateTime());
 						super.onMessage(message, session);
 						this.recordStaleFilterProcessing(message, processingStartTimestamp);
@@ -488,7 +533,7 @@ public class ExtendedMessagingMessageListenerAdapter extends MessagingMessageLis
 			}
 
 			// Logs, counts and drops the message.
-			this.countDroppedMessage(ExtendedMessagingMessageListenerAdapter.DROPPED_MESSAGES_METRIC, message, "exception",
+			this.countMessage(ExtendedMessagingMessageListenerAdapter.DROPPED_MESSAGES_METRIC, message, "exception",
 					exceptionCause.getClass().getName());
 			ExtendedMessagingMessageListenerAdapter.LOGGER
 					.warn("Dropping message due to non-retriable error '" + exception.getClass() + ": " + exception.getLocalizedMessage()

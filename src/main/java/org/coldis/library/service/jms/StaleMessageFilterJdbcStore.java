@@ -1,23 +1,38 @@
 package org.coldis.library.service.jms;
 
+import java.time.Duration;
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.List;
 import java.util.Map;
+import java.util.TreeMap;
 
 import javax.sql.DataSource;
 
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.jdbc.datasource.DataSourceTransactionManager;
+import org.springframework.transaction.support.TransactionTemplate;
 
 /**
  * Stale message filter JDBC store (shared processing records).
  *
  * The table is unlogged: records are a lossy optimization cache (the filter
- * fails open), so skipping the WAL is a free performance gain. All
- * "synchronized at" values come from the database clock (a single time domain
- * across instances), while "processed at" values stay in the producers' and
+ * fails open), so skipping the WAL is a free performance gain. "Synchronized
+ * at" values are set by the database clock (a single time domain across
+ * instances), while "processed at" values stay in the producers' and
  * consumers' wall-clock domain.
  */
 public class StaleMessageFilterJdbcStore {
+
+	/**
+	 * Advisory lock key that lets a single instance at a time run the cleanup.
+	 */
+	public static final long CLEANUP_LOCK_KEY = 0x5354414C4546L;
+
+	/**
+	 * Default statement timeout.
+	 */
+	private static final Duration DEFAULT_QUERY_TIMEOUT = Duration.ofSeconds(5);
 
 	/**
 	 * Maximum batch size for pushing processing records.
@@ -40,22 +55,41 @@ public class StaleMessageFilterJdbcStore {
 	private final JdbcTemplate jdbcTemplate;
 
 	/**
+	 * Transaction template (the cleanup and its advisory lock share a
+	 * transaction).
+	 */
+	private final TransactionTemplate transactionTemplate;
+
+	/**
 	 * Processing record entry pulled from the shared store.
 	 */
 	public record ProcessingRecord(String messageKey, long processedAt, long synchronizedAt) {}
 
 	/**
-	 * Default constructor.
+	 * Constructor.
 	 *
-	 * @param dataSource Data source.
-	 * @param tableName  Table name (validated as a plain SQL identifier).
+	 * @param dataSource   Data source.
+	 * @param tableName    Table name (validated as a plain SQL identifier).
+	 * @param queryTimeout Statement timeout (whole seconds, zero for none).
 	 */
-	public StaleMessageFilterJdbcStore(final DataSource dataSource, final String tableName) {
+	public StaleMessageFilterJdbcStore(final DataSource dataSource, final String tableName, final Duration queryTimeout) {
 		if (!tableName.matches("[A-Za-z_][A-Za-z0-9_]*")) {
 			throw new IllegalArgumentException("Invalid stale message filter table name '" + tableName + "'.");
 		}
 		this.tableName = tableName;
 		this.jdbcTemplate = new JdbcTemplate(dataSource);
+		this.jdbcTemplate.setQueryTimeout((int) queryTimeout.toSeconds());
+		this.transactionTemplate = new TransactionTemplate(new DataSourceTransactionManager(dataSource));
+	}
+
+	/**
+	 * Constructor with the default statement timeout (5 seconds).
+	 *
+	 * @param dataSource Data source.
+	 * @param tableName  Table name (validated as a plain SQL identifier).
+	 */
+	public StaleMessageFilterJdbcStore(final DataSource dataSource, final String tableName) {
+		this(dataSource, tableName, StaleMessageFilterJdbcStore.DEFAULT_QUERY_TIMEOUT);
 	}
 
 	/**
@@ -69,12 +103,15 @@ public class StaleMessageFilterJdbcStore {
 
 	/**
 	 * Pushes processing records, keeping the newest processing timestamp per key.
+	 * Records are written in key order, so concurrent pushes from several
+	 * instances lock shared rows in the same order and do not deadlock each
+	 * other.
 	 *
 	 * @param processingRecords Processing start timestamp by message key.
 	 */
 	public void push(
 			final Map<String, Long> processingRecords) {
-		final List<Map.Entry<String, Long>> entries = new ArrayList<>(processingRecords.entrySet());
+		final List<Map.Entry<String, Long>> entries = new ArrayList<>(new TreeMap<>(processingRecords).entrySet());
 		final String statement = "INSERT INTO " + this.tableName + " (message_key, processed_at, synchronized_at) VALUES (?, ?, "
 				+ StaleMessageFilterJdbcStore.DATABASE_CLOCK_MILLIS + ") ON CONFLICT (message_key) DO UPDATE SET processed_at = EXCLUDED.processed_at,"
 				+ " synchronized_at = EXCLUDED.synchronized_at WHERE " + this.tableName + ".processed_at < EXCLUDED.processed_at";
@@ -85,29 +122,57 @@ public class StaleMessageFilterJdbcStore {
 	}
 
 	/**
-	 * Pulls processing records synchronized after the given watermark.
+	 * Escapes the LIKE wildcards (and the escape character itself) of a value.
 	 *
-	 * @param  synchronizedAfter Watermark (database clock epoch millis).
-	 * @return                   Records synchronized after the watermark.
+	 * @param  value Value.
+	 * @return       The value, matched literally by LIKE.
 	 */
-	public List<ProcessingRecord> pull(
-			final long synchronizedAfter) {
-		return this.jdbcTemplate.query("SELECT message_key, processed_at, synchronized_at FROM " + this.tableName + " WHERE synchronized_at > ?",
-				(resultSet, rowNumber) -> new ProcessingRecord(resultSet.getString("message_key"), resultSet.getLong("processed_at"),
-						resultSet.getLong("synchronized_at")),
-				synchronizedAfter);
+	private static String escapeLikePattern(
+			final String value) {
+		return value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_");
 	}
 
 	/**
-	 * Deletes records synchronized longer than the window ago (by the database
-	 * clock).
+	 * Pulls processing records whose message key starts with one of the given
+	 * prefixes and that were synchronized after the given watermark.
 	 *
-	 * @param windowMillis Window in millis.
+	 * @param  synchronizedAfter Watermark (database clock epoch millis).
+	 * @param  keyPrefixes       Message key prefixes (matched literally).
+	 * @return                   The matching records.
 	 */
-	public void deleteOlderThanWindow(
-			final long windowMillis) {
-		this.jdbcTemplate.update(
-				"DELETE FROM " + this.tableName + " WHERE synchronized_at < (" + StaleMessageFilterJdbcStore.DATABASE_CLOCK_MILLIS + " - ?)", windowMillis);
+	public List<ProcessingRecord> pull(
+			final long synchronizedAfter,
+			final Collection<String> keyPrefixes) {
+		final Object[] patterns = keyPrefixes.stream().map(keyPrefix -> StaleMessageFilterJdbcStore.escapeLikePattern(keyPrefix) + "%").toArray();
+		return this.jdbcTemplate.query(
+				"SELECT message_key, processed_at, synchronized_at FROM " + this.tableName + " WHERE synchronized_at > ? AND message_key LIKE ANY (?)",
+				preparedStatement -> {
+					preparedStatement.setLong(1, synchronizedAfter);
+					preparedStatement.setArray(2, preparedStatement.getConnection().createArrayOf("text", patterns));
+				}, (resultSet, rowNumber) -> new ProcessingRecord(resultSet.getString("message_key"), resultSet.getLong("processed_at"),
+						resultSet.getLong("synchronized_at")));
+	}
+
+	/**
+	 * Deletes records synchronized before the cutoff, unless another instance is
+	 * running the cleanup at the same time (a transaction-level advisory lock,
+	 * never waited for). The cutoff is a bound value, so the "synchronized at"
+	 * index is used.
+	 *
+	 * @param  synchronizedBefore Cutoff (epoch millis).
+	 * @return                    Deleted rows, or null when another instance held
+	 *                            the cleanup lock (nothing was deleted).
+	 */
+	public Integer deleteSynchronizedBefore(
+			final long synchronizedBefore) {
+		return this.transactionTemplate.execute(status -> {
+			Integer deletedRows = null;
+			if (Boolean.TRUE.equals(this.jdbcTemplate.queryForObject("SELECT pg_try_advisory_xact_lock(?)", Boolean.class,
+					StaleMessageFilterJdbcStore.CLEANUP_LOCK_KEY))) {
+				deletedRows = this.jdbcTemplate.update("DELETE FROM " + this.tableName + " WHERE synchronized_at < ?", synchronizedBefore);
+			}
+			return deletedRows;
+		});
 	}
 
 }

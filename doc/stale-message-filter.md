@@ -22,12 +22,66 @@ Producer and consumer hosts must be clock-synchronized well below
 `clock-skew-margin` (default 1 second). A producer clock running behind by more
 than the margin makes newer messages look stale, and they are lost.
 
+## Synchronization between instances
+
+Each instance keeps its records in memory and, every
+`synchronization-interval` (default 10 s), synchronizes them with the shared
+table:
+
+1. **Push:** the records of messages this instance processed since the last
+   push, written in key order (so instances lock shared rows in the same order
+   and do not deadlock each other).
+2. **Pull:** the records other instances pushed since the last pull, only for
+   the destinations this instance has seen keyed messages on.
+3. **Delete:** records older than `window`. Only one instance runs it at a
+   time (a transaction-level advisory lock that is never waited for: an
+   instance that does not get it skips the cleanup for that cycle).
+
+The instance learns which destinations it consumes keyed messages from as the
+messages arrive; there is nothing to configure. Until it sees one, the
+synchronization does not touch the database (no push, pull or delete), so
+instances that never consume keyed messages cost the database nothing. A pull
+also returns the instance's own rows; it ignores them.
+
+The synchronization runs on its own daemon thread (`jms-stale-filter-sync`),
+started with the service when the filter is enabled at startup, so it never
+delays the service's other scheduled jobs. Each statement has a timeout of
+`query-timeout` (default 5 s, whole seconds, `0` for none). A failed
+synchronization is logged and retried on the next cycle; the filter fails open
+meanwhile.
+
+### Choosing the interval
+
+Another instance's processing is only known here after its push and this
+instance's pull, so a cross-instance drop needs the newer processing to be
+shared before the older message is consumed: up to two intervals after it
+started. A shorter interval means more cross-instance drops but more database
+work (each instance pushes, pulls and attempts the cleanup on every cycle); a
+longer one means less work and fewer drops.
+
+Compare the interval with how long keyed messages wait in their queues. When
+they are consumed well within the interval, most duplicates are only caught by
+the instance that processed the newer message (`source=local`), and a shorter
+interval would help; when they wait much longer than the interval, a shorter
+interval adds database work for few extra drops. The metrics below show both
+sides: the `source` split of the drops and the cost of each phase.
+
 ## Observability
 
-- Each drop increments the counter `jms.stale.filter.dropped` (tag
-  `destination`), and logs at debug.
+Micrometer metrics, in the same registry as the other JMS metrics:
+
+| Metric | Type | Tags | Meaning |
+|---|---|---|---|
+| `jms.stale.filter.checked` | counter | `destination`, `outcome` = `dropped` \| `processed` | Keyed messages checked, once per delivery. The drop ratio is `dropped / (dropped + processed)`. |
+| `jms.stale.filter.dropped` | counter | `destination`, `source` = `local` \| `pulled` | Dropped messages, by where the newer record came from: this instance, or another instance through the shared table. |
+| `jms.stale.filter.sync` | timer | `phase` = `push` \| `pull` \| `delete`, `outcome` = `success` \| `failure` \| `skipped` | Duration of each synchronization phase. `skipped`: nothing to push, cleanup run by another instance, or no keyed destination seen yet. |
+| `jms.stale.filter.sync.rows` | counter | `phase` | Rows pushed, pulled or deleted. |
+| `jms.stale.filter.records` | gauge | | Records held in memory. |
+
+- Each drop also logs at debug.
 - Compare the drop rate per destination with the duplicate rate the filter is
-  meant to remove.
+  meant to remove; the `pulled` share of drops is what the database
+  synchronization contributes.
 
 ## Storage (PostgreSQL)
 
@@ -49,7 +103,8 @@ CREATE INDEX IF NOT EXISTS stale_message_filter_synchronized_at_idx
 - It is `UNLOGGED`: its content is a cache of recent processing starts and may
   be lost on a database crash (the filter then simply drops nothing until it
   fills again).
-- Records older than the window are deleted by the filter itself.
+- Records older than the window are deleted by the filter itself, with a
+  cutoff bound as a parameter so the `synchronized_at` index is used.
 - Services that manage every table through migrations can set
   `create-schema=false` and add the statements above to their own migrations.
   A schema change in a future version will be announced in the release notes,
