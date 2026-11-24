@@ -26,12 +26,16 @@ import jakarta.jms.Session;
 
 /**
  * Context-aware messaging message listener adapter: async hops limit (with the
- * exceeded queue), stale message filter and non-retriable error drops. Created
- * by the listener endpoint of {@link EnhancedJmsBootstrapConfiguration}, which
- * also sets the listener container ({@link #setListenerContainer}) and the
- * meter registry supplier ({@link #setMeterRegistrySupplier}). An adapter built
+ * exceeded queue), stale message filter, non-retriable error drops and the JMS
+ * listener bulkhead (a bound on concurrent handler executions, see
+ * {@link JmsListenerBulkheadRegistry}). Created by the listener endpoint of
+ * {@link EnhancedJmsBootstrapConfiguration} ({@link ExtendedMethodJmsListenerEndpoint}),
+ * which also sets the listener container ({@link #setListenerContainer}), the
+ * meter registry supplier ({@link #setMeterRegistrySupplier}) and the bulkhead
+ * registry supplier ({@link #setBulkheadRegistrySupplier}). An adapter built
  * another way without them works, but exceeded topic messages get no original
- * queue (not retryable by the broker) and drops are not counted.
+ * queue (not retryable by the broker), drops are not counted and handlers are
+ * not limited by the bulkhead.
  */
 public class ExtendedMessagingMessageListenerAdapter extends MessagingMessageListenerAdapter {
 
@@ -80,6 +84,33 @@ public class ExtendedMessagingMessageListenerAdapter extends MessagingMessageLis
 	private Supplier<MeterRegistry> meterRegistrySupplier;
 
 	/**
+	 * Bulkhead registry supplier (may be null, or supply null, when unavailable).
+	 * Resolved on the first message, when the listener container is set.
+	 */
+	private Supplier<JmsListenerBulkheadRegistry> bulkheadRegistrySupplier;
+
+	/**
+	 * Bean name of the container factory that set the listener up (may be null).
+	 */
+	private String factoryBeanName;
+
+	/**
+	 * Bulkhead group set on the container factory (null to resolve it from the
+	 * properties).
+	 */
+	private String bulkheadGroup;
+
+	/**
+	 * If the bulkhead binding was resolved (it may be resolved to none).
+	 */
+	private volatile boolean isBulkheadBindingResolved;
+
+	/**
+	 * Bulkhead binding (null when the listener is not limited).
+	 */
+	private volatile JmsListenerBulkheadBinding bulkheadBinding;
+
+	/**
 	 * Default constructor.
 	 */
 	public ExtendedMessagingMessageListenerAdapter(final JmsConverterProperties jmsConverterProperties, final Collection<Class<?>> nonRetriableExceptions,
@@ -115,6 +146,87 @@ public class ExtendedMessagingMessageListenerAdapter extends MessagingMessageLis
 	public void setMeterRegistrySupplier(
 			final Supplier<MeterRegistry> meterRegistrySupplier) {
 		this.meterRegistrySupplier = meterRegistrySupplier;
+	}
+
+	/**
+	 * Sets the bulkhead registry supplier, used to bound concurrent handler
+	 * executions (resolved on the first message).
+	 *
+	 * @param bulkheadRegistrySupplier Bulkhead registry supplier.
+	 */
+	public void setBulkheadRegistrySupplier(
+			final Supplier<JmsListenerBulkheadRegistry> bulkheadRegistrySupplier) {
+		this.bulkheadRegistrySupplier = bulkheadRegistrySupplier;
+	}
+
+	/**
+	 * Gets the factoryBeanName.
+	 *
+	 * @return The factoryBeanName.
+	 */
+	public String getFactoryBeanName() {
+		return this.factoryBeanName;
+	}
+
+	/**
+	 * Sets the bean name of the container factory that set the listener up (set
+	 * by {@link ExtendedJmsListenerContainerFactory}), used to resolve the
+	 * listener's bulkhead group and reservation.
+	 *
+	 * @param factoryBeanName New factoryBeanName.
+	 */
+	public void setFactoryBeanName(
+			final String factoryBeanName) {
+		this.factoryBeanName = factoryBeanName;
+	}
+
+	/**
+	 * Gets the bulkheadGroup.
+	 *
+	 * @return The bulkheadGroup.
+	 */
+	public String getBulkheadGroup() {
+		return this.bulkheadGroup;
+	}
+
+	/**
+	 * Sets the bulkhead group set on the container factory (set by
+	 * {@link ExtendedJmsListenerContainerFactory}).
+	 *
+	 * @param bulkheadGroup New bulkheadGroup.
+	 */
+	public void setBulkheadGroup(
+			final String bulkheadGroup) {
+		this.bulkheadGroup = bulkheadGroup;
+	}
+
+	/**
+	 * Gets the bulkhead binding of the listener, resolved once (on the first
+	 * message, when the listener container is set) and cached, including when
+	 * there is none. Two first messages at once may both resolve it, to the same
+	 * bulkhead.
+	 *
+	 * @return The bulkhead binding, or null when the listener is not limited (no
+	 *         registry or container, bulkhead disabled or group not limited).
+	 */
+	private JmsListenerBulkheadBinding getBulkheadBinding() {
+		if (!this.isBulkheadBindingResolved) {
+			final JmsListenerBulkheadRegistry bulkheadRegistry = (this.bulkheadRegistrySupplier == null ? null : this.bulkheadRegistrySupplier.get());
+			this.bulkheadBinding = ((bulkheadRegistry == null) || (this.listenerContainer == null) ? null : bulkheadRegistry.bind(this.listenerContainer, this.factoryBeanName,
+					this.bulkheadGroup));
+			this.isBulkheadBindingResolved = true;
+		}
+		return this.bulkheadBinding;
+	}
+
+	/**
+	 * If the listener container stopped (a bulkhead waiter then gives its message
+	 * back to the broker).
+	 *
+	 * @return If the listener container stopped.
+	 */
+	private boolean isListenerContainerStopped() {
+		return (this.listenerContainer != null) && !this.listenerContainer.isRunning();
 	}
 
 	/**
@@ -265,6 +377,18 @@ public class ExtendedMessagingMessageListenerAdapter extends MessagingMessageLis
 	}
 
 	/**
+	 * Drops (acknowledges without processing) a message superseded by a newer
+	 * same-key processing, and counts it.
+	 *
+	 * @param message Message.
+	 */
+	private void dropSupersededMessage(
+			final Message message) {
+		ExtendedMessagingMessageListenerAdapter.LOGGER.debug("Dropping stale message superseded by a newer same-key processing.");
+		this.countDroppedMessage(ExtendedMessagingMessageListenerAdapter.STALE_DROPPED_MESSAGES_METRIC, message);
+	}
+
+	/**
 	 * @see org.springframework.jms.listener.adapter.MessagingMessageListenerAdapter#onMessage(jakarta.jms.Message,
 	 *      jakarta.jms.Session)
 	 */
@@ -276,21 +400,36 @@ public class ExtendedMessagingMessageListenerAdapter extends MessagingMessageLis
 		try {
 
 			// Drops (acknowledges without processing) messages superseded by a newer
-			// same-key processing.
+			// same-key processing. Checked before the bulkhead: it takes no permit.
 			if (this.isSupersededByNewerProcessing(message)) {
-				ExtendedMessagingMessageListenerAdapter.LOGGER.debug("Dropping stale message superseded by a newer same-key processing.");
-				this.countDroppedMessage(ExtendedMessagingMessageListenerAdapter.STALE_DROPPED_MESSAGES_METRIC, message);
+				this.dropSupersededMessage(message);
 			}
 			else {
 
-				// Validates async hops.
+				// Validates async hops (takes no permit either).
 				this.validateAsyncHops(message);
 
-				// Processes the message. The JMS timestamp is producer wall-clock: the
-				// clock skew margin absorbs small divergences from the local clock.
-				final long processingStartTimestamp = DateTimeHelper.toTimestamp(DateTimeHelper.getCurrentLocalDateTime());
-				super.onMessage(message, session);
-				this.recordStaleFilterProcessing(message, processingStartTimestamp);
+				// Takes a bulkhead permit (when the listener is limited), released when the
+				// handler returns or throws, before the catch blocks below run and before
+				// the container commits or rolls back the session. No transaction exists
+				// yet: the listener method's transaction starts inside super.onMessage.
+				final JmsListenerBulkheadBinding actualBulkheadBinding = this.getBulkheadBinding();
+				try (JmsListenerBulkheadPermit permit = (actualBulkheadBinding == null ? null
+						: actualBulkheadBinding.acquire(message, this::isListenerContainerStopped))) {
+
+					// A message that waited may have been superseded meanwhile.
+					if ((permit != null) && permit.hasWaited() && this.isSupersededByNewerProcessing(message)) {
+						this.dropSupersededMessage(message);
+					}
+					else {
+						// Processes the message. The JMS timestamp is producer wall-clock: the
+						// clock skew margin absorbs small divergences from the local clock.
+						final long processingStartTimestamp = DateTimeHelper.toTimestamp(DateTimeHelper.getCurrentLocalDateTime());
+						super.onMessage(message, session);
+						this.recordStaleFilterProcessing(message, processingStartTimestamp);
+					}
+
+				}
 
 			}
 

@@ -18,7 +18,7 @@ import org.springframework.boot.test.context.SpringBootTest.WebEnvironment;
 /**
  * {@link CompositeObjectCloner} Spring wiring test.
  */
-@TestWithContainer(reuse = true)
+@TestWithContainer(reuse = true, stopDelay = ContainerTestHelper.CONTAINER_STOP_DELAY_SECONDS)
 @ExtendWith(StartTestWithContainerExtension.class)
 @SpringBootTest(webEnvironment = WebEnvironment.RANDOM_PORT)
 public class ObjectClonerTest extends ContainerTestHelper {

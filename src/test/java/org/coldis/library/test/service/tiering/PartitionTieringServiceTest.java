@@ -61,7 +61,7 @@ import org.springframework.transaction.annotation.Transactional;
  * range reads, rehydration into the month's partition, the hold, the sweep, the row-delete
  * eviction of warm rows, stale partitions, corrupt blocks and refused formats.
  */
-@TestWithContainer(reuse = true)
+@TestWithContainer(reuse = true, stopDelay = ContainerTestHelper.CONTAINER_STOP_DELAY_SECONDS)
 @ExtendWith(StartTestWithContainerExtension.class)
 @SpringBootTest(webEnvironment = WebEnvironment.RANDOM_PORT)
 public class PartitionTieringServiceTest extends ContainerTestHelper {

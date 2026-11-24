@@ -14,8 +14,9 @@ All under `src/main/java/org/coldis/library/`.
 | Package | Holds |
 |---------|-------|
 | `service/batch` | `BatchService` (endpoints), `BatchServiceComponent`, `BatchExecutor` (persisted as JSONB in the key-value store) |
-| `service/jms` | JMS configuration, dynamic consumer credit, stale-message filtering, see [`doc/dynamic-consumer-credit-scaling.md`](doc/dynamic-consumer-credit-scaling.md) and [`doc/stale-message-filter.md`](doc/stale-message-filter.md) |
+| `service/jms` | JMS configuration, dynamic consumer credit, stale-message filtering, listener bulkhead (bound on concurrent handlers, on by default, `org.coldis.library.service.jms.listener.bulkhead.*`), thread settings, see [`doc/dynamic-consumer-credit-scaling.md`](doc/dynamic-consumer-credit-scaling.md), [`doc/stale-message-filter.md`](doc/stale-message-filter.md), [`doc/jms-listener-bulkhead.md`](doc/jms-listener-bulkhead.md) and [`doc/jms-threads.md`](doc/jms-threads.md) |
 | `service/statistics` | Statistics events and buffered upserts, see [`doc/statistics.md`](doc/statistics.md) |
+| `service/cpu` | Spring glue for the CPU source of per-CPU limits (core `CpuLimits`): pins `org.coldis.library.service.cpus` at startup, see [`doc/cpu-source.md`](doc/cpu-source.md) |
 | `service/warmup` | Opt-in (`org.coldis.library.service.warm-up.enabled`, off by default): `ServiceWarmUp` routines run before the health check passes; calls must follow read paths, only the database is guarded, while `read-only-transaction` is on (the default): a read-only transaction per call, `@Transactional` methods read-only, new read-write transactions refused (entity changes are discarded, not refused); no bean is proxied; see [`doc/service-warm-up.md`](doc/service-warm-up.md) |
 | `service/tiering` | Cold storage tiering: hot Postgres table in front of an S3 cold tier (archive, eviction, backfill, rehydration, scheduled on the batch service). Layered `tiering` (policy: components, properties, registry, schema) → `tiering/repository` (access: hot tier JDBC, tiered reads, S3/folder/memory stores) → `tiering/model` (definitions, keys, column values, codec and key-layout SPIs); nothing lower imports anything higher. See [`doc/cold-storage-tiering.md`](doc/cold-storage-tiering.md) |
 | `service/aspectj`, `transaction` | Aspects and transaction helpers |
@@ -40,6 +41,12 @@ be running.
 - **`-Dnet.bytebuddy.experimental=true`** is needed on a JVM newer than Byte Buddy supports (Java 25
   locally): `hibernate-enhance-maven-plugin` fails without it. Don't work around it by switching
   `JAVA_HOME`. The release plugin already passes the flag.
+- **Never limit JMS load with listener threads** (`listener.executor.concurrency*`, `core-size*`,
+  `unbounded=false`, all deprecated): they limit polling consumers, which can starve or stop every
+  listener until a restart. The listener executor is an unbounded cached pool by default; bound
+  concurrent handlers with `listener.bulkhead.*`. The bulkhead and remoting-threads multipliers
+  multiply the [CPU source](doc/cpu-source.md) (`org.coldis.library.service.cpus`, else the cgroup quota): see
+  [`doc/jms-threads.md`](doc/jms-threads.md).
 - **AspectJ compile-time weaving** (from the parent pom): `@Transactional` and the other aspects
   work on private methods and self-calls. Run through `test`/`install`, not a bare
   `surefire:test` after `test-compile`.
@@ -78,21 +85,21 @@ Git:
 
 ## Workspace
 
-This repository expects `supersim-infrastructure-code-reviewer` checked out next to it
-(`../supersim-infrastructure-code-reviewer`; clone it there from the internal Git host if it's
-missing). The review gates and the local review both live in it.
+This repository expects the internal code-reviewer repository (`<code-reviewer>` below) checked out
+next to it; clone it from the internal Git host if it's missing. The review gates and the local
+review both live in it.
 
 ## Review
 
 The gates are those of `src/agents/review/review.toml`, read from master, so a branch can't
 weaken its own review: `security`, `service-business`, `service-architecture`, `service-coding`,
 `service-test`, all mandatory (no `infrastructure`: a library has no deployment module). What
-each gate stops: `../supersim-infrastructure-code-reviewer/local-review/GATES.md`. The service gates were
+each gate stops: `<code-reviewer>/local-review/GATES.md`. The service gates were
 written for application services: rules about client/common/test subprojects, generated clients,
 integration services, service tiers or migrations apply here only where this library has that
 concept. The PR description is what the gates read as intent: name every default, limit or
 behaviour you change there.
 
 Before pushing, run the local review: follow
-`../supersim-infrastructure-code-reviewer/local-review/REVIEW.md`. It ends with
+`<code-reviewer>/local-review/REVIEW.md`. It ends with
 `local-check attest`. Push only when the developer asks.

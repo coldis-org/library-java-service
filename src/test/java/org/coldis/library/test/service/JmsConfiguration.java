@@ -95,6 +95,22 @@ public class JmsConfiguration {
 
 
 	/**
+	 * Creates the JMS container factory of the bulkhead integration test, whose
+	 * listeners use the bulkhead group listing it in the properties.
+	 *
+	 * @param  connectionFactory Connection factory.
+	 * @return                   The JMS container factory.
+	 */
+	@Bean
+	@Qualifier("jmsListenerBulkheadTestContainerFactory")
+	public DefaultJmsListenerContainerFactory jmsListenerBulkheadTestContainerFactory(
+			final DefaultJmsListenerContainerFactoryConfigurer configurer,
+			final ConnectionFactory connectionFactory) {
+		return this.jmsConfigurationHelper.createJmsListenerContainerFactoryBuilder().configurer(configurer)
+				.connectionFactory(ConnectionFactoryUnwrapper.unwrap(connectionFactory)).build();
+	}
+
+	/**
 	 * Creates the JMS template.
 	 *
 	 * @param  connectionFactory Connection factory.

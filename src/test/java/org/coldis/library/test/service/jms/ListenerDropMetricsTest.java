@@ -22,7 +22,7 @@ import io.micrometer.core.instrument.MeterRegistry;
  * Metrics of messages dropped by the listener adapter. Listener in
  * {@link DroppedMessageTestListener}.
  */
-@TestWithContainer(reuse = true)
+@TestWithContainer(reuse = true, stopDelay = ContainerTestHelper.CONTAINER_STOP_DELAY_SECONDS)
 @ExtendWith(StartTestWithContainerExtension.class)
 @SpringBootTest(webEnvironment = WebEnvironment.RANDOM_PORT)
 @DisplayName("Listener adapter — dropped message metrics")

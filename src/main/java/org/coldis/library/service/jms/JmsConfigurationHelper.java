@@ -3,6 +3,7 @@ package org.coldis.library.service.jms;
 import java.time.Duration;
 import java.util.Arrays;
 import java.util.List;
+import java.util.Objects;
 import java.util.StringJoiner;
 import java.util.concurrent.Executor;
 import java.util.concurrent.ExecutorService;
@@ -10,6 +11,7 @@ import java.util.concurrent.ScheduledExecutorService;
 
 import org.apache.activemq.artemis.api.core.client.ActiveMQClient;
 import org.apache.activemq.artemis.jms.client.ActiveMQConnectionFactory;
+import org.apache.commons.lang3.ObjectUtils;
 import org.apache.commons.lang3.StringUtils;
 import org.apache.commons.lang3.builder.EqualsBuilder;
 import org.coldis.library.helper.ObjectHelper;
@@ -35,6 +37,7 @@ import org.springframework.stereotype.Component;
 import org.springframework.util.ErrorHandler;
 
 import io.micrometer.core.instrument.MeterRegistry;
+import io.micrometer.core.instrument.binder.jvm.ExecutorServiceMetrics;
 import jakarta.jms.ConnectionFactory;
 
 /**
@@ -52,6 +55,25 @@ public class JmsConfigurationHelper {
 	 * JDK packages allowed by default for object message deserialization.
 	 */
 	private static final List<String> DEFAULT_DESERIALIZATION_ALLOWED_JAVA_PACKAGES = List.of("java.lang", "java.util", "java.time", "java.math");
+
+	/**
+	 * Core size per processor of a bounded listener executor
+	 * ({@code unbounded=false}) when neither {@code core-size} nor
+	 * {@code core-size-cpu-multiplier} is set (the previous default).
+	 */
+	public static final double DEFAULT_BOUNDED_CORE_SIZE_CPU_MULTIPLIER = 20D;
+
+	/** Metrics name of the listener executor. */
+	public static final String LISTENER_EXECUTOR_METRICS_NAME = "jms.listener";
+
+	/** Metrics name of the Artemis global executor. */
+	public static final String GLOBAL_EXECUTOR_METRICS_NAME = "jms.global";
+
+	/** Metrics name of the Artemis global scheduled executor. */
+	public static final String GLOBAL_SCHEDULED_EXECUTOR_METRICS_NAME = "jms.global.scheduled";
+
+	/** Metrics name of the Artemis global flow control executor. */
+	public static final String GLOBAL_FLOW_CONTROL_EXECUTOR_METRICS_NAME = "jms.global.flow-control";
 
 	/** JMS global thread pool. */
 	private ExecutorService globalThreadPool;
@@ -89,16 +111,53 @@ public class JmsConfigurationHelper {
 	@Autowired(required = false)
 	private MeterRegistry meterRegistry;
 
+	/**
+	 * If the JMS listener bulkhead is enabled (only used to warn about the legacy
+	 * executor concurrency limit; injected before the executor setter).
+	 */
+	@Value("${org.coldis.library.service.jms.listener.bulkhead.enabled:true}")
+	private Boolean isBulkheadEnabled;
+
 	/** Application base packages (comma separated). */
 	@Value("${org.coldis.configuration.base-package:}")
 	private String basePackages;
 
 	/**
-	 * Gets the JMS listener executor.
+	 * Logs a WARN when a deprecated setting is set.
 	 *
-	 * @return
+	 * @param key    Property key.
+	 * @param value  Value (null when not set).
+	 * @param reason What happens to it and what to use instead.
+	 */
+	private static void warnDeprecated(
+			final String key,
+			final Object value,
+			final String reason) {
+		if (value != null) {
+			JmsConfigurationHelper.LOGGER.warn("{} is deprecated and set ({}): {}", key, value, reason);
+		}
+	}
+
+	/**
+	 * Registers the metrics of a JMS executor (Micrometer
+	 * {@code executor.*}, tag {@code name}), when a meter registry exists.
 	 *
-	 * @return The JMS listener executor.
+	 * @param executor Executor.
+	 * @param name     Stable executor name.
+	 */
+	private void bindExecutorMetrics(
+			final Executor executor,
+			final String name) {
+		if ((this.meterRegistry != null) && (executor instanceof final ExecutorService executorService)) {
+			new ExecutorServiceMetrics(executorService, name, List.of()).bindTo(this.meterRegistry);
+		}
+	}
+
+	/**
+	 * Sets the Artemis client global thread pools (general, scheduled and flow
+	 * control), when custom pools are enabled. Sizes are unchanged;
+	 * {@code priority}, {@code parallelism*} and {@code min-runnable*} are
+	 * deprecated (still honoured, WARN when set).
 	 */
 	@Autowired
 	public void setJmsGlobalThreadPools(
@@ -106,7 +165,7 @@ public class JmsConfigurationHelper {
 			final Boolean useCustomPools,
 			@Value("${org.coldis.library.service.jms.global.executor.name:jms-global-thread}")
 			final String name,
-			@Value("${org.coldis.library.service.jms.global.executor.priority:5}")
+			@Value("${org.coldis.library.service.jms.global.executor.priority:}")
 			final Integer priority,
 			@Value("${org.coldis.library.service.jms.global.executor.virtual:false}")
 			final Boolean virtual,
@@ -130,7 +189,7 @@ public class JmsConfigurationHelper {
 			final Integer keepAliveSeconds,
 			@Value("${org.coldis.library.service.jms.global.scheduled.executor.name:jms-global-scheduled-thread}")
 			final String scheduledName,
-			@Value("${org.coldis.library.service.jms.global.scheduled.executor.priority:5}")
+			@Value("${org.coldis.library.service.jms.global.scheduled.executor.priority:}")
 			final Integer scheduledPriority,
 			@Value("${org.coldis.library.service.jms.global.scheduled.executor.virtual:false}")
 			final Boolean scheduledVirtual,
@@ -140,7 +199,7 @@ public class JmsConfigurationHelper {
 			final Double scheduledCorePoolSizeCpuMultiplier,
 			@Value("${org.coldis.library.service.jms.global.flow-control.executor.name:${org.coldis.library.service.jms.global.executor.name:jms-global-flow-control-thread}}")
 			final String flowControlName,
-			@Value("${org.coldis.library.service.jms.global.flow-control.executor.priority:5}")
+			@Value("${org.coldis.library.service.jms.global.flow-control.executor.priority:}")
 			final Integer flowControlPriority,
 			@Value("${org.coldis.library.service.jms.global.flow-control.executor.virtual:false}")
 			final Boolean flowControlVirtual,
@@ -165,41 +224,108 @@ public class JmsConfigurationHelper {
 			
 	) {
 		if (useCustomPools) {
+			final String priorityReason = "thread priority has no effect on Linux without -XX:ThreadPriorityPolicy=1 (doc/jms-threads.md).";
+			JmsConfigurationHelper.warnDeprecated("org.coldis.library.service.jms.global.executor.priority", priority, priorityReason);
+			JmsConfigurationHelper.warnDeprecated("org.coldis.library.service.jms.global.scheduled.executor.priority", scheduledPriority, priorityReason);
+			JmsConfigurationHelper.warnDeprecated("org.coldis.library.service.jms.global.flow-control.executor.priority", flowControlPriority, priorityReason);
+			final String forkJoinReason = "it turns the pool into a fork-join pool that does not compensate for blocking calls (doc/jms-threads.md).";
+			JmsConfigurationHelper.warnDeprecated("org.coldis.library.service.jms.global.executor.parallelism(-cpu-multiplier)",
+					ObjectUtils.firstNonNull(parallelism, parallelismCpuMultiplier), forkJoinReason);
+			JmsConfigurationHelper.warnDeprecated("org.coldis.library.service.jms.global.executor.min-runnable(-cpu-multiplier)",
+					ObjectUtils.firstNonNull(minRunnable, minRunnableCpuMultiplier), forkJoinReason);
+			JmsConfigurationHelper.warnDeprecated("org.coldis.library.service.jms.global.flow-control.executor.parallelism(-cpu-multiplier)",
+					ObjectUtils.firstNonNull(flowControlParallelism, flowControlParallelismCpuMultiplier), forkJoinReason);
+			JmsConfigurationHelper.warnDeprecated("org.coldis.library.service.jms.global.flow-control.executor.min-runnable(-cpu-multiplier)",
+					ObjectUtils.firstNonNull(flowControlMinRunnable, flowControlMinRunnableCpuMultiplier), forkJoinReason);
+			final boolean isCreated = (this.globalThreadPool != null);
 			this.globalThreadPool = (this.globalThreadPool == null
-					? (ExecutorService) new DynamicThreadPoolFactory().withName(name).withPriority(priority).withVirtual(virtual).withParallelism(parallelism)
+					? (ExecutorService) new DynamicThreadPoolFactory().withName(name)
+							.withPriority(Objects.requireNonNullElse(priority, Thread.NORM_PRIORITY)).withVirtual(virtual).withParallelism(parallelism)
 							.withParallelismCpuMultiplier(parallelismCpuMultiplier).withMinRunnable(minRunnable)
 							.withMinRunnableCpuMultiplier(minRunnableCpuMultiplier).withCorePoolSize(corePoolSize)
 							.withCorePoolSizeCpuMultiplier(corePoolSizeCpuMultiplier).withMaxPoolSize(maxPoolSize)
 							.withMaxPoolSizeCpuMultiplier(maxPoolSizeCpuMultiplier).withKeepAlive(Duration.ofSeconds(keepAliveSeconds)).build()
 					: this.globalThreadPool);
 			this.globalScheduledThreadPool = (this.globalScheduledThreadPool == null
-					? (ScheduledExecutorService) new DynamicThreadPoolFactory().withName(scheduledName).withScheduled(true).withPriority(scheduledPriority)
-							.withVirtual(scheduledVirtual).withCorePoolSize(scheduledCorePoolSize)
-							.withCorePoolSizeCpuMultiplier(scheduledCorePoolSizeCpuMultiplier).build()
+					? (ScheduledExecutorService) new DynamicThreadPoolFactory().withName(scheduledName).withScheduled(true)
+							.withPriority(Objects.requireNonNullElse(scheduledPriority, Thread.NORM_PRIORITY)).withVirtual(scheduledVirtual)
+							.withCorePoolSize(scheduledCorePoolSize).withCorePoolSizeCpuMultiplier(scheduledCorePoolSizeCpuMultiplier).build()
 					: this.globalScheduledThreadPool);
 			this.globalFlowControlThreadPool = (this.globalFlowControlThreadPool == null ? (ExecutorService) new DynamicThreadPoolFactory()
-					.withName(flowControlName).withPriority(flowControlPriority).withVirtual(flowControlVirtual).withParallelism(flowControlParallelism)
+					.withName(flowControlName).withPriority(Objects.requireNonNullElse(flowControlPriority, Thread.NORM_PRIORITY))
+					.withVirtual(flowControlVirtual).withParallelism(flowControlParallelism)
 					.withParallelismCpuMultiplier(flowControlParallelismCpuMultiplier).withMinRunnable(flowControlMinRunnable)
 					.withMinRunnableCpuMultiplier(flowControlMinRunnableCpuMultiplier).withCorePoolSize(flowControlCorePoolSize)
 					.withCorePoolSizeCpuMultiplier(flowControlCorePoolSizeCpuMultiplier).withMaxPoolSize(flowControlMaxPoolSize)
 					.withMaxPoolSizeCpuMultiplier(flowControlMaxPoolSizeCpuMultiplier).withKeepAlive(Duration.ofSeconds(flowControlKeepAliveSeconds)).build()
 					: this.globalFlowControlThreadPool);
+			if (!isCreated) {
+				this.bindExecutorMetrics(this.globalThreadPool, JmsConfigurationHelper.GLOBAL_EXECUTOR_METRICS_NAME);
+				this.bindExecutorMetrics(this.globalScheduledThreadPool, JmsConfigurationHelper.GLOBAL_SCHEDULED_EXECUTOR_METRICS_NAME);
+				this.bindExecutorMetrics(this.globalFlowControlThreadPool, JmsConfigurationHelper.GLOBAL_FLOW_CONTROL_EXECUTOR_METRICS_NAME);
+			}
 			ActiveMQClient.injectPools(this.globalThreadPool, this.globalScheduledThreadPool, this.globalFlowControlThreadPool);
 		}
 	}
 
 	/**
-	 * Gets the JMS listener executor.
-	 *
-	 * @return
-	 *
-	 * @return The JMS listener executor.
+	 * Creates the legacy listener executor: a {@link SimpleAsyncTaskExecutor}
+	 * whose concurrency limit counts polling consumers. Deprecated (see the WARN
+	 * it logs).
+	 */
+	private void setLegacyThrottledJmsListenerExecutor(
+			final String name,
+			final Integer priority,
+			final Boolean virtual,
+			final Integer concurrency,
+			final Double concurrencyCpuMultiplier) {
+		final int actualConcurrency = (concurrencyCpuMultiplier == null ? concurrency
+				: (int) Math.ceil(Runtime.getRuntime().availableProcessors() * concurrencyCpuMultiplier));
+		this.jmsListenerExecutor = new SimpleAsyncTaskExecutor(name);
+		((SimpleAsyncTaskExecutor) this.jmsListenerExecutor).setConcurrencyLimit(actualConcurrency <= 0 ? -1 : actualConcurrency);
+		((SimpleAsyncTaskExecutor) this.jmsListenerExecutor).setThreadNamePrefix(name);
+		((SimpleAsyncTaskExecutor) this.jmsListenerExecutor).setVirtualThreads(virtual);
+		((SimpleAsyncTaskExecutor) this.jmsListenerExecutor).setThreadPriority(priority);
+		JmsConfigurationHelper.LOGGER.info("JMS listener executor created with concurrency limit of {} and thread name prefix of {}", actualConcurrency,
+				name);
+		if (actualConcurrency > 0) {
+			JmsConfigurationHelper.LOGGER.warn("org.coldis.library.service.jms.listener.executor.concurrency(-cpu-multiplier) is deprecated and set ({}). "
+					+ "It limits polling consumers, not handlers: a consumer that has to start or resubmit another consumer waits for a slot while holding "
+					+ "its own, so listeners can starve or stop processing until a restart. Remove it and bound concurrent handlers with "
+					+ "org.coldis.library.service.jms.listener.bulkhead.* instead (doc/jms-listener-bulkhead.md).", actualConcurrency);
+			if (Boolean.TRUE.equals(this.isBulkheadEnabled)) {
+				JmsConfigurationHelper.LOGGER.warn("The JMS listener bulkhead is enabled together with the legacy listener executor concurrency limit, "
+						+ "which can still stop listeners whatever the bulkhead does: remove the legacy limit.");
+			}
+		}
+	}
+
+	/**
+	 * Sets the JMS listener executor: the threads of the listener containers'
+	 * polling consumers, which also run the handlers. Concurrent handlers are
+	 * bounded by the listener bulkhead ({@code listener.bulkhead.*}), not by this
+	 * executor (doc/jms-threads.md).
+	 * <ul>
+	 * <li>Default ({@code unbounded=true}): a cached pool, no core threads, no
+	 * maximum, idle threads released after {@code keep-alive-seconds},
+	 * {@code virtual} respected. {@code core-size*}, {@code parallelism*} and
+	 * {@code min-runnable*} are ignored, with a WARN.</li>
+	 * <li>{@code unbounded=false}: the previous bounded pool, unchanged
+	 * ({@code core-size*} threads, {@value #DEFAULT_BOUNDED_CORE_SIZE_CPU_MULTIPLIER}
+	 * per processor when not set; a fork-join pool with {@code parallelism*}),
+	 * with a WARN that a thread cap can starve listener containers.</li>
+	 * <li>{@code concurrency*} set (deprecated): a {@link SimpleAsyncTaskExecutor}
+	 * limited to that many consumers, with a WARN.</li>
+	 * </ul>
+	 * Deprecated, still honoured where they had an effect, WARN when set:
+	 * {@code concurrency*}, {@code core-size*}, {@code parallelism*},
+	 * {@code min-runnable*}, {@code priority} (no effect on Linux).
 	 */
 	@Autowired
 	public void setJmsListenerExecutor(
 			@Value("${org.coldis.library.service.jms.listener.executor.name:jms-listener-thread}")
 			final String name,
-			@Value("${org.coldis.library.service.jms.listener.executor.priority:5}")
+			@Value("${org.coldis.library.service.jms.listener.executor.priority:}")
 			final Integer priority,
 			@Value("${org.coldis.library.service.jms.listener.executor.virtual:false}")
 			final Boolean virtual,
@@ -217,30 +343,85 @@ public class JmsConfigurationHelper {
 			final Double minRunnableCpuMultiplier,
 			@Value("${org.coldis.library.service.jms.listener.executor.core-size:}")
 			final Integer corePoolSize,
-			@Value("${org.coldis.library.service.jms.listener.executor.core-size-cpu-multiplier:20}")
+			@Value("${org.coldis.library.service.jms.listener.executor.core-size-cpu-multiplier:}")
 			final Double corePoolSizeCpuMultiplier,
 			@Value("${org.coldis.library.service.jms.listener.executor.keep-alive-seconds:60}")
-			final Integer keepAliveSeconds) {
-		if ((concurrency == null) && (concurrencyCpuMultiplier == null)) {
+			final Integer keepAliveSeconds,
+			@Value("${org.coldis.library.service.jms.listener.executor.unbounded:true}")
+			final Boolean isUnbounded) {
+		JmsConfigurationHelper.warnDeprecated("org.coldis.library.service.jms.listener.executor.priority", priority,
+				"thread priority has no effect on Linux without -XX:ThreadPriorityPolicy=1, nor on virtual threads (doc/jms-threads.md).");
+		final Integer actualPriority = Objects.requireNonNullElse(priority, Thread.NORM_PRIORITY);
+		final boolean isBounded = Boolean.FALSE.equals(isUnbounded);
+		if ((concurrency != null) || (concurrencyCpuMultiplier != null)) {
+			this.setLegacyThrottledJmsListenerExecutor(name, actualPriority, virtual, concurrency, concurrencyCpuMultiplier);
+		}
+		else if (isBounded) {
+			final String boundedReason = "honoured only because unbounded=false; bound concurrent handlers with listener.bulkhead.* instead.";
+			JmsConfigurationHelper.warnDeprecated("org.coldis.library.service.jms.listener.executor.core-size(-cpu-multiplier)",
+					ObjectUtils.firstNonNull(corePoolSize, corePoolSizeCpuMultiplier), boundedReason);
+			JmsConfigurationHelper.warnDeprecated("org.coldis.library.service.jms.listener.executor.parallelism(-cpu-multiplier)",
+					ObjectUtils.firstNonNull(parallelism, parallelismCpuMultiplier), boundedReason);
+			JmsConfigurationHelper.warnDeprecated("org.coldis.library.service.jms.listener.executor.min-runnable(-cpu-multiplier)",
+					ObjectUtils.firstNonNull(minRunnable, minRunnableCpuMultiplier), boundedReason);
+			final Double actualCorePoolSizeCpuMultiplier = ((corePoolSize == null) && (corePoolSizeCpuMultiplier == null)
+					? Double.valueOf(JmsConfigurationHelper.DEFAULT_BOUNDED_CORE_SIZE_CPU_MULTIPLIER)
+					: corePoolSizeCpuMultiplier);
+			JmsConfigurationHelper.LOGGER.warn("The JMS listener executor is bounded (org.coldis.library.service.jms.listener.executor.unbounded=false). "
+					+ "A thread cap can starve listener containers: idle pollers hold threads busy queues need. Bound concurrent handlers with "
+					+ "org.coldis.library.service.jms.listener.bulkhead.* instead (doc/jms-threads.md).");
 			this.jmsListenerExecutor = (this.jmsListenerExecutor == null
-					? (ExecutorService) new DynamicThreadPoolFactory().withName(name).withPriority(priority).withVirtual(virtual).withParallelism(parallelism)
-							.withParallelismCpuMultiplier(parallelismCpuMultiplier).withMinRunnable(minRunnable)
+					? (ExecutorService) new DynamicThreadPoolFactory().withName(name).withPriority(actualPriority).withVirtual(virtual)
+							.withParallelism(parallelism).withParallelismCpuMultiplier(parallelismCpuMultiplier).withMinRunnable(minRunnable)
 							.withMinRunnableCpuMultiplier(minRunnableCpuMultiplier).withCorePoolSize(corePoolSize)
-							.withCorePoolSizeCpuMultiplier(corePoolSizeCpuMultiplier).withMaxPoolSize(corePoolSize)
-							.withMaxPoolSizeCpuMultiplier(corePoolSizeCpuMultiplier).withKeepAlive(Duration.ofSeconds(keepAliveSeconds)).build()
+							.withCorePoolSizeCpuMultiplier(actualCorePoolSizeCpuMultiplier).withMaxPoolSize(corePoolSize)
+							.withMaxPoolSizeCpuMultiplier(actualCorePoolSizeCpuMultiplier).withKeepAlive(Duration.ofSeconds(keepAliveSeconds)).build()
 					: this.jmsListenerExecutor);
 		}
 		else {
-			final int actualConcurrency = (concurrencyCpuMultiplier == null ? concurrency
-					: (int) Math.ceil(Runtime.getRuntime().availableProcessors() * concurrencyCpuMultiplier));
-			this.jmsListenerExecutor = new SimpleAsyncTaskExecutor(name);
-			((SimpleAsyncTaskExecutor) this.jmsListenerExecutor).setConcurrencyLimit(actualConcurrency <= 0 ? -1 : actualConcurrency);
-			((SimpleAsyncTaskExecutor) this.jmsListenerExecutor).setThreadNamePrefix(name);
-			((SimpleAsyncTaskExecutor) this.jmsListenerExecutor).setVirtualThreads(virtual);
-			((SimpleAsyncTaskExecutor) this.jmsListenerExecutor).setThreadPriority(priority);
-			LOGGER.info("JMS listener executor created with concurrency limit of {} and thread name prefix of {}",
-					actualConcurrency, name);
+			final String ignoredReason = "ignored: the listener executor is unbounded (a cached pool with no core threads); bound concurrent handlers "
+					+ "with listener.bulkhead.* instead.";
+			JmsConfigurationHelper.warnDeprecated("org.coldis.library.service.jms.listener.executor.core-size(-cpu-multiplier)",
+					ObjectUtils.firstNonNull(corePoolSize, corePoolSizeCpuMultiplier), ignoredReason);
+			JmsConfigurationHelper.warnDeprecated("org.coldis.library.service.jms.listener.executor.parallelism(-cpu-multiplier)",
+					ObjectUtils.firstNonNull(parallelism, parallelismCpuMultiplier), ignoredReason);
+			JmsConfigurationHelper.warnDeprecated("org.coldis.library.service.jms.listener.executor.min-runnable(-cpu-multiplier)",
+					ObjectUtils.firstNonNull(minRunnable, minRunnableCpuMultiplier), ignoredReason);
+			this.jmsListenerExecutor = (this.jmsListenerExecutor == null
+					? (ExecutorService) new DynamicThreadPoolFactory().withName(name).withPriority(actualPriority).withVirtual(virtual).withCorePoolSize(0)
+							.withKeepAlive(Duration.ofSeconds(keepAliveSeconds)).build()
+					: this.jmsListenerExecutor);
 		}
+		this.bindExecutorMetrics(this.jmsListenerExecutor, JmsConfigurationHelper.LISTENER_EXECUTOR_METRICS_NAME);
+	}
+
+	/**
+	 * Sets the JMS listener executor (the signature before the {@code unbounded}
+	 * setting). Behaves as the current setter with {@code unbounded=true}, the
+	 * default: the pool is unbounded and the sizes passed here are ignored, with
+	 * a WARN. To keep a bounded pool, call the current setter with
+	 * {@code unbounded=false}.
+	 *
+	 * @deprecated Use
+	 *                 {@link #setJmsListenerExecutor(String, Integer, Boolean, Integer, Double, Integer, Double, Integer, Double, Integer, Double, Integer, Boolean)};
+	 *                 bound concurrent handlers with the listener bulkhead.
+	 */
+	@Deprecated
+	public void setJmsListenerExecutor(
+			final String name,
+			final Integer priority,
+			final Boolean virtual,
+			final Integer concurrency,
+			final Double concurrencyCpuMultiplier,
+			final Integer parallelism,
+			final Double parallelismCpuMultiplier,
+			final Integer minRunnable,
+			final Double minRunnableCpuMultiplier,
+			final Integer corePoolSize,
+			final Double corePoolSizeCpuMultiplier,
+			final Integer keepAliveSeconds) {
+		this.setJmsListenerExecutor(name, priority, virtual, concurrency, concurrencyCpuMultiplier, parallelism, parallelismCpuMultiplier, minRunnable,
+				minRunnableCpuMultiplier, corePoolSize, corePoolSizeCpuMultiplier, keepAliveSeconds, true);
 	}
 
 	/**

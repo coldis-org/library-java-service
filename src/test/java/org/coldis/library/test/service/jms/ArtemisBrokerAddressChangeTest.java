@@ -57,7 +57,7 @@ import jakarta.jms.Session;
  * containers of its fork would stop, leaving the next classes with a cached Spring context that
  * points at the old container ports.
  */
-@TestWithContainer(reuse = true)
+@TestWithContainer(reuse = true, stopDelay = ContainerTestHelper.CONTAINER_STOP_DELAY_SECONDS)
 @ExtendWith(StartTestWithContainerExtension.class)
 @DisplayName("Artemis broker address change — pooled connections")
 public class ArtemisBrokerAddressChangeTest extends ContainerTestHelper {
@@ -80,7 +80,14 @@ public class ArtemisBrokerAddressChangeTest extends ContainerTestHelper {
 		}
 		final String query = properties.getProperty("spring.artemis.broker-url-query-default");
 		Assertions.assertNotNull(query, "spring.artemis.broker-url-query-default must be set in service.properties");
-		return query.replaceAll("\\$\\{[^:}]+:([^}]*)\\}", "$1");
+		// Resolves the innermost placeholder defaults first, until none is left (they nest).
+		String resolvedQuery = query;
+		String previousQuery = null;
+		while (!resolvedQuery.equals(previousQuery)) {
+			previousQuery = resolvedQuery;
+			resolvedQuery = resolvedQuery.replaceAll("\\$\\{[^:{}$]+:([^{}$]*)\\}", "$1");
+		}
+		return resolvedQuery;
 	}
 
 	/**

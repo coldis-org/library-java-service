@@ -28,7 +28,7 @@ import jakarta.jms.ConnectionFactory;
  * queue, the cache, and an unreadable depth; and {@link QueueDepthComponent}'s choice of connection
  * factory (the given one, else the unique or primary one).
  */
-@TestWithContainer(reuse = true)
+@TestWithContainer(reuse = true, stopDelay = ContainerTestHelper.CONTAINER_STOP_DELAY_SECONDS)
 @ExtendWith(StartTestWithContainerExtension.class)
 @SpringBootTest(webEnvironment = WebEnvironment.RANDOM_PORT)
 @DisplayName("ArtemisQueueDepthReader and QueueDepthComponent — integration")

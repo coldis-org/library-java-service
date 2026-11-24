@@ -13,15 +13,13 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.beans.factory.config.BeanDefinition;
 import org.springframework.beans.factory.support.BeanDefinitionRegistry;
 import org.springframework.beans.factory.support.BeanDefinitionRegistryPostProcessor;
+import org.springframework.beans.factory.support.StaticListableBeanFactory;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.context.annotation.Role;
 import org.springframework.jms.annotation.JmsListenerAnnotationBeanPostProcessor;
 import org.springframework.jms.config.JmsListenerConfigUtils;
 import org.springframework.jms.config.MethodJmsListenerEndpoint;
-import org.springframework.jms.listener.AbstractMessageListenerContainer;
-import org.springframework.jms.listener.MessageListenerContainer;
-import org.springframework.jms.listener.adapter.MessagingMessageListenerAdapter;
 
 import io.micrometer.core.instrument.MeterRegistry;
 
@@ -78,6 +76,7 @@ public class EnhancedJmsBootstrapConfiguration implements BeanDefinitionRegistry
 			final JmsConverterProperties jmsConverterProperties,
 			final ObjectProvider<StaleMessageFilterService> staleMessageFilterServiceProvider,
 			final ObjectProvider<MeterRegistry> meterRegistryProvider,
+			final ObjectProvider<JmsListenerBulkheadRegistry> bulkheadRegistryProvider,
 			@Value(value = "#{'${org.coldis.library.service.jms.non-retriable-exceptions:}'.split(',')}")
 			List<String> nonRetriableExceptionsNames) {
 		final List<Class<?>> nonRetriableExceptions = EnhancedJmsBootstrapConfiguration.resolveNonRetriableExceptions(nonRetriableExceptionsNames);
@@ -88,37 +87,36 @@ public class EnhancedJmsBootstrapConfiguration implements BeanDefinitionRegistry
 			 */
 			@Override
 			protected MethodJmsListenerEndpoint createMethodJmsListenerEndpoint() {
-				return new MethodJmsListenerEndpoint() {
-
-
-					/**
-					 * @see org.springframework.jms.config.MethodJmsListenerEndpoint#createMessageListenerInstance()
-					 */
-					@Override
-					protected MessagingMessageListenerAdapter createMessageListenerInstance() {
-						final ExtendedMessagingMessageListenerAdapter messageListener = new ExtendedMessagingMessageListenerAdapter(jmsConverterProperties,
-								nonRetriableExceptions, staleMessageFilterServiceProvider.getIfAvailable());
-						// Resolved on use: the registry must not be created this early.
-						messageListener.setMeterRegistrySupplier(meterRegistryProvider::getIfAvailable);
-						return messageListener;
-					}
-
-					/**
-					 * @see org.springframework.jms.config.MethodJmsListenerEndpoint#createMessageListener(org.springframework.jms.listener.MessageListenerContainer)
-					 */
-					@Override
-					protected MessagingMessageListenerAdapter createMessageListener(
-							final MessageListenerContainer container) {
-						final MessagingMessageListenerAdapter messageListener = super.createMessageListener(container);
-						if ((messageListener instanceof final ExtendedMessagingMessageListenerAdapter extendedMessageListener)
-								&& (container instanceof final AbstractMessageListenerContainer listenerContainer)) {
-							extendedMessageListener.setListenerContainer(listenerContainer);
-						}
-						return messageListener;
-					}
-				};
+				return new ExtendedMethodJmsListenerEndpoint(jmsConverterProperties, nonRetriableExceptions, staleMessageFilterServiceProvider::getIfAvailable,
+						meterRegistryProvider::getIfAvailable, bulkheadRegistryProvider::getIfAvailable);
 			}
 		};
+	}
+
+	/**
+	 * Creates the listener annotation processor without the bulkhead registry
+	 * (the signature before the JMS listener bulkhead). Its listeners are never
+	 * limited by the bulkhead.
+	 *
+	 * @param      jmsConverterProperties            JMS converter properties.
+	 * @param      staleMessageFilterServiceProvider Stale message filter service
+	 *                                                   provider.
+	 * @param      meterRegistryProvider             Meter registry provider.
+	 * @param      nonRetriableExceptionsNames       Non-retriable exception class
+	 *                                                   names.
+	 * @return                                       The processor.
+	 * @deprecated                                   Use
+	 *                                                   {@link #enhancedJmsListenerAnnotationProcessor(JmsConverterProperties, ObjectProvider, ObjectProvider, ObjectProvider, List)},
+	 *                                                   the bean Spring creates.
+	 */
+	@Deprecated
+	public JmsListenerAnnotationBeanPostProcessor enhancedJmsListenerAnnotationProcessor(
+			final JmsConverterProperties jmsConverterProperties,
+			final ObjectProvider<StaleMessageFilterService> staleMessageFilterServiceProvider,
+			final ObjectProvider<MeterRegistry> meterRegistryProvider,
+			final List<String> nonRetriableExceptionsNames) {
+		return this.enhancedJmsListenerAnnotationProcessor(jmsConverterProperties, staleMessageFilterServiceProvider, meterRegistryProvider,
+				new StaticListableBeanFactory().getBeanProvider(JmsListenerBulkheadRegistry.class), nonRetriableExceptionsNames);
 	}
 
 }

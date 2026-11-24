@@ -18,7 +18,7 @@ import org.springframework.boot.test.context.SpringBootTest.WebEnvironment;
  * Tests {@link StatisticsContextConfigurationServiceComponent}: exact-match lookup, ancestor
  * fallback (drop the suffix after the last dash) and cache eviction on upsert.
  */
-@TestWithContainer(reuse = true)
+@TestWithContainer(reuse = true, stopDelay = ContainerTestHelper.CONTAINER_STOP_DELAY_SECONDS)
 @ExtendWith(StartTestWithContainerExtension.class)
 @SpringBootTest(webEnvironment = WebEnvironment.RANDOM_PORT)
 public class StatisticsContextConfigurationServiceComponentTest extends ContainerTestHelper {

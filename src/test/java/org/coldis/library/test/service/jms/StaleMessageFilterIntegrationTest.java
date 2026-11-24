@@ -28,7 +28,7 @@ import io.micrometer.core.instrument.MeterRegistry;
 /**
  * Stale message filter integration test (through the JMS listener adapter).
  */
-@TestWithContainer(reuse = true)
+@TestWithContainer(reuse = true, stopDelay = ContainerTestHelper.CONTAINER_STOP_DELAY_SECONDS)
 @ExtendWith(StartTestWithContainerExtension.class)
 @SpringBootTest(webEnvironment = WebEnvironment.RANDOM_PORT)
 @DisplayName("Stale message filter — through the listener adapter")

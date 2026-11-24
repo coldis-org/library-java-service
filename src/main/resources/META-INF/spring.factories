@@ -1,0 +1,3 @@
+org.springframework.boot.env.EnvironmentPostProcessor=\
+  org.coldis.library.service.cpu.CpuEnvironmentPostProcessor,\
+  org.coldis.library.service.jms.JmsThreadsEnvironmentPostProcessor

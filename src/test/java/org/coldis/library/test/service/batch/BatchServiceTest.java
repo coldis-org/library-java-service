@@ -44,7 +44,7 @@ import ch.qos.logback.core.read.ListAppender;
 /**
  * Batch record test.
  */
-@TestWithContainer(reuse = true)
+@TestWithContainer(reuse = true, stopDelay = ContainerTestHelper.CONTAINER_STOP_DELAY_SECONDS)
 @ExtendWith(StartTestWithContainerExtension.class)
 @SpringBootTest(webEnvironment = WebEnvironment.RANDOM_PORT)
 public class BatchServiceTest extends ContainerTestHelper {

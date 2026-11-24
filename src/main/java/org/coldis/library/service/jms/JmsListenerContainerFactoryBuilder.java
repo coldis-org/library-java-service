@@ -15,7 +15,8 @@ import org.springframework.util.backoff.ExponentialBackOff;
 import jakarta.jms.ConnectionFactory;
 
 /**
- * Fluent builder for creating a Spring DefaultJmsListenerContainerFactory.
+ * Fluent builder for creating a Spring DefaultJmsListenerContainerFactory (an
+ * {@link ExtendedJmsListenerContainerFactory}).
  */
 public final class JmsListenerContainerFactoryBuilder {
 
@@ -39,6 +40,7 @@ public final class JmsListenerContainerFactoryBuilder {
 	private DestinationResolver destinationResolver;
 	private MessageConverter messageConverter;
 	private ErrorHandler errorHandler;
+	private String bulkheadGroup;
 
 	public JmsListenerContainerFactoryBuilder() {
 	}
@@ -147,10 +149,27 @@ public final class JmsListenerContainerFactoryBuilder {
 	}
 
 	/**
-	 * Builds the DefaultJmsListenerContainerFactory with the provided settings.
+	 * Sets the JMS listener bulkhead group of the factory's listeners. Wins over
+	 * the group whose {@code groups.<group>.factories} property lists the factory
+	 * (see {@link JmsListenerBulkheadRegistry}).
+	 *
+	 * @param  bulkheadGroup Bulkhead group.
+	 * @return               This builder.
+	 */
+	public JmsListenerContainerFactoryBuilder bulkheadGroup(
+			final String bulkheadGroup) {
+		this.bulkheadGroup = bulkheadGroup;
+		return this;
+	}
+
+	/**
+	 * Builds the listener container factory with the provided settings: an
+	 * {@link ExtendedJmsListenerContainerFactory}, whose containers know the
+	 * factory bean name and bulkhead group.
 	 */
 	public DefaultJmsListenerContainerFactory build() {
-		final DefaultJmsListenerContainerFactory factory = new DefaultJmsListenerContainerFactory();
+		final ExtendedJmsListenerContainerFactory factory = new ExtendedJmsListenerContainerFactory();
+		factory.setBulkheadGroup(this.bulkheadGroup);
 
 		// configurator + unwrapped factory
 		if ((this.configurer != null)) {

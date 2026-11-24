@@ -60,7 +60,7 @@ import com.github.benmanes.caffeine.cache.Caffeine;
  * cross-instance lock (two cache managers on the same Redis), evictions during loads, the hit path structure (one
  * delegate read) and the hit path cost against the plain caches (logged only).
  */
-@TestWithContainer(reuse = true)
+@TestWithContainer(reuse = true, stopDelay = ContainerTestHelper.CONTAINER_STOP_DELAY_SECONDS)
 @ExtendWith(StartTestWithContainerExtension.class)
 @SpringBootTest(webEnvironment = WebEnvironment.RANDOM_PORT)
 public class CacheSingleFlightTest extends ContainerTestHelper {
