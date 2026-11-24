@@ -492,6 +492,10 @@ public class StaleMessageFilterServiceTest extends ContainerTestHelper {
 		Thread.sleep(50);
 		instanceA.recordProcessing(firstQueue, "key", now);
 		instanceA.synchronize();
+		final JdbcTemplate jdbcTemplate = new JdbcTemplate(this.dataSource);
+		final String synchronizedAtQuery = "SELECT synchronized_at FROM " + properties.getTableName() + " WHERE message_key = ?";
+		Assertions.assertTrue((jdbcTemplate.queryForObject(synchronizedAtQuery, Long.class, firstQueue + "|key")
+				- jdbcTemplate.queryForObject(synchronizedAtQuery, Long.class, laterQueue + "|key")) > properties.getSynchronizationInterval().toMillis());
 
 		// B pulls the first queue: its watermark moves past the later queue's record.
 		instanceB.registerKeyedDestination(firstQueue);

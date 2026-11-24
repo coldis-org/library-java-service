@@ -108,7 +108,7 @@ public class StaleMessageFilterService {
 	/**
 	 * Processing start of a key, and if it was pulled from the shared store.
 	 */
-	private record ProcessingStart(long timestamp, boolean pulled) {}
+	private record ProcessingStart(long timestamp, boolean isPulled) {}
 
 	/**
 	 * Stale message filter properties.
@@ -265,7 +265,9 @@ public class StaleMessageFilterService {
 	/**
 	 * Checks if a same-key processing started after the given message was posted
 	 * (in which case the message is stale and can be dropped), and where that
-	 * processing record came from.
+	 * processing record came from. Other instances' records are only known for
+	 * destinations registered with {@link #registerKeyedDestination} (or where
+	 * this instance recorded a processing).
 	 *
 	 * @param  destination       Message destination.
 	 * @param  messageKey        Stale filter key.
@@ -284,7 +286,7 @@ public class StaleMessageFilterService {
 			final ProcessingStart lastProcessingStart = this.processingStartByEntryKey.get(StaleMessageFilterService.composeEntryKey(destination, messageKey));
 			if ((lastProcessingStart != null)
 					&& ((postedAtTimestamp + this.properties.getClockSkewMargin().toMillis()) < lastProcessingStart.timestamp())) {
-				source = (lastProcessingStart.pulled() ? Source.PULLED : Source.LOCAL);
+				source = (lastProcessingStart.isPulled() ? Source.PULLED : Source.LOCAL);
 			}
 		}
 		return source;
@@ -292,7 +294,10 @@ public class StaleMessageFilterService {
 
 	/**
 	 * Checks if a same-key processing started after the given message was posted
-	 * (in which case the message is stale and can be dropped).
+	 * (in which case the message is stale and can be dropped). Other instances'
+	 * records are only known for destinations registered with
+	 * {@link #registerKeyedDestination} (or where this instance recorded a
+	 * processing).
 	 *
 	 * @param  destination       Message destination.
 	 * @param  messageKey        Stale filter key.
@@ -370,7 +375,7 @@ public class StaleMessageFilterService {
 		for (final String entryKey : this.entryKeysPendingPush) {
 			this.entryKeysPendingPush.remove(entryKey);
 			final ProcessingStart processingStart = this.processingStartByEntryKey.get(entryKey);
-			if ((processingStart != null) && !processingStart.pulled()) {
+			if ((processingStart != null) && !processingStart.isPulled()) {
 				pendingRecords.put(entryKey, processingStart.timestamp());
 			}
 		}
