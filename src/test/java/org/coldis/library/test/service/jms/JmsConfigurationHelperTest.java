@@ -16,6 +16,7 @@ import ch.qos.logback.core.read.ListAppender;
 import org.apache.activemq.artemis.jms.client.ActiveMQConnectionFactory;
 import org.coldis.library.service.jms.EnhancedJmsBootstrapConfiguration;
 import org.coldis.library.service.jms.ExtendedArtemisProperties;
+import org.coldis.library.service.jms.ExtendedMessageListenerContainer;
 import org.coldis.library.service.jms.ExtendedMessagingMessageListenerAdapter;
 import org.coldis.library.service.jms.JmsConfigurationHelper;
 import org.coldis.library.service.jms.JmsConverterProperties;
@@ -307,13 +308,13 @@ public class JmsConfigurationHelperTest extends ContainerTestHelper {
 	 * @throws Exception If the test fails.
 	 */
 	@Test
-	@DisplayName("The built factory tags its listeners with the factory bean name and bulkhead group; containers stay DefaultMessageListenerContainer")
+	@DisplayName("The built factory tags its listeners with the factory bean name and bulkhead group; containers are ExtendedMessageListenerContainer (the bulkhead gate)")
 	public void testFactoryTagsListeners() throws Exception {
 		final DefaultJmsListenerContainerFactory factory = this.jmsConfigurationHelper.createJmsListenerContainerFactoryBuilder().bulkheadGroup("low").build();
 		Assertions.assertInstanceOf(BeanNameAware.class, factory).setBeanName("lowFactory");
 		final DefaultMessageListenerContainer listenerContainer = factory.createListenerContainer(JmsListenerBulkheadTestSupport.createEndpoint("tagged",
 				"bulkhead/tagged", "1", message -> {}, this.jmsConverterProperties, null, null));
-		Assertions.assertEquals(DefaultMessageListenerContainer.class, listenerContainer.getClass());
+		Assertions.assertEquals(ExtendedMessageListenerContainer.class, listenerContainer.getClass());
 		final ExtendedMessagingMessageListenerAdapter messageListener = Assertions.assertInstanceOf(ExtendedMessagingMessageListenerAdapter.class,
 				listenerContainer.getMessageListener());
 		Assertions.assertEquals("lowFactory", messageListener.getFactoryBeanName());
