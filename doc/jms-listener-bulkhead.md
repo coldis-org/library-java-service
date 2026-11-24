@@ -29,7 +29,7 @@ settings configure the group named `default`.
 |---|---|---|
 | `enabled` | `false` | Master switch, read at startup. `false`: no group is limited. |
 | `max-in-flight` | unset | Maximum concurrent handlers of the group. Wins over the multiplier when positive. |
-| `max-in-flight-cpu-multiplier` | `2` | Handlers per CPU, used when `max-in-flight` is not set: `ceil(CPUs × multiplier)` (CPUs: [JMS threads](jms-threads.md#cpus)). Tune between 1.5 and 3, toward 3 for database-heavy modules. `0`: the group is not limited. |
+| `max-in-flight-cpu-multiplier` | `4` | Handlers per CPU, used when `max-in-flight` is not set: `ceil(CPUs × multiplier)` (CPUs: [JMS threads](jms-threads.md#cpus)). Handlers that also wait on the database or other services run well above one per CPU at normal peaks; the default sits near those peaks so it stops pile-ups without throttling normal load. Tune toward 2–3 for CPU-bound modules and 4–6 for database- or I/O-heavy ones. `0`: the group is not limited. |
 | `max-wait` | unset | Unset or `0`: wait until a permit, the container stop or shutdown. Set: on timeout the message is rolled back to the broker (see [Delivery attempts](#delivery-attempts)). |
 | `max-wait-deliveries` | `3` | `max-wait` applies only while the message's `JMSXDeliveryCount` is at most this value; later deliveries wait without timeout. |
 | `reserved.<name>.permits` | — | Permits only the matching listeners may use (at least 1). |

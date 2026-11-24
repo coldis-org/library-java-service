@@ -2,6 +2,7 @@ package org.coldis.library.test.service.jms;
 
 import org.coldis.library.service.jms.JmsListenerBulkhead;
 import org.coldis.library.service.jms.JmsListenerBulkheadBinding;
+import org.coldis.library.service.jms.JmsListenerBulkheadGroupProperties;
 import org.coldis.library.service.jms.JmsListenerBulkheadProperties;
 import org.coldis.library.service.jms.JmsListenerBulkheadRegistry;
 import org.coldis.library.thread.CpuLimits;
@@ -117,12 +118,12 @@ public class JmsListenerBulkheadRegistryTest {
 	 * Tests that an enabled bulkhead without a limit limits nothing.
 	 */
 	@Test
-	@DisplayName("enabled=true alone limits the default group to 2 handlers per CPU; a multiplier of 0 leaves it unlimited")
+	@DisplayName("enabled=true alone limits the default group to 4 handlers per CPU; a multiplier of 0 leaves it unlimited")
 	public void testEnabledWithoutLimit() {
 		this.contextRunner.withPropertyValues(JmsListenerBulkheadRegistryTest.PREFIX + "enabled=true").run(context -> {
 			final JmsListenerBulkheadRegistry registry = context.getBean(JmsListenerBulkheadRegistry.class);
 			Assertions.assertTrue(registry.isEnabled());
-			Assertions.assertEquals((int) Math.ceil(CpuLimits.getDefault().getCpus() * 2),
+			Assertions.assertEquals((int) Math.ceil(CpuLimits.getDefault().getCpus() * JmsListenerBulkheadGroupProperties.DEFAULT_MAX_IN_FLIGHT_CPU_MULTIPLIER),
 					registry.getBulkhead(JmsListenerBulkheadProperties.DEFAULT_GROUP).getMaxInFlight());
 		});
 		this.contextRunner.withPropertyValues(JmsListenerBulkheadRegistryTest.PREFIX + "enabled=true",
