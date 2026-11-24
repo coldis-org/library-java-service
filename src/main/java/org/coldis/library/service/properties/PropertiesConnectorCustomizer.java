@@ -1,0 +1,170 @@
+package org.coldis.library.service.properties;
+
+import java.net.InetAddress;
+import java.net.UnknownHostException;
+
+import org.apache.catalina.connector.Connector;
+import org.apache.coyote.AbstractProtocol;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
+import org.springframework.boot.web.embedded.tomcat.TomcatServletWebServerFactory;
+import org.springframework.boot.web.server.WebServerFactoryCustomizer;
+import org.springframework.stereotype.Component;
+
+/**
+ * Tomcat connector with request threads of its own, for the properties
+ * endpoint ({@link PropertiesService}): the path by which a running service
+ * takes a new address of a dependency (database, broker, another service). On
+ * the main connector an update waits for the same request threads as the
+ * service's traffic. When that traffic is stuck on the very dependency whose
+ * address changed, every thread stays taken, the update never runs and the
+ * service never recovers. This connector listens on the loopback address only,
+ * so only processes of the service's own host or container (the endpoint
+ * update scripts) reach it, and {@link PropertiesConnectorFilter} answers any
+ * other path on it with 404, so nothing else takes its threads. The main
+ * connector keeps serving the endpoint as before, and the health check stays
+ * there, so it still reports when the service's own threads run out.
+ * <p>
+ * The update scripts do not read the port from here: they call
+ * {@code JAVA_ENDPOINT_URL} (127.0.0.1:9091 in the image), so a deployment that
+ * moves the port changes both. A port of 0 picks a free one, which no script
+ * can find: for tests only. The connector takes none of the main connector's
+ * {@code server.tomcat.*} settings (connection timeout, keep-alive, limits);
+ * Tomcat's defaults suit a few local updates.
+ * <p>
+ * Off by default: the deployment that ships the scripts calling it turns it on,
+ * so test runs and developer machines, where several services or test processes
+ * share one network namespace, never open the port. While off, neither this
+ * customizer nor the filter exists.
+ */
+@Component
+@ConditionalOnProperty(
+		name = PropertiesConnectorCustomizer.PROPERTY_PREFIX + ".enabled",
+		havingValue = "true",
+		matchIfMissing = false
+)
+public class PropertiesConnectorCustomizer implements WebServerFactoryCustomizer<TomcatServletWebServerFactory> {
+
+	/**
+	 * Logger.
+	 */
+	private static final Logger LOGGER = LoggerFactory.getLogger(PropertiesConnectorCustomizer.class);
+
+	/**
+	 * Property prefix.
+	 */
+	public static final String PROPERTY_PREFIX = "org.coldis.library.service.properties.connector";
+
+	/**
+	 * Address the connector listens on.
+	 */
+	private final String address;
+
+	/**
+	 * Port the connector listens on (0 picks a free one).
+	 */
+	private final Integer port;
+
+	/**
+	 * Request threads of the connector.
+	 */
+	private final Integer maxThreads;
+
+	/**
+	 * Connector, once added.
+	 */
+	private volatile Connector connector;
+
+	/**
+	 * Port the connector listens on, once it is bound.
+	 */
+	private volatile Integer localPort;
+
+	/**
+	 * Constructor.
+	 *
+	 * @param address    Address the connector listens on.
+	 * @param port       Port the connector listens on (0 picks a free one).
+	 * @param maxThreads Request threads of the connector.
+	 */
+	public PropertiesConnectorCustomizer(
+			@Value("${" + PropertiesConnectorCustomizer.PROPERTY_PREFIX + ".address:127.0.0.1}") final String address,
+			@Value("${" + PropertiesConnectorCustomizer.PROPERTY_PREFIX + ".port:9091}") final Integer port,
+			@Value("${" + PropertiesConnectorCustomizer.PROPERTY_PREFIX + ".max-threads:2}") final Integer maxThreads) {
+		this.address = address;
+		this.port = port;
+		this.maxThreads = maxThreads;
+	}
+
+	/**
+	 * Creates a connector that listens on the given address and port, with the
+	 * given request threads of its own.
+	 *
+	 * @param  address    Address the connector listens on: a loopback one.
+	 * @param  port       Port the connector listens on (0 picks a free one).
+	 * @param  maxThreads Request threads of the connector.
+	 * @return            The connector.
+	 */
+	public static Connector createConnector(
+			final String address,
+			final Integer port,
+			final Integer maxThreads) {
+		final Connector connector = new Connector(TomcatServletWebServerFactory.DEFAULT_PROTOCOL);
+		connector.setPort(port);
+		final AbstractProtocol<?> protocol = (AbstractProtocol<?>) connector.getProtocolHandler();
+		final InetAddress inetAddress;
+		try {
+			inetAddress = InetAddress.getByName(address);
+		}
+		catch (final UnknownHostException exception) {
+			throw new IllegalStateException("Invalid address for the properties connector (" + PropertiesConnectorCustomizer.PROPERTY_PREFIX + ".address): "
+					+ address + ".", exception);
+		}
+		// Anything that reaches it can change the service's properties.
+		if (!inetAddress.isLoopbackAddress()) {
+			throw new IllegalStateException("The properties connector (" + PropertiesConnectorCustomizer.PROPERTY_PREFIX + ".address) listens on a loopback "
+					+ "address only, not on " + address + ".");
+		}
+		protocol.setAddress(inetAddress);
+		protocol.setMaxThreads(maxThreads);
+		protocol.setMinSpareThreads(1);
+		return connector;
+	}
+
+	/**
+	 * Gets the port the connector listens on, once it is bound. Tomcat reads it
+	 * by reflection, so it is read until the connector is bound, and kept from
+	 * then on.
+	 *
+	 * @return The port, or null while the connector is not added or not bound.
+	 */
+	public Integer getLocalPort() {
+		Integer currentLocalPort = this.localPort;
+		final Connector currentConnector = this.connector;
+		if ((currentLocalPort == null) && (currentConnector != null)) {
+			final int boundPort = currentConnector.getLocalPort();
+			if (boundPort > 0) {
+				currentLocalPort = boundPort;
+				this.localPort = currentLocalPort;
+			}
+		}
+		return currentLocalPort;
+	}
+
+	/**
+	 * @see org.springframework.boot.web.server.WebServerFactoryCustomizer#customize(org.springframework.boot.web.server.WebServerFactory)
+	 */
+	@Override
+	public void customize(
+			final TomcatServletWebServerFactory factory) {
+		if (this.connector == null) {
+			this.connector = PropertiesConnectorCustomizer.createConnector(this.address, this.port, this.maxThreads);
+			factory.addAdditionalTomcatConnectors(this.connector);
+			PropertiesConnectorCustomizer.LOGGER.info("Adding a connector for the properties endpoint only, on " + this.address + ":" + this.port
+					+ " (0 picks a free port), with " + this.maxThreads + " request threads of its own.");
+		}
+	}
+
+}
