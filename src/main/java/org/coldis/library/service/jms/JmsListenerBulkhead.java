@@ -586,6 +586,8 @@ public class JmsListenerBulkhead {
 				admission = new JmsListenerBulkheadAdmission(this, actualReservation, takesPermit, 0L);
 			}
 			else {
+				// Runs under the lock so the decision to wait and the callback agree; the
+				// container's callback only sets its consumer's idle flag.
 				if (beforeWaiting != null) {
 					beforeWaiting.run();
 				}
@@ -644,6 +646,8 @@ public class JmsListenerBulkhead {
 	 * If a consumer of a listener of the reservation arriving at the gate now
 	 * would receive at once. Used to decide whether a listener container may
 	 * start another consumer.
+	 * Like every entry point, it first applies a changed limit, which may grant
+	 * queued waiters.
 	 *
 	 * @param  reservation Reservation (null, or one this bulkhead does not have,
 	 *                         for unreserved).

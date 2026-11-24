@@ -358,11 +358,15 @@ public class JmsListenerBulkheadGateTest {
 				throw new IllegalStateException(exception);
 			}
 		});
-		JmsListenerBulkheadGateTest.waitUntil(() -> bulkhead.getWaitingWithMessage() == 1, "holding consumer queued");
-		Assertions.assertEquals(2, bulkhead.getWaiting());
-
-		running.close();
-		holdingThread.join(JmsListenerBulkheadGateTest.WAIT.toMillis());
+		try {
+			JmsListenerBulkheadGateTest.waitUntil(() -> bulkhead.getWaitingWithMessage() == 1, "holding consumer queued");
+			Assertions.assertEquals(2, bulkhead.getWaiting());
+			running.close();
+			holdingThread.join(JmsListenerBulkheadGateTest.WAIT.toMillis());
+		}
+		finally {
+			holdingThread.interrupt();
+		}
 		Assertions.assertEquals(List.of("holding"), admittedOrder);
 		Assertions.assertTrue(heldPermit.get().hasWaited());
 		Assertions.assertEquals(1, gated.admitted.getCount());

@@ -114,7 +114,14 @@ public class ExtendedMessageListenerContainer extends DefaultMessageListenerCont
 					() -> this.noMessageReceived(invoker, session));
 		}
 		catch (final JmsListenerBulkheadException exception) {
-			this.logger.debug(exception.getMessage());
+			// An interruption while the container still runs is unexpected: make it
+			// visible (the consumer just waits again on its next receive).
+			if ((exception.getReason() == JmsListenerBulkheadException.Reason.INTERRUPTED) && this.isRunning()) {
+				this.logger.warn(exception.getMessage());
+			}
+			else {
+				this.logger.debug(exception.getMessage());
+			}
 		}
 		return admission;
 	}

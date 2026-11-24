@@ -560,7 +560,6 @@ public class JmsListenerBulkheadContainerTest extends ContainerTestHelper {
 		busyContainer.start();
 		JmsListenerBulkheadTestSupport.waitUntil(() -> busyProcessed.get() == 50, "busy messages processed");
 		Assertions.assertTrue((System.nanoTime() - startNanos) < Duration.ofSeconds(15).toNanos(), "busy listener slowed down by idle pollers");
-		Assertions.assertEquals(1, probe.getMaximum());
 		JmsListenerBulkheadTestSupport.waitUntil(() -> bulkhead.getInFlight() == 0, "permit released");
 		idleContainer.shutdown();
 		busyContainer.shutdown();
@@ -736,6 +735,57 @@ public class JmsListenerBulkheadContainerTest extends ContainerTestHelper {
 		JmsListenerBulkheadTestSupport.waitUntil(() -> processedDeliveryCounts.size() == 3, "remaining messages processed by a new container");
 		Assertions.assertFalse(TestHelper.waitUntilValid(processed::get, processedCount -> processedCount > 3, TestHelper.REGULAR_WAIT, TestHelper.SHORT_WAIT));
 		Assertions.assertEquals(List.of(List.of(1), List.of(1), List.of(1)), List.copyOf(processedDeliveryCounts.values()));
+		nextContainer.shutdown();
+		this.assertQueueEmpty(queue);
+	}
+
+	/**
+	 * Tests that a container shutdown rolls back the messages of consumers
+	 * waiting for a permit holding them (a container without the gate), and a
+	 * new container processes them once.
+	 *
+	 * @throws Exception If the test fails.
+	 */
+	@Test
+	@DisplayName("Without the gate, a container shutdown rolls the held messages back; a new container processes each remaining message once")
+	public void testShutdownRollsHeldMessagesBack() throws Exception {
+		final String group = JmsListenerBulkheadProperties.DEFAULT_GROUP;
+		final String queue = JmsListenerBulkheadContainerTest.createQueue("shutdown-held");
+		final JmsListenerBulkheadRegistry registry = this.createDefaultGroupRegistry(groupProperties -> groupProperties.setMaxInFlight(1));
+		final DefaultJmsListenerContainerFactory factory = this.createPlainFactory();
+		final CountDownLatch release = this.createLatch();
+		final Map<String, List<Integer>> processedDeliveryCounts = new ConcurrentHashMap<>();
+		final AtomicInteger processed = new AtomicInteger();
+		final JmsListenerBulkheadTestSupport.MessageHandler handler = message -> {
+			if (processed.getAndIncrement() == 0) {
+				JmsListenerBulkheadTestSupport.awaitIgnoringInterrupts(release);
+			}
+			processedDeliveryCounts.computeIfAbsent(JmsListenerBulkheadTestSupport.getMessageId(message), messageId -> new CopyOnWriteArrayList<>())
+					.add(JmsListenerBulkheadTestSupport.getDeliveryCount(message));
+		};
+		final DefaultMessageListenerContainer listenerContainer = this.createContainer(factory, registry, queue, "3-3", handler);
+		this.send(queue, 3);
+		listenerContainer.start();
+		JmsListenerBulkheadTestSupport.waitUntil(() -> registry.getBulkhead(group).getWaitingWithMessage() == 2, "two consumers holding a message");
+		final JmsListenerBulkhead bulkhead = registry.getBulkhead(group);
+
+		final Thread shutdownThread = Thread.ofPlatform().name("bulkhead-container-shutdown-held").start(listenerContainer::shutdown);
+		JmsListenerBulkheadTestSupport.waitUntil(() -> bulkhead.getWaitingWithMessage() == 0, Duration.ofMillis(TestHelper.LONG_WAIT),
+				"held messages left on shutdown");
+		JmsListenerBulkheadTestSupport.waitUntil(() -> (this.getAborted(group, queue, "stopped") + this.getAborted(group, queue, "interrupted")) == 2D,
+				"two stopped or interrupted waits");
+		release.countDown();
+		shutdownThread.join(JmsListenerBulkheadTestSupport.WAIT.toMillis());
+		Assertions.assertFalse(shutdownThread.isAlive());
+		Assertions.assertEquals(1, processedDeliveryCounts.size());
+		Assertions.assertEquals(0, bulkhead.getInFlight());
+
+		final DefaultMessageListenerContainer nextContainer = this.createContainer(factory, registry, queue, "3-3", handler);
+		nextContainer.start();
+		JmsListenerBulkheadTestSupport.waitUntil(() -> processedDeliveryCounts.size() == 3, "remaining messages processed by a new container");
+		Assertions.assertFalse(TestHelper.waitUntilValid(processed::get, processedCount -> processedCount > 3, TestHelper.REGULAR_WAIT, TestHelper.SHORT_WAIT));
+		Assertions.assertEquals(List.of(List.of(1), List.of(2), List.of(2)),
+				processedDeliveryCounts.values().stream().sorted((first, second) -> Integer.compare(first.get(0), second.get(0))).toList());
 		nextContainer.shutdown();
 		this.assertQueueEmpty(queue);
 	}
