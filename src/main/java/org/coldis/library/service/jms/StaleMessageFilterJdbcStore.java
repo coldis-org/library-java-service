@@ -32,7 +32,7 @@ public class StaleMessageFilterJdbcStore {
 	/**
 	 * Default statement timeout.
 	 */
-	private static final Duration DEFAULT_QUERY_TIMEOUT = Duration.ofSeconds(5);
+	public static final Duration DEFAULT_QUERY_TIMEOUT = Duration.ofSeconds(5);
 
 	/**
 	 * Maximum batch size for pushing processing records.
@@ -70,7 +70,8 @@ public class StaleMessageFilterJdbcStore {
 	 *
 	 * @param dataSource   Data source.
 	 * @param tableName    Table name (validated as a plain SQL identifier).
-	 * @param queryTimeout Statement timeout (whole seconds, zero for none).
+	 * @param queryTimeout Statement timeout (rounded up to whole seconds, zero for
+	 *                         none).
 	 */
 	public StaleMessageFilterJdbcStore(final DataSource dataSource, final String tableName, final Duration queryTimeout) {
 		if (!tableName.matches("[A-Za-z_][A-Za-z0-9_]*")) {
@@ -78,7 +79,7 @@ public class StaleMessageFilterJdbcStore {
 		}
 		this.tableName = tableName;
 		this.jdbcTemplate = new JdbcTemplate(dataSource);
-		this.jdbcTemplate.setQueryTimeout((int) queryTimeout.toSeconds());
+		this.jdbcTemplate.setQueryTimeout((int) Math.min(Integer.MAX_VALUE, (queryTimeout.toMillis() + 999) / 1000));
 		this.transactionTemplate = new TransactionTemplate(new DataSourceTransactionManager(dataSource));
 	}
 

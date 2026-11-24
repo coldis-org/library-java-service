@@ -214,15 +214,6 @@ public class StaleMessageFilterService {
 	}
 
 	/**
-	 * Gets the destinations this instance has seen keyed messages on.
-	 *
-	 * @return A copy of the keyed destinations.
-	 */
-	public Set<String> getKeyedDestinations() {
-		return Set.copyOf(this.keyedDestinations);
-	}
-
-	/**
 	 * Gets the meter registry, registering the records gauge when it is first
 	 * resolved.
 	 *
@@ -259,10 +250,22 @@ public class StaleMessageFilterService {
 	}
 
 	/**
+	 * Registers that a keyed message arrived on a destination: from then on, the
+	 * destination's records are synchronized with the shared store.
+	 *
+	 * @param destination Message destination.
+	 */
+	public void registerKeyedDestination(
+			final String destination) {
+		if (this.isEnabled()) {
+			this.keyedDestinations.add(destination);
+		}
+	}
+
+	/**
 	 * Checks if a same-key processing started after the given message was posted
 	 * (in which case the message is stale and can be dropped), and where that
-	 * processing record came from. Also learns the destination as keyed (to be
-	 * synchronized).
+	 * processing record came from.
 	 *
 	 * @param  destination       Message destination.
 	 * @param  messageKey        Stale filter key.
@@ -278,7 +281,6 @@ public class StaleMessageFilterService {
 			final long postedAtTimestamp) {
 		Source source = null;
 		if (this.isEnabled()) {
-			this.keyedDestinations.add(destination);
 			final ProcessingStart lastProcessingStart = this.processingStartByEntryKey.get(StaleMessageFilterService.composeEntryKey(destination, messageKey));
 			if ((lastProcessingStart != null)
 					&& ((postedAtTimestamp + this.properties.getClockSkewMargin().toMillis()) < lastProcessingStart.timestamp())) {
@@ -523,15 +525,6 @@ public class StaleMessageFilterService {
 			this.synchronizationScheduler.shutdownNow();
 			this.synchronizationScheduler = null;
 		}
-	}
-
-	/**
-	 * If the synchronization is running.
-	 *
-	 * @return If the synchronization is running.
-	 */
-	public synchronized boolean isRunning() {
-		return (this.synchronizationScheduler != null);
 	}
 
 }

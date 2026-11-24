@@ -40,13 +40,15 @@ table:
 The instance learns which destinations it consumes keyed messages from as the
 messages arrive; there is nothing to configure. Until it sees one, the
 synchronization does not touch the database (no push, pull or delete), so
-instances that never consume keyed messages cost the database nothing. A pull
-also returns the instance's own rows; it ignores them.
+instances that never consume keyed messages cost the database nothing. After a
+restart, other instances' records of a destination only count here from the
+synchronization after its first keyed message (until then the filter fails
+open for it). A pull also returns the instance's own rows; it ignores them.
 
 The synchronization runs on its own daemon thread (`jms-stale-filter-sync`),
 started with the service when the filter is enabled at startup, so it never
 delays the service's other scheduled jobs. Each statement has a timeout of
-`query-timeout` (default 5 s, whole seconds, `0` for none). A failed
+`query-timeout` (default 5 s, rounded up to whole seconds, `0` for none). A failed
 synchronization is logged and retried on the next cycle; the filter fails open
 meanwhile.
 
@@ -72,7 +74,7 @@ Micrometer metrics, in the same registry as the other JMS metrics:
 
 | Metric | Type | Tags | Meaning |
 |---|---|---|---|
-| `jms.stale.filter.checked` | counter | `destination`, `outcome` = `dropped` \| `processed` | Keyed messages checked, once per delivery. The drop ratio is `dropped / (dropped + processed)`. |
+| `jms.stale.filter.checked` | counter | `destination`, `outcome` = `dropped` \| `processed` | Keyed messages checked, once per delivery that is dropped or handed to the listener (a delivery refused by the listener bulkhead is not counted; it is redelivered and checked again). The drop ratio is `dropped / (dropped + processed)`. |
 | `jms.stale.filter.dropped` | counter | `destination`, `source` = `local` \| `pulled` | Dropped messages, by where the newer record came from: this instance, or another instance through the shared table. |
 | `jms.stale.filter.sync` | timer | `phase` = `push` \| `pull` \| `delete`, `outcome` = `success` \| `failure` \| `skipped` | Duration of each synchronization phase. `skipped`: nothing to push, cleanup run by another instance, or no keyed destination seen yet. |
 | `jms.stale.filter.sync.rows` | counter | `phase` | Rows pushed, pulled or deleted. |

@@ -60,8 +60,9 @@ public class ExtendedMessagingMessageListenerAdapter extends MessagingMessageLis
 	public static final String STALE_DROPPED_MESSAGES_METRIC = "jms.stale.filter.dropped";
 
 	/**
-	 * Keyed messages checked by the stale message filter, once per delivery
-	 * (tags: destination, outcome: dropped or processed).
+	 * Keyed messages checked by the stale message filter, once per delivery that
+	 * is dropped or handed to the listener (tags: destination, outcome: dropped
+	 * or processed).
 	 */
 	public static final String STALE_CHECKED_MESSAGES_METRIC = "jms.stale.filter.checked";
 
@@ -377,9 +378,10 @@ public class ExtendedMessagingMessageListenerAdapter extends MessagingMessageLis
 		StaleMessageFilterService.Source source = null;
 		try {
 			if (this.isStaleFilterKeyed(message)) {
+				final String destination = ((ActiveMQDestination) message.getJMSDestination()).getAddress();
+				this.staleMessageFilterService.registerKeyedDestination(destination);
 				final Long postedAt = this.getStaleFilterPostedAt(message);
 				if (postedAt != null) {
-					final String destination = ((ActiveMQDestination) message.getJMSDestination()).getAddress();
 					source = this.staleMessageFilterService.getNewerProcessingSource(destination,
 							message.getStringProperty(JmsMessage.STALE_FILTER_KEY_PROPERTY), postedAt);
 				}

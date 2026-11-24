@@ -233,8 +233,10 @@ public class StaleMessageFilterServiceTest extends ContainerTestHelper {
 		final long now = DateTimeHelper.toTimestamp(DateTimeHelper.getCurrentLocalDateTime());
 		final String messageKey = "syncKey-" + StaleMessageFilterServiceTest.RANDOM.nextInt();
 
-		// Instance A records a processing locally: instance B does not know it yet.
+		// Instance A records a processing locally: instance B (which consumes keyed
+		// messages from the same queue) does not know it yet.
 		instanceA.recordProcessing("queue", messageKey, now);
+		instanceB.registerKeyedDestination("queue");
 		Assertions.assertFalse(instanceB.hasNewerProcessing("queue", messageKey, now - 10_000));
 
 		// After A pushes and B pulls, B drops older same-key messages too.
@@ -329,11 +331,15 @@ public class StaleMessageFilterServiceTest extends ContainerTestHelper {
 				statement.setLong(1, StaleMessageFilterJdbcStore.CLEANUP_LOCK_KEY);
 				statement.executeQuery().close();
 			}
-			Assertions.assertNull(store.deleteSynchronizedBefore(3000));
-			Assertions.assertEquals(2, jdbcTemplate.queryForObject("SELECT COUNT(*) FROM " + tableName, Integer.class));
-			try (PreparedStatement statement = lockHolder.prepareStatement("SELECT pg_advisory_unlock(?)")) {
-				statement.setLong(1, StaleMessageFilterJdbcStore.CLEANUP_LOCK_KEY);
-				statement.executeQuery().close();
+			try {
+				Assertions.assertNull(store.deleteSynchronizedBefore(3000));
+				Assertions.assertEquals(2, jdbcTemplate.queryForObject("SELECT COUNT(*) FROM " + tableName, Integer.class));
+			}
+			finally {
+				try (PreparedStatement statement = lockHolder.prepareStatement("SELECT pg_advisory_unlock(?)")) {
+					statement.setLong(1, StaleMessageFilterJdbcStore.CLEANUP_LOCK_KEY);
+					statement.executeQuery().close();
+				}
 			}
 		}
 
@@ -369,7 +375,6 @@ public class StaleMessageFilterServiceTest extends ContainerTestHelper {
 		// Once a keyed message is processed, the synchronization runs.
 		service.recordProcessing("queue", "skipKey", DateTimeHelper.toTimestamp(DateTimeHelper.getCurrentLocalDateTime()));
 		service.synchronize();
-		Assertions.assertEquals(Set.of("queue"), service.getKeyedDestinations());
 		Assertions.assertEquals(1, StaleMessageFilterServiceTest.getSyncCount(meterRegistry, "push", "success"));
 		Assertions.assertEquals(1, StaleMessageFilterServiceTest.getSyncCount(meterRegistry, "pull", "success"));
 		Assertions.assertEquals(1, jdbcTemplate.queryForObject("SELECT COUNT(*) FROM " + tableName, Integer.class));
@@ -396,11 +401,11 @@ public class StaleMessageFilterServiceTest extends ContainerTestHelper {
 		instanceA.recordProcessing(consumedQueue, "key", now);
 		instanceA.recordProcessing(otherQueue, "key", now);
 		instanceA.synchronize();
+		instanceB.registerKeyedDestination(consumedQueue);
 		Assertions.assertNull(instanceB.getNewerProcessingSource(consumedQueue, "key", now - 10_000));
 		instanceB.synchronize();
 
 		// B pulled the queue it consumes, and only that one.
-		Assertions.assertEquals(Set.of(consumedQueue), instanceB.getKeyedDestinations());
 		Assertions.assertEquals(StaleMessageFilterService.Source.PULLED, instanceB.getNewerProcessingSource(consumedQueue, "key", now - 10_000));
 		Assertions.assertNull(instanceB.getNewerProcessingSource(otherQueue, "key", now - 10_000));
 
@@ -435,7 +440,6 @@ public class StaleMessageFilterServiceTest extends ContainerTestHelper {
 		// Started: a daemon thread sweeps the expired record on its own.
 		service.start();
 		try {
-			Assertions.assertTrue(service.isRunning());
 			Assertions.assertTrue(Thread.getAllStackTraces().keySet().stream()
 					.anyMatch(thread -> StaleMessageFilterService.SYNC_THREAD_NAME.equals(thread.getName()) && thread.isDaemon()));
 			Assertions.assertTrue(TestHelper.waitUntilValid(() -> service.hasNewerProcessing("queue", messageKey, now - 120_000), newer -> !newer,
@@ -446,7 +450,6 @@ public class StaleMessageFilterServiceTest extends ContainerTestHelper {
 		}
 
 		// Stopped: the thread ends.
-		Assertions.assertFalse(service.isRunning());
 		Assertions.assertTrue(TestHelper.waitUntilValid(() -> Thread.getAllStackTraces().keySet().stream()
 				.noneMatch(thread -> StaleMessageFilterService.SYNC_THREAD_NAME.equals(thread.getName()) && thread.isAlive()), Boolean::booleanValue,
 				TestHelper.LONG_WAIT, TestHelper.VERY_SHORT_WAIT));
@@ -454,7 +457,58 @@ public class StaleMessageFilterServiceTest extends ContainerTestHelper {
 		// A disabled filter does not start it.
 		properties.setEnabled(false);
 		service.start();
-		Assertions.assertFalse(service.isRunning());
+		try {
+			Assertions.assertTrue(Thread.getAllStackTraces().keySet().stream()
+					.noneMatch(thread -> StaleMessageFilterService.SYNC_THREAD_NAME.equals(thread.getName()) && thread.isAlive()));
+		}
+		finally {
+			service.stop();
+		}
+	}
+
+	/**
+	 * Tests that a destination learned after earlier pulls gets its older records
+	 * too, and that a pulled record is not pushed back.
+	 *
+	 * @throws Exception If the test fails.
+	 */
+	@Test
+	@DisplayName("A newly keyed destination is pulled from the start of the window; pulled records are not pushed back")
+	public void testNewDestinationPulledFromWindowStart() throws Exception {
+		final StaleMessageFilterProperties properties = this.createProperties(true);
+		properties.setSynchronizationInterval(Duration.ofMillis(1));
+		final MeterRegistry meterRegistry = new SimpleMeterRegistry();
+		final StaleMessageFilterService instanceA = new StaleMessageFilterService(properties, this.createDataSourceProvider());
+		final StaleMessageFilterService instanceB = new StaleMessageFilterService(properties, this.createDataSourceProvider(),
+				StaleMessageFilterServiceTest.createProvider(meterRegistry));
+		final long now = DateTimeHelper.toTimestamp(DateTimeHelper.getCurrentLocalDateTime());
+		final String random = Integer.toString(StaleMessageFilterServiceTest.RANDOM.nextInt());
+		final String firstQueue = "first_" + random;
+		final String laterQueue = "later_" + random;
+
+		// A shares a record of the later queue, then (afterwards) one of the first.
+		instanceA.recordProcessing(laterQueue, "key", now);
+		instanceA.synchronize();
+		Thread.sleep(50);
+		instanceA.recordProcessing(firstQueue, "key", now);
+		instanceA.synchronize();
+
+		// B pulls the first queue: its watermark moves past the later queue's record.
+		instanceB.registerKeyedDestination(firstQueue);
+		instanceB.synchronize();
+		Assertions.assertEquals(StaleMessageFilterService.Source.PULLED, instanceB.getNewerProcessingSource(firstQueue, "key", now - 10_000));
+
+		// Once B sees the later queue, the next pull still gets its older record.
+		instanceB.registerKeyedDestination(laterQueue);
+		instanceB.synchronize();
+		Assertions.assertEquals(StaleMessageFilterService.Source.PULLED, instanceB.getNewerProcessingSource(laterQueue, "key", now - 10_000));
+
+		// An older local record replaced by the pulled one is not pushed back.
+		final long pushSkippedBefore = StaleMessageFilterServiceTest.getSyncCount(meterRegistry, "push", "skipped");
+		instanceB.recordProcessing(laterQueue, "key", now - 5_000);
+		instanceB.synchronize();
+		Assertions.assertEquals(pushSkippedBefore + 1, StaleMessageFilterServiceTest.getSyncCount(meterRegistry, "push", "skipped"));
+		Assertions.assertEquals(StaleMessageFilterService.Source.PULLED, instanceB.getNewerProcessingSource(laterQueue, "key", now - 10_000));
 	}
 
 }
