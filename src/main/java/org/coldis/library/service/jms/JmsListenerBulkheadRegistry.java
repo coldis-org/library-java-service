@@ -42,8 +42,17 @@ public class JmsListenerBulkheadRegistry {
 	/** Permits in use (tag: group). */
 	public static final String IN_FLIGHT_METRIC = "jms.listener.bulkhead.in.flight";
 
-	/** Listeners waiting for a permit (tag: group). */
+	/**
+	 * Consumers waiting: at the gate before they receive, or holding a received
+	 * message for a permit (tag: group).
+	 */
 	public static final String WAITING_METRIC = "jms.listener.bulkhead.waiting";
+
+	/**
+	 * Consumers holding a received message while they wait for a permit, part of
+	 * {@link #WAITING_METRIC} (tag: group).
+	 */
+	public static final String WAITING_WITH_MESSAGE_METRIC = "jms.listener.bulkhead.waiting.with.message";
 
 	/** Current limit (tag: group). */
 	public static final String MAX_IN_FLIGHT_METRIC = "jms.listener.bulkhead.max.in.flight";
@@ -54,12 +63,17 @@ public class JmsListenerBulkheadRegistry {
 	/** Reserved permits (tags: group, reservation). */
 	public static final String RESERVED_PERMITS_METRIC = "jms.listener.bulkhead.reserved.permits";
 
-	/** Wait of every granted permit, 0 when immediate (tags: group, destination). */
+	/**
+	 * Wait of every handled message: at the gate before its receive plus holding
+	 * it for a permit, 0 when both were immediate (tags: group, destination).
+	 */
 	public static final String WAIT_METRIC = "jms.listener.bulkhead.wait";
 
 	/**
-	 * Waits that ended without a permit (tags: group, destination, reason =
-	 * timeout, stopped or interrupted).
+	 * Waits holding a received message that ended without a permit, so the
+	 * message was rolled back (tags: group, destination, reason = timeout,
+	 * stopped or interrupted). Gate waits that end on a stop or interruption are
+	 * not counted: nothing was received.
 	 */
 	public static final String WAIT_ABORTED_METRIC = "jms.listener.bulkhead.wait.aborted";
 
@@ -289,6 +303,8 @@ public class JmsListenerBulkheadRegistry {
 					.register(meterRegistry);
 			Gauge.builder(JmsListenerBulkheadRegistry.WAITING_METRIC, bulkhead, JmsListenerBulkhead::getWaiting).tag("group", bulkhead.getGroup())
 					.register(meterRegistry);
+			Gauge.builder(JmsListenerBulkheadRegistry.WAITING_WITH_MESSAGE_METRIC, bulkhead, JmsListenerBulkhead::getWaitingWithMessage)
+					.tag("group", bulkhead.getGroup()).register(meterRegistry);
 			Gauge.builder(JmsListenerBulkheadRegistry.MAX_IN_FLIGHT_METRIC, bulkhead, JmsListenerBulkhead::getMaxInFlight).tag("group", bulkhead.getGroup())
 					.register(meterRegistry);
 			for (final String reservation : bulkhead.getReservations()) {

@@ -19,9 +19,19 @@ import org.slf4j.LoggerFactory;
 
 /**
  * Bounds the concurrent handler executions of one JMS listener bulkhead group.
- * Listeners that received a message wait for a permit in arrival order (FIFO):
- * a release hands the permit straight to the oldest admissible waiter, so a new
- * arrival never overtakes a queued one.
+ * <p>
+ * Consumers wait at a gate before they receive ({@link #admit}), so a message
+ * waits on the broker queue, not in a consumer, while the group has no
+ * capacity. A consumer whose queue just delivered takes its permit at the gate;
+ * one whose queue was just empty only waits until a permit is free and takes
+ * nothing, so an idle queue never holds a permit while it polls. A consumer
+ * that received a message without a permit (it raced another one for the free
+ * permit, or its container has no gate) waits for one with {@link #acquire},
+ * holding that message.
+ * <p>
+ * Waiters are served in arrival order (FIFO), consumers holding a message
+ * before gated ones: a release hands the permit straight to the oldest
+ * admissible waiter, so a new arrival never overtakes a queued one.
  * <p>
  * Reserved permits ({@code reservation → permits}) may only be used by the
  * listeners of that reservation, which may also use the shared permits (the
@@ -57,7 +67,38 @@ public class JmsListenerBulkhead {
 	public static final Duration STATE_CHECK_INTERVAL = Duration.ofMillis(250);
 
 	/**
-	 * A listener waiting for a permit. Guarded by the bulkhead lock.
+	 * What a waiter waits for.
+	 */
+	private enum WaiterKind {
+
+		/** A permit for a message the consumer already received. */
+		MESSAGE(true),
+
+		/** To receive, taking the permit at the gate (the queue just delivered). */
+		GATE_WITH_PERMIT(true),
+
+		/** To receive, without a permit (the queue was just empty). */
+		GATE_WITHOUT_PERMIT(false);
+
+		/**
+		 * If a grant counts a permit.
+		 */
+		private final boolean takesPermit;
+
+		/**
+		 * Constructor.
+		 *
+		 * @param takesPermit If a grant counts a permit.
+		 */
+		WaiterKind(final boolean takesPermit) {
+			this.takesPermit = takesPermit;
+		}
+
+	}
+
+	/**
+	 * A listener waiting for a permit or at the gate. Guarded by the bulkhead
+	 * lock.
 	 */
 	private static final class Waiter {
 
@@ -67,13 +108,19 @@ public class JmsListenerBulkhead {
 		private final String reservation;
 
 		/**
+		 * What the waiter waits for.
+		 */
+		private final WaiterKind kind;
+
+		/**
 		 * Condition the waiter awaits (one per waiter, so a grant wakes exactly the
 		 * granted waiter).
 		 */
 		private final Condition condition;
 
 		/**
-		 * If the permit was granted (and counted).
+		 * If the wait was granted (and the permit counted, for a kind that takes
+		 * one).
 		 */
 		private boolean isGranted;
 
@@ -81,10 +128,12 @@ public class JmsListenerBulkhead {
 		 * Constructor.
 		 *
 		 * @param reservation Reservation.
+		 * @param kind        What the waiter waits for.
 		 * @param condition   Condition.
 		 */
-		private Waiter(final String reservation, final Condition condition) {
+		private Waiter(final String reservation, final WaiterKind kind, final Condition condition) {
 			this.reservation = reservation;
+			this.kind = kind;
 			this.condition = condition;
 		}
 
@@ -122,9 +171,16 @@ public class JmsListenerBulkhead {
 	private final ReentrantLock lock = new ReentrantLock();
 
 	/**
-	 * Waiters, in arrival order. Guarded by the lock.
+	 * Consumers holding a received message and waiting for a permit, in arrival
+	 * order. Served before the gate waiters. Guarded by the lock.
 	 */
-	private final Set<Waiter> waiters = new LinkedHashSet<>();
+	private final Set<Waiter> messageWaiters = new LinkedHashSet<>();
+
+	/**
+	 * Consumers waiting at the gate before they receive, in arrival order.
+	 * Guarded by the lock.
+	 */
+	private final Set<Waiter> gateWaiters = new LinkedHashSet<>();
 
 	/**
 	 * Queued waiters that have a reservation. Guarded by the lock.
@@ -133,12 +189,13 @@ public class JmsListenerBulkhead {
 
 	/**
 	 * Shared permits in use (unreserved handlers plus reserved handlers beyond
-	 * their reservation). Guarded by the lock.
+	 * their reservation, including permits taken at the gate). Guarded by the
+	 * lock.
 	 */
 	private int sharedInUse;
 
 	/**
-	 * Permits in use. Guarded by the lock.
+	 * Permits in use (including permits taken at the gate). Guarded by the lock.
 	 */
 	private int inFlight;
 
@@ -281,27 +338,55 @@ public class JmsListenerBulkhead {
 	}
 
 	/**
-	 * Removes a waiter from the queue. Under the lock.
+	 * Gets the queue of a waiter. Under the lock.
+	 *
+	 * @param  waiter Waiter.
+	 * @return        The queue.
+	 */
+	private Set<Waiter> getQueue(
+			final Waiter waiter) {
+		return (waiter.kind == WaiterKind.MESSAGE ? this.messageWaiters : this.gateWaiters);
+	}
+
+	/**
+	 * Adds a waiter to its queue. Under the lock.
+	 *
+	 * @param waiter Waiter.
+	 */
+	private void enqueue(
+			final Waiter waiter) {
+		this.getQueue(waiter).add(waiter);
+		if (waiter.reservation != null) {
+			this.queuedReservedWaiters++;
+		}
+	}
+
+	/**
+	 * Removes a waiter from its queue. Under the lock.
 	 *
 	 * @param waiter Waiter.
 	 */
 	private void dequeue(
 			final Waiter waiter) {
-		if (this.waiters.remove(waiter) && (waiter.reservation != null)) {
+		if (this.getQueue(waiter).remove(waiter) && (waiter.reservation != null)) {
 			this.queuedReservedWaiters--;
 		}
 	}
 
 	/**
-	 * Grants permits to the queued waiters, oldest first, while there is
-	 * capacity: a waiter gets a free reserved permit of its reservation or a free
-	 * shared one. The permit is counted at grant time, so capacity is never
-	 * booked twice between the signal and the wake-up. Stops once the shared
-	 * permits are exhausted and no queued waiter has a reservation. Under the
-	 * lock.
+	 * Grants the waiters of a queue, oldest first, while there is capacity: a
+	 * waiter is admissible with a free reserved permit of its reservation or a
+	 * free shared one. A permit is counted at grant time (for a kind that takes
+	 * one), so capacity is never booked twice between the signal and the
+	 * wake-up; a gate waiter without permit is woken without counting anything.
+	 * Stops once the shared permits are exhausted and no queued waiter has a
+	 * reservation. Under the lock.
+	 *
+	 * @param queue Queue.
 	 */
-	private void grantWaiters() {
-		final Iterator<Waiter> waitersIterator = this.waiters.iterator();
+	private void grantWaiters(
+			final Set<Waiter> queue) {
+		final Iterator<Waiter> waitersIterator = queue.iterator();
 		while (waitersIterator.hasNext() && ((this.sharedInUse < this.getSharedCapacity()) || (this.queuedReservedWaiters > 0))) {
 			final Waiter waiter = waitersIterator.next();
 			if (this.isAdmissible(waiter.reservation)) {
@@ -309,11 +394,36 @@ public class JmsListenerBulkhead {
 				if (waiter.reservation != null) {
 					this.queuedReservedWaiters--;
 				}
-				this.countInFlight(waiter.reservation);
+				if (waiter.kind.takesPermit) {
+					this.countInFlight(waiter.reservation);
+				}
 				waiter.isGranted = true;
 				waiter.condition.signal();
 			}
 		}
+	}
+
+	/**
+	 * Grants the queued waiters while there is capacity: first the consumers
+	 * holding a message, then the gate waiters, each queue in arrival order.
+	 * Under the lock.
+	 */
+	private void grantWaiters() {
+		this.grantWaiters(this.messageWaiters);
+		this.grantWaiters(this.gateWaiters);
+	}
+
+	/**
+	 * If a consumer arriving at the gate may receive at once: nobody waits and
+	 * it is admissible, or a reserved permit of its reservation is free. Under
+	 * the lock, after the limit was refreshed.
+	 *
+	 * @param  reservation Reservation (null for unreserved).
+	 * @return             If the consumer may receive at once.
+	 */
+	private boolean isGateOpenUnderLock(
+			final String reservation) {
+		return (this.messageWaiters.isEmpty() && this.gateWaiters.isEmpty() && this.isAdmissible(reservation)) || this.hasFreeReservedSlot(reservation);
 	}
 
 	/**
@@ -351,8 +461,8 @@ public class JmsListenerBulkhead {
 	}
 
 	/**
-	 * Ends a wait without a permit. A grant that raced with the abort is handed
-	 * on to the next waiters. Under the lock.
+	 * Ends a wait without a permit. A permit granted in a race with the abort is
+	 * handed on to the next waiters. Under the lock.
 	 *
 	 * @param  waiter      Waiter.
 	 * @param  reason      Why the wait ended.
@@ -366,8 +476,10 @@ public class JmsListenerBulkhead {
 			final String destination,
 			final long startNanos) {
 		if (waiter.isGranted) {
-			this.uncountInFlight(waiter.reservation);
-			this.grantWaiters();
+			if (waiter.kind.takesPermit) {
+				this.uncountInFlight(waiter.reservation);
+				this.grantWaiters();
+			}
 		}
 		else {
 			this.dequeue(waiter);
@@ -376,9 +488,9 @@ public class JmsListenerBulkhead {
 	}
 
 	/**
-	 * Queues a waiter and waits until it is granted a permit, the container
-	 * stops, the maximum wait elapses or the thread is interrupted. Under the
-	 * lock (released while awaiting).
+	 * Queues a waiter and waits until it is granted, the container stops, the
+	 * maximum wait elapses or the thread is interrupted. Under the lock
+	 * (released while awaiting).
 	 *
 	 * @param  waiter                       Waiter.
 	 * @param  destination                  Listener destination (for the
@@ -386,19 +498,17 @@ public class JmsListenerBulkhead {
 	 * @param  startNanos                   When the wait started.
 	 * @param  maxWaitNanos                 Maximum wait (0 for none).
 	 * @param  isContainerStopped           If the listener container stopped.
-	 * @return                              The permit.
-	 * @throws JmsListenerBulkheadException If the wait ended without a permit.
+	 * @return                              How long the wait took (at least 1
+	 *                                      nanosecond).
+	 * @throws JmsListenerBulkheadException If the wait ended without a grant.
 	 */
-	private JmsListenerBulkheadPermit awaitPermit(
+	private long awaitGrant(
 			final Waiter waiter,
 			final String destination,
 			final long startNanos,
 			final long maxWaitNanos,
 			final BooleanSupplier isContainerStopped) throws JmsListenerBulkheadException {
-		this.waiters.add(waiter);
-		if (waiter.reservation != null) {
-			this.queuedReservedWaiters++;
-		}
+		this.enqueue(waiter);
 		// Covers a limit raised since the last release (may grant this waiter).
 		this.grantWaiters();
 		final long stateCheckIntervalNanos = JmsListenerBulkhead.STATE_CHECK_INTERVAL.toNanos();
@@ -425,13 +535,112 @@ public class JmsListenerBulkhead {
 		if (abortReason != null) {
 			throw this.abort(waiter, abortReason, destination, startNanos);
 		}
-		return new JmsListenerBulkheadPermit(this, waiter.reservation, Math.max(1L, System.nanoTime() - startNanos));
+		return Math.max(1L, System.nanoTime() - startNanos);
 	}
 
 	/**
-	 * Acquires a permit, waiting in arrival order when none is free. A request
-	 * with a free reserved permit of its reservation is granted at once, whatever
-	 * the queue holds.
+	 * Gets the reservation a request uses.
+	 *
+	 * @param  reservation Requested reservation.
+	 * @return             The reservation, or null when it is null or this
+	 *                     bulkhead does not have it.
+	 */
+	private String getActualReservation(
+			final String reservation) {
+		return ((reservation != null) && this.reservedPermits.containsKey(reservation) ? reservation : null);
+	}
+
+	/**
+	 * Waits at the gate until the consumer may receive: in arrival order, until
+	 * its listener is admissible (a free reserved permit of its reservation or a
+	 * free shared one). A consumer that arrives while nobody waits and it is
+	 * admissible, or while a reserved permit of its reservation is free, passes
+	 * at once.
+	 * <p>
+	 * With {@code takesPermit} (its queue just delivered, so the receive is
+	 * expected to return at once) the permit is taken at the gate and the
+	 * admission holds it until it becomes the handler's permit or is closed.
+	 * Without (its queue was just empty), nothing is taken: an idle queue's
+	 * consumer never holds a permit while it polls, and on a message it acquires
+	 * the permit with {@link #acquire}, normally at once.
+	 * <p>
+	 * There is no maximum wait at the gate (no message waits); the wait ends on
+	 * a container stop and on an interruption, as {@link #acquire} does.
+	 *
+	 * @param  reservation                  Reservation (null, or one this
+	 *                                          bulkhead does not have, for
+	 *                                          unreserved).
+	 * @param  takesPermit                  If the permit is taken at the gate.
+	 * @param  destination                  Listener destination (only used to
+	 *                                          describe an aborted wait).
+	 * @param  isContainerStopped           If the listener container stopped
+	 *                                          (checked while waiting; never
+	 *                                          null).
+	 * @return                              The admission, to be closed after the
+	 *                                      receive and its handler.
+	 * @throws JmsListenerBulkheadException If the wait ended first (container
+	 *                                          stop or interruption).
+	 */
+	public JmsListenerBulkheadAdmission admit(
+			final String reservation,
+			final boolean takesPermit,
+			final String destination,
+			final BooleanSupplier isContainerStopped) throws JmsListenerBulkheadException {
+		final long startNanos = System.nanoTime();
+		final String actualReservation = this.getActualReservation(reservation);
+		JmsListenerBulkheadAdmission admission = null;
+		this.lock.lock();
+		try {
+			if (this.refreshMaxInFlight()) {
+				this.grantWaiters();
+			}
+			if (this.isGateOpenUnderLock(actualReservation)) {
+				if (takesPermit) {
+					this.countInFlight(actualReservation);
+				}
+				admission = new JmsListenerBulkheadAdmission(this, actualReservation, takesPermit, 0L);
+			}
+			else {
+				final long waitNanos = this.awaitGrant(new Waiter(actualReservation,
+						(takesPermit ? WaiterKind.GATE_WITH_PERMIT : WaiterKind.GATE_WITHOUT_PERMIT), this.lock.newCondition()), destination, startNanos, 0L,
+						Objects.requireNonNull(isContainerStopped));
+				admission = new JmsListenerBulkheadAdmission(this, actualReservation, takesPermit, waitNanos);
+			}
+		}
+		finally {
+			this.lock.unlock();
+		}
+		return admission;
+	}
+
+	/**
+	 * If a consumer of a listener of the reservation arriving at the gate now
+	 * would receive at once. Used to decide whether a listener container may
+	 * start another consumer.
+	 *
+	 * @param  reservation Reservation (null, or one this bulkhead does not have,
+	 *                         for unreserved).
+	 * @return             If the gate is open for the reservation.
+	 */
+	public boolean isGateOpen(
+			final String reservation) {
+		this.lock.lock();
+		try {
+			if (this.refreshMaxInFlight()) {
+				this.grantWaiters();
+			}
+			return this.isGateOpenUnderLock(this.getActualReservation(reservation));
+		}
+		finally {
+			this.lock.unlock();
+		}
+	}
+
+	/**
+	 * Acquires a permit for a received message, waiting in arrival order when
+	 * none is free (holding the message). A request with a free reserved permit
+	 * of its reservation is granted at once, whatever the queue holds; consumers
+	 * waiting at the gate never delay it.
 	 *
 	 * @param  reservation                  Reservation (null, or one this
 	 *                                          bulkhead does not have, for
@@ -454,7 +663,7 @@ public class JmsListenerBulkhead {
 			final Duration maxWait,
 			final BooleanSupplier isContainerStopped) throws JmsListenerBulkheadException {
 		final long startNanos = System.nanoTime();
-		final String actualReservation = ((reservation != null) && this.reservedPermits.containsKey(reservation) ? reservation : null);
+		final String actualReservation = this.getActualReservation(reservation);
 		final long maxWaitNanos = ((maxWait == null) || maxWait.isNegative() ? 0L : maxWait.toNanos());
 		JmsListenerBulkheadPermit permit = null;
 		this.lock.lock();
@@ -462,13 +671,16 @@ public class JmsListenerBulkhead {
 			if (this.refreshMaxInFlight()) {
 				this.grantWaiters();
 			}
-			if ((this.waiters.isEmpty() && this.isAdmissible(actualReservation)) || this.hasFreeReservedSlot(actualReservation)) {
+			// Gate waiters do not hold a message: a consumer that holds one does not
+			// queue behind them.
+			if ((this.messageWaiters.isEmpty() && this.isAdmissible(actualReservation)) || this.hasFreeReservedSlot(actualReservation)) {
 				this.countInFlight(actualReservation);
 				permit = new JmsListenerBulkheadPermit(this, actualReservation, 0L);
 			}
 			else {
-				permit = this.awaitPermit(new Waiter(actualReservation, this.lock.newCondition()), destination, startNanos, maxWaitNanos,
-						Objects.requireNonNull(isContainerStopped));
+				final long waitNanos = this.awaitGrant(new Waiter(actualReservation, WaiterKind.MESSAGE, this.lock.newCondition()), destination, startNanos,
+						maxWaitNanos, Objects.requireNonNull(isContainerStopped));
+				permit = new JmsListenerBulkheadPermit(this, actualReservation, waitNanos);
 			}
 		}
 		finally {
@@ -478,17 +690,20 @@ public class JmsListenerBulkhead {
 	}
 
 	/**
-	 * Releases a permit and grants the freed capacity to the oldest admissible
-	 * waiters. Called once per permit, by {@link JmsListenerBulkheadPermit#close()}.
+	 * Releases a permit (of a handler or taken at the gate) and grants the freed
+	 * capacity to the oldest admissible waiters. Called once per permit, by
+	 * {@link JmsListenerBulkheadPermit#close()} and
+	 * {@link JmsListenerBulkheadAdmission#close()}.
 	 *
-	 * @param permit Permit.
+	 * @param reservation Reservation the permit was counted in (null for
+	 *                        unreserved).
 	 */
 	void release(
-			final JmsListenerBulkheadPermit permit) {
+			final String reservation) {
 		this.lock.lock();
 		try {
 			this.refreshMaxInFlight();
-			this.uncountInFlight(permit.getReservation());
+			this.uncountInFlight(reservation);
 			this.grantWaiters();
 		}
 		finally {
@@ -537,14 +752,31 @@ public class JmsListenerBulkhead {
 	}
 
 	/**
-	 * Gets the listeners waiting for a permit.
+	 * Gets the consumers waiting: at the gate before they receive, or holding a
+	 * received message for a permit.
 	 *
-	 * @return The listeners waiting for a permit.
+	 * @return The consumers waiting.
 	 */
 	public int getWaiting() {
 		this.lock.lock();
 		try {
-			return this.waiters.size();
+			return this.gateWaiters.size() + this.messageWaiters.size();
+		}
+		finally {
+			this.lock.unlock();
+		}
+	}
+
+	/**
+	 * Gets the consumers holding a received message while they wait for a
+	 * permit (part of {@link #getWaiting()}).
+	 *
+	 * @return The consumers holding a received message while they wait.
+	 */
+	public int getWaitingWithMessage() {
+		this.lock.lock();
+		try {
+			return this.messageWaiters.size();
 		}
 		finally {
 			this.lock.unlock();

@@ -190,13 +190,14 @@ the depth-proportional window to drain faster.
 ### With the listener bulkhead
 
 With the [listener bulkhead](jms-listener-bulkhead.md) enabled, a consumer waiting
-for a permit keeps whatever it has buffered: up to `dynamic-credits-max-credits`
-bytes once the queue is above the depth threshold. That only happens with a deep
-backlog, when every instance is saturated anyway, and the bulkhead makes it rarer
-(backlogged containers run more consumers, so each one's share of the depth is
-smaller). Where instances have very different capacity, lower
-`dynamic-credits-max-credits` or raise the threshold so a slow instance does not
-hold messages others could process.
+at the gate (or for a permit) keeps whatever it has buffered: up to
+`dynamic-credits-max-credits` bytes once the queue is above the depth threshold.
+The gate stops a consumer from asking for more, not from keeping what it already
+prefetched, so those messages stay deliveries the broker tracks. That only
+happens with a deep backlog. Where a backlog should wait on the queue while the
+bulkhead is saturated, or instances have very different capacity, lower
+`dynamic-credits-max-credits` or raise the threshold so a gated or slow instance
+does not hold messages others could process.
 
 ## Observability
 

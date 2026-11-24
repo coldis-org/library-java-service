@@ -136,6 +136,7 @@ public class JmsListenerBulkheadRegistryTest {
 	@Test
 	@DisplayName("enabled=true alone limits the default group to the default handlers per CPU; a multiplier of 0 leaves it unlimited")
 	public void testEnabledWithoutLimit() {
+		Assertions.assertEquals(6D, JmsListenerBulkheadGroupProperties.DEFAULT_MAX_IN_FLIGHT_CPU_MULTIPLIER);
 		this.contextRunner.withPropertyValues(JmsListenerBulkheadRegistryTest.PREFIX + "enabled=true").run(context -> {
 			final JmsListenerBulkheadRegistry registry = context.getBean(JmsListenerBulkheadRegistry.class);
 			Assertions.assertTrue(registry.isEnabled());

@@ -10,10 +10,12 @@ import org.springframework.jms.listener.DefaultMessageListenerContainer;
  * ({@link ExtendedMessagingMessageListenerAdapter}) with the factory bean name
  * and its JMS listener bulkhead group, used to resolve the listener's bulkhead
  * group and reservation (see {@link JmsListenerBulkheadRegistry}). Built by
- * {@link JmsListenerContainerFactoryBuilder}. The containers are plain
- * {@link DefaultMessageListenerContainer} instances (same class, same log
- * category); the factory behaves exactly as
- * {@link DefaultJmsListenerContainerFactory} otherwise.
+ * {@link JmsListenerContainerFactoryBuilder}. Its containers are
+ * {@link ExtendedMessageListenerContainer} instances, whose consumers wait at
+ * the bulkhead gate before they receive (a subclass of
+ * {@link DefaultMessageListenerContainer}, so its log category is its own);
+ * the factory behaves exactly as {@link DefaultJmsListenerContainerFactory}
+ * otherwise.
  */
 public class ExtendedJmsListenerContainerFactory extends DefaultJmsListenerContainerFactory implements BeanNameAware {
 
@@ -62,6 +64,16 @@ public class ExtendedJmsListenerContainerFactory extends DefaultJmsListenerConta
 	public void setBulkheadGroup(
 			final String bulkheadGroup) {
 		this.bulkheadGroup = bulkheadGroup;
+	}
+
+	/**
+	 * Creates an {@link ExtendedMessageListenerContainer}.
+	 *
+	 * @see org.springframework.jms.config.DefaultJmsListenerContainerFactory#createContainerInstance()
+	 */
+	@Override
+	protected DefaultMessageListenerContainer createContainerInstance() {
+		return new ExtendedMessageListenerContainer();
 	}
 
 	/**

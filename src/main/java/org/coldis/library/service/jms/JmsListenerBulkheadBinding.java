@@ -150,6 +150,36 @@ public class JmsListenerBulkheadBinding {
 	}
 
 	/**
+	 * Waits at the gate of the bulkhead until the listener's consumer may
+	 * receive (see {@link JmsListenerBulkhead#admit}). An aborted gate wait is
+	 * not counted in {@value JmsListenerBulkheadRegistry#WAIT_ABORTED_METRIC}: no
+	 * message was received, so nothing is rolled back.
+	 *
+	 * @param  takesPermit                  If the permit is taken at the gate
+	 *                                          (the consumer's queue just
+	 *                                          delivered).
+	 * @param  isContainerStopped           If the listener container stopped.
+	 * @return                              The admission.
+	 * @throws JmsListenerBulkheadException If the wait ended first (container
+	 *                                          stop or interruption).
+	 */
+	public JmsListenerBulkheadAdmission admit(
+			final boolean takesPermit,
+			final BooleanSupplier isContainerStopped) throws JmsListenerBulkheadException {
+		return this.bulkhead.admit(this.reservation, takesPermit, this.destination, isContainerStopped);
+	}
+
+	/**
+	 * If a consumer of the listener arriving at the gate now would receive at
+	 * once.
+	 *
+	 * @return If the gate is open for the listener.
+	 */
+	public boolean isGateOpen() {
+		return this.bulkhead.isGateOpen(this.reservation);
+	}
+
+	/**
 	 * Acquires a permit for a received message, recording the wait (0 when the
 	 * permit was immediate) or the aborted wait.
 	 *
@@ -163,17 +193,43 @@ public class JmsListenerBulkheadBinding {
 	public JmsListenerBulkheadPermit acquire(
 			final Message message,
 			final BooleanSupplier isContainerStopped) throws JMSException, JmsListenerBulkheadException {
-		final Duration maxWait = this.getMaxWait(message);
-		JmsListenerBulkheadPermit permit = null;
-		try {
-			permit = this.bulkhead.acquire(this.reservation, this.destination, maxWait, isContainerStopped);
-		}
-		catch (final JmsListenerBulkheadException exception) {
-			this.countAbortedWait(exception.getReason());
-			throw exception;
+		return this.acquire(message, null, isContainerStopped);
+	}
+
+	/**
+	 * Gets the permit for a received message: the one its consumer took at the
+	 * gate, or else a permit acquired now (waiting, holding the message, when
+	 * none is free). Records the wait (the gate wait plus the wait holding the
+	 * message, 0 when both were immediate) or the aborted wait.
+	 *
+	 * @param  message                      Received message.
+	 * @param  admission                    Admission the message was received
+	 *                                          with (null when the consumer did
+	 *                                          not pass the gate).
+	 * @param  isContainerStopped           If the listener container stopped.
+	 * @return                              The permit, to be closed when the
+	 *                                      handler ends.
+	 * @throws JMSException                 If the message cannot be read.
+	 * @throws JmsListenerBulkheadException If the wait ended without a permit.
+	 */
+	public JmsListenerBulkheadPermit acquire(
+			final Message message,
+			final JmsListenerBulkheadAdmission admission,
+			final BooleanSupplier isContainerStopped) throws JMSException, JmsListenerBulkheadException {
+		final boolean isOwnAdmission = ((admission != null) && (admission.getBulkhead() == this.bulkhead));
+		JmsListenerBulkheadPermit permit = (isOwnAdmission ? admission.takePermit() : null);
+		if (permit == null) {
+			final Duration maxWait = this.getMaxWait(message);
+			try {
+				permit = this.bulkhead.acquire(this.reservation, this.destination, maxWait, isContainerStopped);
+			}
+			catch (final JmsListenerBulkheadException exception) {
+				this.countAbortedWait(exception.getReason());
+				throw exception;
+			}
 		}
 		if (this.waitTimer != null) {
-			this.waitTimer.record(permit.getWaitNanos(), TimeUnit.NANOSECONDS);
+			this.waitTimer.record((isOwnAdmission ? admission.getWaitNanos() : 0L) + permit.getWaitNanos(), TimeUnit.NANOSECONDS);
 		}
 		return permit;
 	}

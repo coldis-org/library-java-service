@@ -30,7 +30,7 @@ The threads of every listener container's polling consumers; they also run the h
 | `priority` | unset (5) | **Deprecated**, WARN when set: see [Priority](#priority). |
 
 Why unbounded: a capped pool (the previous default was 20 threads per processor) lets idle pollers
-and consumers waiting for a bulkhead permit hold the threads busy queues need. And a
+and consumers waiting at the bulkhead gate hold the threads busy queues need. And a
 `ThreadPoolExecutor` below its core size starts a new thread on every submit, even with idle threads;
 consumers resubmit themselves every `maxMessagesPerTask` (10) receives, so a bounded pool grew to
 its core size and never shrank (keep-alive did not apply). The cached pool grows with the polling
@@ -90,7 +90,7 @@ run more handlers at once after upgrading.
 
 1. Remove `listener.executor.core-size*`, `parallelism*`, `min-runnable*`, `priority` and
    `concurrency*` lines.
-2. The bulkhead is on by default: without `max-in-flight` it allows 8 handlers per CPU
+2. The bulkhead is on by default: without `max-in-flight` it allows 6 handlers per CPU
    (`max-in-flight-cpu-multiplier`; tune toward 2–4 for CPU-bound modules and 8–12 for database-,
    I/O- or broker-heavy ones). `listener.bulkhead.enabled=false` turns it off.
 3. If the module relied on the old cap, set `listener.bulkhead.max-in-flight` to its old effective
@@ -98,7 +98,7 @@ run more handlers at once after upgrading.
    (with a WARN).
 
 Rollout: one module first; compare before and after live and waiting threads (`executor.*`,
-JVM threads), in-flight and waiting handlers (`jms.listener.bulkhead.*`), CPU throttling, the
+JVM threads), in-flight handlers and waiting consumers (`jms.listener.bulkhead.*`), CPU throttling, the
 database pool's pending connections (Hikari `pending`) and queue message age; then the next modules.
 
 ## Follow-ups

@@ -1,20 +1,28 @@
 package org.coldis.library.test.service.jms;
 
 import java.time.Duration;
+import java.util.Enumeration;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.Executor;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.locks.LockSupport;
+import java.util.function.BooleanSupplier;
+import java.util.function.Consumer;
 
 import javax.sql.DataSource;
 
+import org.coldis.library.service.jms.ExtendedMessageListenerContainer;
 import org.coldis.library.service.jms.ExtendedMessagingMessageListenerAdapter;
 import org.coldis.library.service.jms.JmsConfigurationHelper;
 import org.coldis.library.service.jms.JmsConverterProperties;
 import org.coldis.library.service.jms.JmsListenerBulkhead;
 import org.coldis.library.service.jms.JmsListenerBulkheadGroupProperties;
+import org.coldis.library.service.jms.JmsListenerBulkheadProperties;
 import org.coldis.library.service.jms.JmsListenerBulkheadRegistry;
 import org.coldis.library.service.jms.JmsListenerBulkheadReservationProperties;
 import org.coldis.library.service.jms.JmsMessage;
@@ -38,19 +46,26 @@ import org.springframework.context.ApplicationContext;
 import org.springframework.jms.config.DefaultJmsListenerContainerFactory;
 import org.springframework.jms.core.JmsTemplate;
 import org.springframework.jms.listener.DefaultMessageListenerContainer;
+import org.springframework.test.util.ReflectionTestUtils;
 import org.springframework.util.ErrorHandler;
 
 import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.MeterRegistry;
 import jakarta.jms.ConnectionFactory;
+import jakarta.jms.JMSException;
 import jakarta.jms.Message;
+import jakarta.jms.QueueBrowser;
 
 /**
- * The bulkhead in real listener containers against the broker: no message is
- * lost or processed twice when a wait times out or the container stops or shuts
- * down, failures release the permit, reserved permits and the stale filter
- * around the permit. Containers are built in the test (one bulkhead group per
- * test), so the shared context's listeners are untouched.
+ * The bulkhead in real listener containers against the broker. With the gate
+ * ({@link ExtendedMessageListenerContainer}): a saturated bulkhead keeps the
+ * messages on the queue, consumers do not scale up, idle queues hold no permit,
+ * stop and shutdown roll nothing back, the bulkhead disabled changes nothing.
+ * Without the gate (a plain container factory, consumers wait holding a
+ * message): no message is lost or processed twice when a wait times out. Both:
+ * failures release the permit, reserved permits and the stale filter around
+ * the permit. Containers are built in the test (one bulkhead group per test),
+ * so the shared context's listeners are untouched.
  */
 @TestWithContainer(reuse = true, stopDelay = ContainerTestHelper.CONTAINER_STOP_DELAY_SECONDS)
 @ExtendWith(StartTestWithContainerExtension.class)
@@ -169,6 +184,94 @@ public class JmsListenerBulkheadContainerTest extends ContainerTestHelper {
 	}
 
 	/**
+	 * Creates a plain container factory (not built by the library builder): its
+	 * containers have no gate, so consumers wait for a permit holding the
+	 * message they received. Its listeners use the default group.
+	 *
+	 * @return The factory.
+	 */
+	private DefaultJmsListenerContainerFactory createPlainFactory() {
+		final JmsConfigurationHelper helper = JmsListenerBulkheadTestSupport.createUnboundedHelper("plain");
+		this.helpers.add(helper);
+		final DefaultJmsListenerContainerFactory factory = new DefaultJmsListenerContainerFactory();
+		factory.setConnectionFactory(ConnectionFactoryUnwrapper.unwrap(this.connectionFactory));
+		factory.setTaskExecutor((Executor) ReflectionTestUtils.getField(helper, "jmsListenerExecutor"));
+		factory.setSessionTransacted(true);
+		factory.setMaxMessagesPerTask(10);
+		factory.setCacheLevel(3);
+		factory.setErrorHandler(this.errorHandler);
+		return factory;
+	}
+
+	/**
+	 * Creates a registry whose default group (the group of a plain factory's
+	 * listeners) is limited.
+	 *
+	 * @param  configurer Default group settings.
+	 * @return            The registry.
+	 */
+	private JmsListenerBulkheadRegistry createDefaultGroupRegistry(
+			final Consumer<JmsListenerBulkheadGroupProperties> configurer) {
+		final JmsListenerBulkheadProperties properties = new JmsListenerBulkheadProperties();
+		properties.setEnabled(true);
+		configurer.accept(properties);
+		return new JmsListenerBulkheadRegistry(properties, this.applicationContext.getBeanProvider(MeterRegistry.class));
+	}
+
+	/**
+	 * Counts the messages on a queue that no consumer holds.
+	 *
+	 * @param  queue Queue.
+	 * @return       The count.
+	 */
+	private int countOnQueue(
+			final String queue) {
+		final Integer count = this.jmsTemplate.browse(queue, (
+				session,
+				browser) -> JmsListenerBulkheadContainerTest.count(browser));
+		return (count == null ? 0 : count);
+	}
+
+	/**
+	 * Counts the messages a browser sees.
+	 *
+	 * @param  browser       Browser.
+	 * @return               The count.
+	 * @throws JMSException If the browser fails.
+	 */
+	private static int count(
+			final QueueBrowser browser) throws JMSException {
+		int count = 0;
+		for (final Enumeration<?> messages = browser.getEnumeration(); messages.hasMoreElements(); messages.nextElement()) {
+			count++;
+		}
+		return count;
+	}
+
+	/**
+	 * Waits until a condition has held continuously for a period, then asserts
+	 * it.
+	 *
+	 * @param condition   Condition.
+	 * @param period      Period the condition must hold.
+	 * @param description Description.
+	 */
+	private static void waitUntilStable(
+			final BooleanSupplier condition,
+			final Duration period,
+			final String description) {
+		final long deadline = System.nanoTime() + JmsListenerBulkheadTestSupport.WAIT.toNanos();
+		long heldSince = System.nanoTime();
+		while (((System.nanoTime() - heldSince) < period.toNanos()) && (System.nanoTime() < deadline)) {
+			if (!condition.getAsBoolean()) {
+				heldSince = System.nanoTime();
+			}
+			LockSupport.parkNanos(TimeUnit.MILLISECONDS.toNanos(2));
+		}
+		Assertions.assertTrue(condition.getAsBoolean() && ((System.nanoTime() - heldSince) >= period.toNanos()), description);
+	}
+
+	/**
 	 * Creates a registry with one group.
 	 *
 	 * @param  group           Group.
@@ -273,30 +376,35 @@ public class JmsListenerBulkheadContainerTest extends ContainerTestHelper {
 	}
 
 	/**
-	 * Tests that a wait timeout gives the message back without losing it, only
-	 * for the first max-wait-deliveries deliveries.
+	 * Tests that a wait timeout of a consumer holding a message gives the message
+	 * back without losing it, only for the first max-wait-deliveries deliveries.
+	 * The gate keeps messages on the queue, so only a container without it (or a
+	 * consumer racing for the last permit) waits holding a message: a plain
+	 * factory's container is used.
 	 *
 	 * @throws Exception If the test fails.
 	 */
 	@Test
-	@DisplayName("Wait timeout: the message is rolled back for the first max-wait-deliveries deliveries, then waits, and is processed once")
+	@DisplayName("Without the gate, a wait timeout rolls the message back for the first max-wait-deliveries deliveries, then waits, and it is processed once")
 	public void testWaitTimeoutLosesNothing() throws Exception {
-		final String group = "timeout-" + System.nanoTime();
+		final String group = JmsListenerBulkheadProperties.DEFAULT_GROUP;
 		final String queue = JmsListenerBulkheadContainerTest.createQueue("timeout");
-		final JmsListenerBulkheadGroupProperties groupProperties = JmsListenerBulkheadContainerTest.createGroupProperties(1);
-		groupProperties.setMaxWait(Duration.ofMillis(300));
-		groupProperties.setMaxWaitDeliveries(2);
-		final JmsListenerBulkheadRegistry registry = this.createRegistry(group, groupProperties);
+		final JmsListenerBulkheadRegistry registry = this.createDefaultGroupRegistry(groupProperties -> {
+			groupProperties.setMaxInFlight(1);
+			groupProperties.setMaxWait(Duration.ofMillis(300));
+			groupProperties.setMaxWaitDeliveries(2);
+		});
 		final CountDownLatch release = this.createLatch();
 		final Map<String, Integer> processedDeliveryCounts = new ConcurrentHashMap<>();
 		final AtomicInteger processed = new AtomicInteger();
-		final DefaultMessageListenerContainer listenerContainer = this.createContainer(this.createFactory(group), registry, queue, "2", message -> {
+		final DefaultMessageListenerContainer listenerContainer = this.createContainer(this.createPlainFactory(), registry, queue, "2", message -> {
 			if (processed.getAndIncrement() == 0) {
 				JmsListenerBulkheadTestSupport.awaitIgnoringInterrupts(release);
 			}
 			processedDeliveryCounts.merge(JmsListenerBulkheadTestSupport.getMessageId(message), JmsListenerBulkheadTestSupport.getDeliveryCount(message),
 					(previous, current) -> -1);
 		});
+		Assertions.assertEquals(DefaultMessageListenerContainer.class, listenerContainer.getClass());
 		this.send(queue, 2);
 		listenerContainer.start();
 
@@ -304,7 +412,7 @@ public class JmsListenerBulkheadContainerTest extends ContainerTestHelper {
 		JmsListenerBulkheadTestSupport.waitUntil(() -> this.getAborted(group, queue, "timeout") == 2D, "two wait timeouts");
 		Assertions.assertFalse(TestHelper.waitUntilValid(() -> this.getAborted(group, queue, "timeout"), aborted -> aborted > 2D, TestHelper.REGULAR_WAIT,
 				TestHelper.SHORT_WAIT));
-		JmsListenerBulkheadTestSupport.waitUntil(() -> registry.getBulkhead(group).getWaiting() == 1, "third delivery waiting");
+		JmsListenerBulkheadTestSupport.waitUntil(() -> registry.getBulkhead(group).getWaitingWithMessage() == 1, "third delivery waiting");
 		release.countDown();
 
 		// Both processed exactly once, the waiting one on its third delivery.
@@ -318,56 +426,233 @@ public class JmsListenerBulkheadContainerTest extends ContainerTestHelper {
 	}
 
 	/**
-	 * Tests that a container stop rolls the waiters back, and a restart
-	 * processes their messages once.
+	 * Tests that a saturated bulkhead keeps the messages on the queue: the gated
+	 * consumers do not receive.
 	 *
 	 * @throws Exception If the test fails.
 	 */
 	@Test
-	@DisplayName("Container stop: waiters roll their messages back; after a restart each message is processed exactly once")
-	public void testStopRollsWaitersBack() throws Exception {
-		final String group = "stop-" + System.nanoTime();
-		final String queue = JmsListenerBulkheadContainerTest.createQueue("stop");
+	@DisplayName("Saturated bulkhead: gated consumers do not receive, the messages stay on the queue, each is delivered once")
+	public void testSaturatedGateKeepsMessagesOnQueue() throws Exception {
+		final String group = "saturated-" + System.nanoTime();
+		final String queue = JmsListenerBulkheadContainerTest.createQueue("saturated");
 		final JmsListenerBulkheadRegistry registry = this.createRegistry(group, JmsListenerBulkheadContainerTest.createGroupProperties(1));
 		final CountDownLatch release = this.createLatch();
-		final Map<String, AtomicInteger> processedIds = new ConcurrentHashMap<>();
+		final Map<String, Integer> processedDeliveryCounts = new ConcurrentHashMap<>();
 		final AtomicInteger processed = new AtomicInteger();
-		final DefaultMessageListenerContainer listenerContainer = this.createContainer(this.createFactory(group), registry, queue, "3", message -> {
+		final DefaultMessageListenerContainer listenerContainer = this.createContainer(this.createFactory(group), registry, queue, "3-3", message -> {
 			if (processed.getAndIncrement() == 0) {
 				JmsListenerBulkheadTestSupport.awaitIgnoringInterrupts(release);
 			}
-			processedIds.computeIfAbsent(JmsListenerBulkheadTestSupport.getMessageId(message), messageId -> new AtomicInteger()).incrementAndGet();
+			processedDeliveryCounts.put(JmsListenerBulkheadTestSupport.getMessageId(message), JmsListenerBulkheadTestSupport.getDeliveryCount(message));
 		});
-		this.send(queue, 3);
+		Assertions.assertInstanceOf(ExtendedMessageListenerContainer.class, listenerContainer);
+		this.send(queue, 6);
 		listenerContainer.start();
 		JmsListenerBulkheadTestSupport.waitUntil(() -> (registry.getBulkhead(group) != null) && (registry.getBulkhead(group).getWaiting() == 2),
-				"two waiters");
+				"two consumers gated");
 		final JmsListenerBulkhead bulkhead = registry.getBulkhead(group);
 
-		listenerContainer.stop();
-		JmsListenerBulkheadTestSupport.waitUntil(() -> bulkhead.getWaiting() == 0, Duration.ofMillis(TestHelper.LONG_WAIT), "waiters left on stop");
-		JmsListenerBulkheadTestSupport.waitUntil(() -> this.getAborted(group, queue, "stopped") == 2D, "two stopped waits");
-		release.countDown();
-		JmsListenerBulkheadTestSupport.waitUntil(() -> processedIds.size() == 1, "first message processed");
-		JmsListenerBulkheadTestSupport.waitUntil(() -> bulkhead.getInFlight() == 0, "permit released");
+		// One message runs; the other five stay on the queue, held by no consumer.
+		Assertions.assertEquals(0, bulkhead.getWaitingWithMessage());
+		Assertions.assertEquals(1, bulkhead.getInFlight());
+		Assertions.assertEquals(5, this.countOnQueue(queue));
+		Assertions.assertFalse(TestHelper.waitUntilValid(() -> this.countOnQueue(queue), count -> count < 5, TestHelper.REGULAR_WAIT, TestHelper.SHORT_WAIT));
+		Assertions.assertEquals(1, processed.get());
 
-		listenerContainer.start();
-		JmsListenerBulkheadTestSupport.waitUntil(() -> processedIds.size() == 3, "rolled-back messages processed after the restart");
-		Assertions.assertFalse(TestHelper.waitUntilValid(processed::get, processedCount -> processedCount > 3, TestHelper.REGULAR_WAIT, TestHelper.SHORT_WAIT));
-		processedIds.values().forEach(count -> Assertions.assertEquals(1, count.get()));
+		release.countDown();
+		JmsListenerBulkheadTestSupport.waitUntil(() -> processedDeliveryCounts.size() == 6, "all processed");
+		Assertions.assertEquals(List.of(1, 1, 1, 1, 1, 1), List.copyOf(processedDeliveryCounts.values()));
+		JmsListenerBulkheadTestSupport.waitUntil(() -> bulkhead.getInFlight() == 0, "permits released");
 		listenerContainer.shutdown();
 		this.assertQueueEmpty(queue);
 	}
 
 	/**
-	 * Tests that a container shutdown rolls the waiters back, and a new container
-	 * processes their messages once.
+	 * Tests that a backlogged container does not scale up while its consumers
+	 * are gated, unlike a container without the gate.
 	 *
 	 * @throws Exception If the test fails.
 	 */
 	@Test
-	@DisplayName("Container shutdown: waiters roll their messages back; a new container processes each remaining message once")
-	public void testShutdownRollsWaitersBack() throws Exception {
+	@DisplayName("Saturated bulkhead: a backlogged container does not scale up its consumers; without the gate it climbs to its maximum, each holding a message")
+	public void testNoScaleUpWhileGated() throws Exception {
+		final String group = "scale-" + System.nanoTime();
+		final String gatedQueue = JmsListenerBulkheadContainerTest.createQueue("scale-gated");
+		final JmsListenerBulkheadRegistry registry = this.createRegistry(group, JmsListenerBulkheadContainerTest.createGroupProperties(1));
+		final CountDownLatch release = this.createLatch();
+		final AtomicInteger gatedProcessed = new AtomicInteger();
+		final DefaultMessageListenerContainer gatedContainer = this.createContainer(this.createFactory(group), registry, gatedQueue, "1-10", message -> {
+			if (gatedProcessed.getAndIncrement() == 0) {
+				JmsListenerBulkheadTestSupport.awaitIgnoringInterrupts(release);
+			}
+		});
+		this.send(gatedQueue, 30);
+		gatedContainer.start();
+		JmsListenerBulkheadTestSupport.waitUntil(() -> gatedProcessed.get() == 1, "first message running");
+		Assertions.assertFalse(TestHelper.waitUntilValid(gatedContainer::getScheduledConsumerCount, consumers -> consumers > 2, TestHelper.REGULAR_WAIT,
+				TestHelper.SHORT_WAIT));
+		Assertions.assertEquals(0, registry.getBulkhead(group).getWaitingWithMessage());
+		Assertions.assertEquals(29, this.countOnQueue(gatedQueue));
+
+		// The same load without the gate: every new consumer receives a message and
+		// starts another one, up to the maximum, each waiting with its message.
+		final String plainQueue = JmsListenerBulkheadContainerTest.createQueue("scale-plain");
+		final JmsListenerBulkheadRegistry plainRegistry = this.createDefaultGroupRegistry(groupProperties -> groupProperties.setMaxInFlight(1));
+		final AtomicInteger plainProcessed = new AtomicInteger();
+		final DefaultMessageListenerContainer plainContainer = this.createContainer(this.createPlainFactory(), plainRegistry, plainQueue, "1-10", message -> {
+			if (plainProcessed.getAndIncrement() == 0) {
+				JmsListenerBulkheadTestSupport.awaitIgnoringInterrupts(release);
+			}
+		});
+		this.send(plainQueue, 30);
+		plainContainer.start();
+		JmsListenerBulkheadTestSupport.waitUntil(() -> (plainContainer.getScheduledConsumerCount() == 10)
+				&& (plainRegistry.getBulkhead(JmsListenerBulkheadProperties.DEFAULT_GROUP).getWaitingWithMessage() == 9), "plain container scaled up");
+
+		release.countDown();
+		JmsListenerBulkheadTestSupport.waitUntil(() -> (gatedProcessed.get() == 30) && (plainProcessed.get() == 30), "all processed");
+		gatedContainer.shutdown();
+		plainContainer.shutdown();
+		this.assertQueueEmpty(gatedQueue);
+		this.assertQueueEmpty(plainQueue);
+	}
+
+	/**
+	 * Tests that the consumers of an idle queue hold no permit and do not slow a
+	 * busy listener down.
+	 *
+	 * @throws Exception If the test fails.
+	 */
+	@Test
+	@DisplayName("Idle queues hold no permit while they poll, and do not keep a busy listener of the same group out")
+	public void testIdleQueueHoldsNoPermit() throws Exception {
+		final String group = "idle-" + System.nanoTime();
+		final String idleQueue = JmsListenerBulkheadContainerTest.createQueue("idle");
+		final String busyQueue = JmsListenerBulkheadContainerTest.createQueue("busy");
+		final JmsListenerBulkheadRegistry registry = this.createRegistry(group, JmsListenerBulkheadContainerTest.createGroupProperties(1));
+		final DefaultJmsListenerContainerFactory factory = this.createFactory(group);
+		final DefaultMessageListenerContainer idleContainer = this.createContainer(factory, registry, idleQueue, "5-5", message -> {
+		});
+		final JmsListenerBulkheadTestSupport.InFlightProbe probe = new JmsListenerBulkheadTestSupport.InFlightProbe();
+		final AtomicInteger busyProcessed = new AtomicInteger();
+		final DefaultMessageListenerContainer busyContainer = this.createContainer(factory, registry, busyQueue, "1", message -> {
+			probe.enter();
+			busyProcessed.incrementAndGet();
+			probe.exit();
+		});
+		idleContainer.start();
+
+		// Each consumer's first receive takes the permit (it has no history yet) and
+		// comes back empty within the short receive timeout; after that the idle
+		// consumers poll without a permit, and nobody waits at the gate.
+		final JmsListenerBulkhead bulkhead = registry.getBulkhead(group);
+		JmsListenerBulkheadContainerTest.waitUntilStable(() -> (bulkhead.getInFlight() == 0) && (bulkhead.getWaiting() == 0),
+				Duration.ofMillis(ExtendedMessageListenerContainer.PERMIT_RECEIVE_TIMEOUT_MILLIS * 5), "idle consumers polling without permit");
+		Assertions.assertFalse(TestHelper.waitUntilValid(bulkhead::getInFlight, inFlight -> inFlight > 0, TestHelper.REGULAR_WAIT, 10));
+
+		// The busy listener gets the only permit whenever it has a message.
+		this.send(busyQueue, 50);
+		final long startNanos = System.nanoTime();
+		busyContainer.start();
+		JmsListenerBulkheadTestSupport.waitUntil(() -> busyProcessed.get() == 50, "busy messages processed");
+		Assertions.assertTrue((System.nanoTime() - startNanos) < Duration.ofSeconds(15).toNanos(), "busy listener slowed down by idle pollers");
+		Assertions.assertEquals(1, probe.getMaximum());
+		JmsListenerBulkheadTestSupport.waitUntil(() -> bulkhead.getInFlight() == 0, "permit released");
+		idleContainer.shutdown();
+		busyContainer.shutdown();
+		this.assertQueueEmpty(busyQueue);
+	}
+
+	/**
+	 * Tests that a disabled bulkhead changes nothing in the gated container.
+	 *
+	 * @throws Exception If the test fails.
+	 */
+	@Test
+	@DisplayName("Bulkhead disabled: the container receives and runs handlers as before, without gate nor limit")
+	public void testDisabledBulkheadUnchanged() throws Exception {
+		final String group = "disabled-" + System.nanoTime();
+		final String queue = JmsListenerBulkheadContainerTest.createQueue("disabled");
+		final JmsListenerBulkheadProperties properties = new JmsListenerBulkheadProperties();
+		properties.setEnabled(false);
+		properties.getGroups().put(group, JmsListenerBulkheadContainerTest.createGroupProperties(1));
+		final JmsListenerBulkheadRegistry registry = new JmsListenerBulkheadRegistry(properties,
+				this.applicationContext.getBeanProvider(MeterRegistry.class));
+		final CountDownLatch release = this.createLatch();
+		final JmsListenerBulkheadTestSupport.InFlightProbe probe = new JmsListenerBulkheadTestSupport.InFlightProbe();
+		final AtomicInteger processed = new AtomicInteger();
+		final DefaultMessageListenerContainer listenerContainer = this.createContainer(this.createFactory(group), registry, queue, "3", message -> {
+			probe.enter();
+			JmsListenerBulkheadTestSupport.awaitIgnoringInterrupts(release);
+			processed.incrementAndGet();
+			probe.exit();
+		});
+		Assertions.assertInstanceOf(ExtendedMessageListenerContainer.class, listenerContainer);
+		this.send(queue, 3);
+		listenerContainer.start();
+		JmsListenerBulkheadTestSupport.waitUntil(() -> probe.getCurrent() == 3, "three handlers at once");
+		Assertions.assertNull(registry.getBulkhead(group));
+		release.countDown();
+		JmsListenerBulkheadTestSupport.waitUntil(() -> processed.get() == 3, "all processed");
+		listenerContainer.shutdown();
+		this.assertQueueEmpty(queue);
+	}
+
+	/**
+	 * Tests that a container stop ends the gate waits without rolling anything
+	 * back, and a restart processes the remaining messages once.
+	 *
+	 * @throws Exception If the test fails.
+	 */
+	@Test
+	@DisplayName("Container stop: gated consumers leave the gate holding nothing; after a restart each message is processed once, on its first delivery")
+	public void testStopWhileGated() throws Exception {
+		final String group = "stop-" + System.nanoTime();
+		final String queue = JmsListenerBulkheadContainerTest.createQueue("stop");
+		final JmsListenerBulkheadRegistry registry = this.createRegistry(group, JmsListenerBulkheadContainerTest.createGroupProperties(1));
+		final CountDownLatch release = this.createLatch();
+		final Map<String, List<Integer>> processedDeliveryCounts = new ConcurrentHashMap<>();
+		final AtomicInteger processed = new AtomicInteger();
+		final DefaultMessageListenerContainer listenerContainer = this.createContainer(this.createFactory(group), registry, queue, "3-3", message -> {
+			if (processed.getAndIncrement() == 0) {
+				JmsListenerBulkheadTestSupport.awaitIgnoringInterrupts(release);
+			}
+			processedDeliveryCounts.computeIfAbsent(JmsListenerBulkheadTestSupport.getMessageId(message), messageId -> new CopyOnWriteArrayList<>())
+					.add(JmsListenerBulkheadTestSupport.getDeliveryCount(message));
+		});
+		this.send(queue, 3);
+		listenerContainer.start();
+		JmsListenerBulkheadTestSupport.waitUntil(() -> (registry.getBulkhead(group) != null) && (registry.getBulkhead(group).getWaiting() == 2),
+				"two gated consumers");
+		final JmsListenerBulkhead bulkhead = registry.getBulkhead(group);
+		Assertions.assertEquals(0, bulkhead.getWaitingWithMessage());
+
+		listenerContainer.stop();
+		JmsListenerBulkheadTestSupport.waitUntil(() -> bulkhead.getWaiting() == 0, Duration.ofMillis(TestHelper.LONG_WAIT), "gated consumers left on stop");
+		Assertions.assertEquals(0D, this.getAborted(group, queue, "stopped"));
+		release.countDown();
+		JmsListenerBulkheadTestSupport.waitUntil(() -> processedDeliveryCounts.size() == 1, "first message processed");
+		JmsListenerBulkheadTestSupport.waitUntil(() -> bulkhead.getInFlight() == 0, "permit released");
+		Assertions.assertEquals(2, this.countOnQueue(queue));
+
+		listenerContainer.start();
+		JmsListenerBulkheadTestSupport.waitUntil(() -> processedDeliveryCounts.size() == 3, "remaining messages processed after the restart");
+		Assertions.assertFalse(TestHelper.waitUntilValid(processed::get, processedCount -> processedCount > 3, TestHelper.REGULAR_WAIT, TestHelper.SHORT_WAIT));
+		Assertions.assertEquals(List.of(List.of(1), List.of(1), List.of(1)), List.copyOf(processedDeliveryCounts.values()));
+		listenerContainer.shutdown();
+		this.assertQueueEmpty(queue);
+	}
+
+	/**
+	 * Tests that a container shutdown ends the gate waits without rolling
+	 * anything back, and a new container processes the remaining messages once.
+	 *
+	 * @throws Exception If the test fails.
+	 */
+	@Test
+	@DisplayName("Container shutdown: gated consumers leave the gate holding nothing; a new container processes each remaining message once, on its first delivery")
+	public void testShutdownWhileGated() throws Exception {
 		final String group = "shutdown-" + System.nanoTime();
 		final String queue = JmsListenerBulkheadContainerTest.createQueue("shutdown");
 		final JmsListenerBulkheadRegistry registry = this.createRegistry(group, JmsListenerBulkheadContainerTest.createGroupProperties(1));
@@ -382,29 +667,28 @@ public class JmsListenerBulkheadContainerTest extends ContainerTestHelper {
 			processedDeliveryCounts.computeIfAbsent(JmsListenerBulkheadTestSupport.getMessageId(message), messageId -> new CopyOnWriteArrayList<>())
 					.add(JmsListenerBulkheadTestSupport.getDeliveryCount(message));
 		};
-		final DefaultMessageListenerContainer listenerContainer = this.createContainer(factory, registry, queue, "3", handler);
+		final DefaultMessageListenerContainer listenerContainer = this.createContainer(factory, registry, queue, "3-3", handler);
 		this.send(queue, 3);
 		listenerContainer.start();
 		JmsListenerBulkheadTestSupport.waitUntil(() -> (registry.getBulkhead(group) != null) && (registry.getBulkhead(group).getWaiting() == 2),
-				"two waiters");
+				"two gated consumers");
 		final JmsListenerBulkhead bulkhead = registry.getBulkhead(group);
 
 		final Thread shutdownThread = Thread.ofPlatform().name("bulkhead-container-shutdown").start(listenerContainer::shutdown);
-		JmsListenerBulkheadTestSupport.waitUntil(() -> bulkhead.getWaiting() == 0, Duration.ofMillis(TestHelper.LONG_WAIT), "waiters left on shutdown");
-		JmsListenerBulkheadTestSupport.waitUntil(() -> (this.getAborted(group, queue, "stopped") + this.getAborted(group, queue, "interrupted")) == 2D,
-				"two stopped or interrupted waits");
+		JmsListenerBulkheadTestSupport.waitUntil(() -> bulkhead.getWaiting() == 0, Duration.ofMillis(TestHelper.LONG_WAIT), "gated consumers left on shutdown");
+		Assertions.assertEquals(0D, this.getAborted(group, queue, "stopped") + this.getAborted(group, queue, "interrupted"));
 		release.countDown();
 		shutdownThread.join(JmsListenerBulkheadTestSupport.WAIT.toMillis());
 		Assertions.assertFalse(shutdownThread.isAlive());
 		Assertions.assertEquals(1, processedDeliveryCounts.size());
 		Assertions.assertEquals(0, bulkhead.getInFlight());
+		Assertions.assertEquals(2, this.countOnQueue(queue));
 
-		final DefaultMessageListenerContainer nextContainer = this.createContainer(factory, registry, queue, "3", handler);
+		final DefaultMessageListenerContainer nextContainer = this.createContainer(factory, registry, queue, "3-3", handler);
 		nextContainer.start();
 		JmsListenerBulkheadTestSupport.waitUntil(() -> processedDeliveryCounts.size() == 3, "remaining messages processed by a new container");
 		Assertions.assertFalse(TestHelper.waitUntilValid(processed::get, processedCount -> processedCount > 3, TestHelper.REGULAR_WAIT, TestHelper.SHORT_WAIT));
-		Assertions.assertEquals(List.of(List.of(1), List.of(2), List.of(2)),
-				processedDeliveryCounts.values().stream().sorted((first, second) -> Integer.compare(first.get(0), second.get(0))).toList());
+		Assertions.assertEquals(List.of(List.of(1), List.of(1), List.of(1)), List.copyOf(processedDeliveryCounts.values()));
 		nextContainer.shutdown();
 		this.assertQueueEmpty(queue);
 	}
@@ -496,7 +780,7 @@ public class JmsListenerBulkheadContainerTest extends ContainerTestHelper {
 		final JmsListenerBulkheadTestSupport.InFlightProbe probe = new JmsListenerBulkheadTestSupport.InFlightProbe();
 		final AtomicInteger bulkProcessed = new AtomicInteger();
 		final AtomicInteger criticalProcessed = new AtomicInteger();
-		final DefaultMessageListenerContainer bulkContainer = this.createContainer(factory, registry, bulkQueue, "1-5", message -> {
+		final DefaultMessageListenerContainer bulkContainer = this.createContainer(factory, registry, bulkQueue, "5-5", message -> {
 			probe.enter();
 			try {
 				JmsListenerBulkheadTestSupport.awaitIgnoringInterrupts(release);
@@ -530,14 +814,21 @@ public class JmsListenerBulkheadContainerTest extends ContainerTestHelper {
 	}
 
 	/**
-	 * Tests that a message superseded while it waited is dropped after the grant.
+	 * Runs the stale filter scenario: a keyed message is superseded while a
+	 * blocker holds the only permit; it must be dropped without running the
+	 * handler.
 	 *
+	 * @param  group     Group (default for the plain factory).
+	 * @param  factory   Factory.
+	 * @param  registry  Registry.
+	 * @param  gated     If the factory's containers have the gate.
 	 * @throws Exception If the test fails.
 	 */
-	@Test
-	@DisplayName("A keyed message superseded while it waited is dropped after the grant, without running the handler")
-	public void testStaleFilterAroundPermit() throws Exception {
-		final String group = "stale-" + System.nanoTime();
+	private void assertStaleFilterAroundPermit(
+			final String group,
+			final DefaultJmsListenerContainerFactory factory,
+			final JmsListenerBulkheadRegistry registry,
+			final boolean gated) throws Exception {
 		final String queue = JmsListenerBulkheadContainerTest.createQueue("stale");
 		final String key = "key-" + System.nanoTime();
 		final StaleMessageFilterProperties staleProperties = new StaleMessageFilterProperties();
@@ -546,11 +837,10 @@ public class JmsListenerBulkheadContainerTest extends ContainerTestHelper {
 		staleProperties.setClockSkewMargin(Duration.ofMillis(100));
 		final StaleMessageFilterService staleMessageFilterService = new StaleMessageFilterService(staleProperties,
 				this.applicationContext.getBeanProvider(DataSource.class));
-		final JmsListenerBulkheadRegistry registry = this.createRegistry(group, JmsListenerBulkheadContainerTest.createGroupProperties(1));
 		final CountDownLatch release = this.createLatch();
 		final List<String> handled = new CopyOnWriteArrayList<>();
-		final DefaultMessageListenerContainer listenerContainer = JmsListenerBulkheadTestSupport.createContainer(this.createFactory(group),
-				JmsListenerBulkheadTestSupport.createEndpoint(queue, queue, "2", message -> {
+		final DefaultMessageListenerContainer listenerContainer = JmsListenerBulkheadTestSupport.createContainer(factory,
+				JmsListenerBulkheadTestSupport.createEndpoint(queue, queue, "2-2", message -> {
 					handled.add(message.getStringProperty("name"));
 					if ("blocker".equals(message.getStringProperty("name"))) {
 						JmsListenerBulkheadTestSupport.awaitIgnoringInterrupts(release);
@@ -572,7 +862,13 @@ public class JmsListenerBulkheadContainerTest extends ContainerTestHelper {
 			return message;
 		});
 		final JmsListenerBulkhead bulkhead = registry.getBulkhead(group);
-		JmsListenerBulkheadTestSupport.waitUntil(() -> bulkhead.getWaiting() == 1, "keyed message waiting");
+		// With the gate the keyed message waits on the queue; without, in the consumer.
+		if (gated) {
+			JmsListenerBulkheadTestSupport.waitUntil(() -> (bulkhead.getWaiting() == 1) && (this.countOnQueue(queue) == 1), "keyed message on the queue");
+		}
+		else {
+			JmsListenerBulkheadTestSupport.waitUntil(() -> bulkhead.getWaitingWithMessage() == 1, "keyed message waiting in the consumer");
+		}
 
 		// A same-key processing starts while the keyed message waits.
 		staleMessageFilterService.recordProcessing(queue, key, 5000L);
@@ -586,6 +882,22 @@ public class JmsListenerBulkheadContainerTest extends ContainerTestHelper {
 		Assertions.assertEquals(List.of("blocker"), handled);
 		listenerContainer.shutdown();
 		this.assertQueueEmpty(queue);
+	}
+
+	/**
+	 * Tests that a message superseded while it waited on the queue (gate) or in
+	 * the consumer (no gate) is dropped without running the handler.
+	 *
+	 * @throws Exception If the test fails.
+	 */
+	@Test
+	@DisplayName("A keyed message superseded while it waited (on the queue behind the gate, or holding a consumer without it) is dropped without running the handler")
+	public void testStaleFilterAroundPermit() throws Exception {
+		final String group = "stale-" + System.nanoTime();
+		this.assertStaleFilterAroundPermit(group, this.createFactory(group),
+				this.createRegistry(group, JmsListenerBulkheadContainerTest.createGroupProperties(1)), true);
+		this.assertStaleFilterAroundPermit(JmsListenerBulkheadProperties.DEFAULT_GROUP, this.createPlainFactory(),
+				this.createDefaultGroupRegistry(groupProperties -> groupProperties.setMaxInFlight(1)), false);
 	}
 
 }

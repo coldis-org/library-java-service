@@ -4,6 +4,7 @@ import java.util.Arrays;
 import java.util.List;
 import java.util.Objects;
 
+import org.coldis.library.service.jms.ExtendedMessageListenerContainer;
 import org.coldis.library.service.jms.ExtendedMessagingMessageListenerAdapter;
 import org.coldis.library.service.jms.JmsListenerBulkhead;
 import org.coldis.library.service.jms.JmsListenerBulkheadRegistry;
@@ -142,7 +143,7 @@ public class JmsListenerBulkheadIntegrationTest extends ContainerTestHelper {
 	 * @throws Exception If the test fails.
 	 */
 	@Test
-	@DisplayName("At most 2 handlers of the group run; waiters hold no transaction; metrics follow")
+	@DisplayName("At most 2 handlers of the group run; waiters wait at the gate, holding no message nor transaction; metrics follow")
 	public void testLimitAndPermitBeforeTransaction() throws Exception {
 		JmsListenerBulkheadTestListener.reset();
 		final long firstWaitCountBefore = this.getWaitCount(JmsListenerBulkheadTestListener.FIRST_QUEUE);
@@ -158,6 +159,7 @@ public class JmsListenerBulkheadIntegrationTest extends ContainerTestHelper {
 		Assertions.assertEquals(2, bulkhead.getInFlight());
 		Assertions.assertEquals(2D, this.getGauge(JmsListenerBulkheadRegistry.IN_FLIGHT_METRIC));
 		Assertions.assertTrue(this.getGauge(JmsListenerBulkheadRegistry.WAITING_METRIC) >= 1D);
+		Assertions.assertEquals(0D, this.getGauge(JmsListenerBulkheadRegistry.WAITING_WITH_MESSAGE_METRIC));
 		Assertions.assertEquals(2D, this.getGauge(JmsListenerBulkheadRegistry.MAX_IN_FLIGHT_METRIC));
 
 		// Waiting listeners have not started a transaction; running handlers have.
@@ -190,7 +192,7 @@ public class JmsListenerBulkheadIntegrationTest extends ContainerTestHelper {
 	@DisplayName("Listeners carry their factory bean name; the test factory's resolve to the test group, the default factory's are not limited")
 	public void testListenerTagsAndDefaultGroup() throws Exception {
 		final MessageListenerContainer firstContainer = this.listenerEndpointRegistry.getListenerContainer(JmsListenerBulkheadTestListener.FIRST_LISTENER);
-		Assertions.assertEquals(DefaultMessageListenerContainer.class, firstContainer.getClass());
+		Assertions.assertEquals(ExtendedMessageListenerContainer.class, firstContainer.getClass());
 		final ExtendedMessagingMessageListenerAdapter firstAdapter = JmsListenerBulkheadIntegrationTest.getAdapter(firstContainer);
 		Assertions.assertEquals(JmsListenerBulkheadTestListener.CONTAINER_FACTORY, firstAdapter.getFactoryBeanName());
 		Assertions.assertEquals(JmsListenerBulkheadIntegrationTest.GROUP,

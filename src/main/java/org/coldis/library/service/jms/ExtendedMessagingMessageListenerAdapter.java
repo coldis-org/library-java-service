@@ -209,7 +209,7 @@ public class ExtendedMessagingMessageListenerAdapter extends MessagingMessageLis
 	 * @return The bulkhead binding, or null when the listener is not limited (no
 	 *         registry or container, bulkhead disabled or group not limited).
 	 */
-	private JmsListenerBulkheadBinding getBulkheadBinding() {
+	JmsListenerBulkheadBinding getBulkheadBinding() {
 		if (!this.isBulkheadBindingResolved) {
 			final JmsListenerBulkheadRegistry bulkheadRegistry = (this.bulkheadRegistrySupplier == null ? null : this.bulkheadRegistrySupplier.get());
 			this.bulkheadBinding = ((bulkheadRegistry == null) || (this.listenerContainer == null) ? null : bulkheadRegistry.bind(this.listenerContainer, this.factoryBeanName,
@@ -217,6 +217,18 @@ public class ExtendedMessagingMessageListenerAdapter extends MessagingMessageLis
 			this.isBulkheadBindingResolved = true;
 		}
 		return this.bulkheadBinding;
+	}
+
+	/**
+	 * Gets the bulkhead admission the current message was received with (see
+	 * {@link ExtendedMessageListenerContainer}).
+	 *
+	 * @return The admission, or null when the container has no bulkhead gate.
+	 */
+	private JmsListenerBulkheadAdmission getCurrentAdmission() {
+		return (this.listenerContainer instanceof final ExtendedMessageListenerContainer extendedListenerContainer
+				? extendedListenerContainer.getCurrentAdmission()
+				: null);
 	}
 
 	/**
@@ -409,15 +421,17 @@ public class ExtendedMessagingMessageListenerAdapter extends MessagingMessageLis
 				// Validates async hops (takes no permit either).
 				this.validateAsyncHops(message);
 
-				// Takes a bulkhead permit (when the listener is limited), released when the
-				// handler returns or throws, before the catch blocks below run and before
-				// the container commits or rolls back the session. No transaction exists
-				// yet: the listener method's transaction starts inside super.onMessage.
+				// Takes a bulkhead permit (when the listener is limited): the one the
+				// consumer took at the container's gate, or else one acquired now. Released
+				// when the handler returns or throws, before the catch blocks below run and
+				// before the container commits or rolls back the session. No transaction
+				// exists yet: the listener method's transaction starts inside
+				// super.onMessage.
 				final JmsListenerBulkheadBinding actualBulkheadBinding = this.getBulkheadBinding();
 				try (JmsListenerBulkheadPermit permit = (actualBulkheadBinding == null ? null
-						: actualBulkheadBinding.acquire(message, this::isListenerContainerStopped))) {
+						: actualBulkheadBinding.acquire(message, this.getCurrentAdmission(), this::isListenerContainerStopped))) {
 
-					// A message that waited may have been superseded meanwhile.
+					// A message that waited for its permit may have been superseded meanwhile.
 					if ((permit != null) && permit.hasWaited() && this.isSupersededByNewerProcessing(message)) {
 						this.dropSupersededMessage(message);
 					}

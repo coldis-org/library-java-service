@@ -19,7 +19,8 @@ public final class JmsListenerBulkheadPermit implements AutoCloseable {
 	private final String reservation;
 
 	/**
-	 * How long the listener waited for the permit.
+	 * How long the listener waited for the permit holding its message (0 when
+	 * the permit was immediate or taken at the gate).
 	 */
 	private final long waitNanos;
 
@@ -51,18 +52,20 @@ public final class JmsListenerBulkheadPermit implements AutoCloseable {
 	}
 
 	/**
-	 * Gets how long the listener waited for the permit.
+	 * Gets how long the listener waited for the permit holding its message.
 	 *
-	 * @return The wait (nanoseconds, 0 when the permit was immediate).
+	 * @return The wait (nanoseconds, 0 when the permit was immediate or taken at
+	 *         the gate).
 	 */
 	public long getWaitNanos() {
 		return this.waitNanos;
 	}
 
 	/**
-	 * If the listener waited for the permit.
+	 * If the listener waited for the permit holding its message (the message may
+	 * have been superseded meanwhile).
 	 *
-	 * @return If the listener waited for the permit.
+	 * @return If the listener waited for the permit holding its message.
 	 */
 	public boolean hasWaited() {
 		return this.waitNanos > 0;
@@ -76,7 +79,7 @@ public final class JmsListenerBulkheadPermit implements AutoCloseable {
 	@Override
 	public void close() {
 		if (this.isReleased.compareAndSet(false, true)) {
-			this.bulkhead.release(this);
+			this.bulkhead.release(this.reservation);
 		}
 	}
 
