@@ -5,9 +5,10 @@ import org.springframework.context.annotation.Configuration;
 import org.springframework.scheduling.annotation.EnableScheduling;
 
 /**
- * Stale message filter auto-configuration. Enables scheduling so the filter
- * synchronizes with the shared store (scheduling may also be enabled
- * elsewhere; this only guarantees it when the filter is on).
+ * Stale message filter auto-configuration. The filter synchronizes on its own
+ * thread and no longer needs Spring scheduling; scheduling stays enabled when
+ * the filter is on so services that relied on it for their own scheduled jobs
+ * keep working.
  */
 @Configuration
 @EnableScheduling
