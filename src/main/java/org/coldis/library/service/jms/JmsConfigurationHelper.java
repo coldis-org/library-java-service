@@ -115,7 +115,7 @@ public class JmsConfigurationHelper {
 	 * If the JMS listener bulkhead is enabled (only used to warn about the legacy
 	 * executor concurrency limit; injected before the executor setter).
 	 */
-	@Value("${org.coldis.library.service.jms.listener.bulkhead.enabled:false}")
+	@Value("${org.coldis.library.service.jms.listener.bulkhead.enabled:true}")
 	private Boolean isBulkheadEnabled;
 
 	/** Application base packages (comma separated). */

@@ -89,12 +89,27 @@ public class JmsListenerBulkheadRegistryTest {
 	}
 
 	/**
-	 * Tests that nothing is limited by default.
+	 * Tests that the bulkhead is on by default, limiting the default group to the
+	 * default handlers per CPU.
 	 */
 	@Test
-	@DisplayName("Without properties the bulkhead is disabled and nothing is bound")
-	public void testDisabledByDefault() {
+	@DisplayName("Without properties the bulkhead is enabled with the default handlers per CPU")
+	public void testEnabledByDefault() {
 		this.contextRunner.run(context -> {
+			final JmsListenerBulkheadRegistry registry = context.getBean(JmsListenerBulkheadRegistry.class);
+			Assertions.assertTrue(registry.isEnabled());
+			Assertions.assertEquals((int) Math.ceil(CpuLimits.getDefault().getCpus() * JmsListenerBulkheadGroupProperties.DEFAULT_MAX_IN_FLIGHT_CPU_MULTIPLIER),
+					registry.getBulkhead(JmsListenerBulkheadProperties.DEFAULT_GROUP).getMaxInFlight());
+		});
+	}
+
+	/**
+	 * Tests that enabled=false limits nothing.
+	 */
+	@Test
+	@DisplayName("enabled=false disables the bulkhead and nothing is bound")
+	public void testDisabled() {
+		this.contextRunner.withPropertyValues(JmsListenerBulkheadRegistryTest.PREFIX + "enabled=false").run(context -> {
 			final JmsListenerBulkheadRegistry registry = context.getBean(JmsListenerBulkheadRegistry.class);
 			Assertions.assertFalse(registry.isEnabled());
 			Assertions.assertNull(registry.bind(JmsListenerBulkheadRegistryTest.container("queue"), "factory", null));
@@ -107,9 +122,10 @@ public class JmsListenerBulkheadRegistryTest {
 	 * Tests that a disabled bulkhead ignores a limit.
 	 */
 	@Test
-	@DisplayName("A limit without enabled=true limits nothing")
+	@DisplayName("A limit with enabled=false limits nothing")
 	public void testLimitWithoutEnabled() {
-		this.contextRunner.withPropertyValues(JmsListenerBulkheadRegistryTest.PREFIX + "max-in-flight=4").run(context -> {
+		this.contextRunner.withPropertyValues(JmsListenerBulkheadRegistryTest.PREFIX + "enabled=false",
+				JmsListenerBulkheadRegistryTest.PREFIX + "max-in-flight=4").run(context -> {
 			Assertions.assertNull(context.getBean(JmsListenerBulkheadRegistry.class).bind(JmsListenerBulkheadRegistryTest.container("queue"), null, null));
 		});
 	}

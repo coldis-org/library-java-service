@@ -1,16 +1,19 @@
 # JMS listener bulkhead
 
-Opt-in bound on how many JMS handlers run at once in one instance. Consumers
+Bound (on by default) on how many JMS handlers run at once in one instance. Consumers
 keep polling as before; a consumer that received a message waits for a permit
 before its handler runs, in arrival order, and idle queues hold no permit. A
 flooded queue therefore cannot keep the other queues from progressing, and the
 handlers never use more of a shared resource (typically database connections)
 than the limit allows.
 
-The bulkhead is off by default: with `enabled=false` the listener path is
-exactly as before. The listener executor is not: it is unbounded by default
-whether or not the bulkhead is enabled, so a service that relied on the old
-thread cap as a handler limit must set `max-in-flight` when it upgrades (see
+The bulkhead is on by default: without any property, every listener container
+shares one group limited to 4 handlers per CPU (see
+[Settings](#settings)). Set `enabled=false` to keep the listener path exactly
+as before. The listener executor is unbounded by default either way, so on
+upgrade a service's concurrent handlers are bounded by the bulkhead instead
+of the old thread cap; set `max-in-flight` or the multiplier if the default
+does not fit (see
 [JMS threads](jms-threads.md#behaviour-change-and-migration)).
 
 ## When to enable it
@@ -27,7 +30,7 @@ settings configure the group named `default`.
 
 | Property | Default | Meaning |
 |---|---|---|
-| `enabled` | `false` | Master switch, read at startup. `false`: no group is limited. |
+| `enabled` | `true` | Master switch, read at startup. `false`: no group is limited. |
 | `max-in-flight` | unset | Maximum concurrent handlers of the group. Wins over the multiplier when positive. |
 | `max-in-flight-cpu-multiplier` | `4` | Handlers per CPU, used when `max-in-flight` is not set: `ceil(CPUs × multiplier)` (CPUs: [JMS threads](jms-threads.md#cpus)). Handlers that also wait on the database or other services run well above one per CPU at normal peaks; the default sits near those peaks so it stops pile-ups without throttling normal load. Tune toward 2–3 for CPU-bound modules and 4–6 for database- or I/O-heavy ones. `0`: the group is not limited. |
 | `max-wait` | unset | Unset or `0`: wait until a permit, the container stop or shutdown. Set: on timeout the message is rolled back to the broker (see [Delivery attempts](#delivery-attempts)). |
@@ -245,8 +248,9 @@ threads busy queues wait behind them.
 1. Remove `listener.executor.concurrency` and
    `listener.executor.concurrency-cpu-multiplier` (and any `executor.core-size*`
    or `executor.unbounded=false` used as a limit).
-2. Set `listener.bulkhead.enabled=true` and `listener.bulkhead.max-in-flight`
-   (or the multiplier) to today's effective concurrency.
+2. The bulkhead is on by default (4 handlers per CPU). To start without
+   throttling, set `listener.bulkhead.max-in-flight` (or the multiplier) to
+   today's effective concurrency, then lower it.
 3. Watch the metrics, then lower the limit; add reservations for listeners
    that need a guaranteed minimum.
 
