@@ -8,7 +8,7 @@ handlers never use more of a shared resource (typically database connections)
 than the limit allows.
 
 The bulkhead is on by default: without any property, every listener container
-shares one group limited to 4 handlers per CPU (see
+shares one group limited to 8 handlers per CPU (see
 [Settings](#settings)). Set `enabled=false` to keep the listener path exactly
 as before. The listener executor is unbounded by default either way, so on
 upgrade a service's concurrent handlers are bounded by the bulkhead instead
@@ -32,7 +32,7 @@ settings configure the group named `default`.
 |---|---|---|
 | `enabled` | `true` | Master switch, read at startup. `false`: no group is limited. |
 | `max-in-flight` | unset | Maximum concurrent handlers of the group. Wins over the multiplier when positive. |
-| `max-in-flight-cpu-multiplier` | `4` | Handlers per CPU, used when `max-in-flight` is not set: `ceil(CPUs × multiplier)` (CPUs: [JMS threads](jms-threads.md#cpus)). Handlers that also wait on the database or other services run well above one per CPU at normal peaks; the default sits near those peaks so it stops pile-ups without throttling normal load. Tune toward 2–3 for CPU-bound modules and 4–6 for database- or I/O-heavy ones. `0`: the group is not limited. |
+| `max-in-flight-cpu-multiplier` | `8` | Handlers per CPU, used when `max-in-flight` is not set: `ceil(CPUs × multiplier)` (CPUs: [JMS threads](jms-threads.md#cpus)). Handlers that also wait on the database or other services run well above one per CPU at normal peaks; the default sits near those peaks so it stops pile-ups without throttling normal load. Tune toward 2–4 for CPU-bound modules and 8–12 for database-, I/O- or broker-heavy ones. A first production rollout at 4 per CPU throttled message-heavy services well below their normal concurrency, which is why the default is 8. `0`: the group is not limited. |
 | `max-wait` | unset | Unset or `0`: wait until a permit, the container stop or shutdown. Set: on timeout the message is rolled back to the broker (see [Delivery attempts](#delivery-attempts)). |
 | `max-wait-deliveries` | `3` | `max-wait` applies only while the message's `JMSXDeliveryCount` is at most this value; later deliveries wait without timeout. |
 | `reserved.<name>.permits` | — | Permits only the matching listeners may use (at least 1). |
@@ -248,7 +248,7 @@ threads busy queues wait behind them.
 1. Remove `listener.executor.concurrency` and
    `listener.executor.concurrency-cpu-multiplier` (and any `executor.core-size*`
    or `executor.unbounded=false` used as a limit).
-2. The bulkhead is on by default (4 handlers per CPU). To start without
+2. The bulkhead is on by default (8 handlers per CPU). To start without
    throttling, set `listener.bulkhead.max-in-flight` (or the multiplier) to
    today's effective concurrency, then lower it.
 3. Watch the metrics, then lower the limit; add reservations for listeners

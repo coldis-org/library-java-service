@@ -24,10 +24,10 @@ public class JmsListenerBulkheadGroupProperties {
 
 	/**
 	 * Default handlers per CPU of a group without {@code max-in-flight} nor
-	 * {@code max-in-flight-cpu-multiplier} (tune toward 2 to 3 for CPU-bound
-	 * modules and 4 to 6 for database- or I/O-heavy ones).
+	 * {@code max-in-flight-cpu-multiplier} (tune toward 2 to 4 for CPU-bound
+	 * modules and 8 to 12 for database-, I/O- or broker-heavy ones).
 	 */
-	public static final double DEFAULT_MAX_IN_FLIGHT_CPU_MULTIPLIER = 4D;
+	public static final double DEFAULT_MAX_IN_FLIGHT_CPU_MULTIPLIER = 8D;
 
 	/**
 	 * Maximum concurrent handler executions of the group. Wins over the

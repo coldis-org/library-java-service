@@ -90,9 +90,9 @@ run more handlers at once after upgrading.
 
 1. Remove `listener.executor.core-size*`, `parallelism*`, `min-runnable*`, `priority` and
    `concurrency*` lines.
-2. The bulkhead is on by default: without `max-in-flight` it allows 4 handlers per CPU
-   (`max-in-flight-cpu-multiplier`; tune toward 2–3 for CPU-bound modules and 4–6 for database- or
-   I/O-heavy ones). `listener.bulkhead.enabled=false` turns it off.
+2. The bulkhead is on by default: without `max-in-flight` it allows 8 handlers per CPU
+   (`max-in-flight-cpu-multiplier`; tune toward 2–4 for CPU-bound modules and 8–12 for database-,
+   I/O- or broker-heavy ones). `listener.bulkhead.enabled=false` turns it off.
 3. If the module relied on the old cap, set `listener.bulkhead.max-in-flight` to its old effective
    cap first, then lower it. `listener.executor.unbounded=false` restores the old pool temporarily
    (with a WARN).

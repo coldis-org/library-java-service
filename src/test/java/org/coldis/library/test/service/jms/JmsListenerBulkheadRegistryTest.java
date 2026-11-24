@@ -134,7 +134,7 @@ public class JmsListenerBulkheadRegistryTest {
 	 * Tests that an enabled bulkhead without a limit limits nothing.
 	 */
 	@Test
-	@DisplayName("enabled=true alone limits the default group to 4 handlers per CPU; a multiplier of 0 leaves it unlimited")
+	@DisplayName("enabled=true alone limits the default group to the default handlers per CPU; a multiplier of 0 leaves it unlimited")
 	public void testEnabledWithoutLimit() {
 		this.contextRunner.withPropertyValues(JmsListenerBulkheadRegistryTest.PREFIX + "enabled=true").run(context -> {
 			final JmsListenerBulkheadRegistry registry = context.getBean(JmsListenerBulkheadRegistry.class);
