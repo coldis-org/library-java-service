@@ -238,6 +238,11 @@ and one counter per destination and reason that occurred. No histogram by
 default; add `management.metrics.distribution.*` for
 `jms.listener.bulkhead.wait` if percentiles are needed.
 
+Upgrading from a version without the gate: `waiting` now also counts gated
+consumers (much higher under saturation for the same load) and `wait` adds the
+gate wait. Re-baseline thresholds on them, and move alerts about messages held
+by consumers to `waiting.with.message`.
+
 What to watch: `waiting` high for long periods (the limit is too low for the
 load, or a handler is slow; the messages wait on the queue, so watch the queue
 age too), `waiting.with.message` above a few for long (consumers holding

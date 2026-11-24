@@ -206,6 +206,9 @@ public class JmsListenerBulkheadContainerTest extends ContainerTestHelper {
 	/**
 	 * Creates a registry whose default group (the group of a plain factory's
 	 * listeners) is limited.
+	 * Its gauges share the shared meter registry's {@code default} group tag
+	 * with the other tests that use it (the first registration wins): read the
+	 * bulkhead, not those gauges.
 	 *
 	 * @param  configurer Default group settings.
 	 * @return            The registry.
@@ -640,6 +643,50 @@ public class JmsListenerBulkheadContainerTest extends ContainerTestHelper {
 		JmsListenerBulkheadTestSupport.waitUntil(() -> processedDeliveryCounts.size() == 3, "remaining messages processed after the restart");
 		Assertions.assertFalse(TestHelper.waitUntilValid(processed::get, processedCount -> processedCount > 3, TestHelper.REGULAR_WAIT, TestHelper.SHORT_WAIT));
 		Assertions.assertEquals(List.of(List.of(1), List.of(1), List.of(1)), List.copyOf(processedDeliveryCounts.values()));
+		listenerContainer.shutdown();
+		this.assertQueueEmpty(queue);
+	}
+
+	/**
+	 * Tests that a container stop rolls back the messages of consumers waiting
+	 * for a permit holding them (a container without the gate, or the race
+	 * after it), and a restart processes them once.
+	 *
+	 * @throws Exception If the test fails.
+	 */
+	@Test
+	@DisplayName("Without the gate, a container stop rolls the held messages back; after a restart each message is processed exactly once")
+	public void testStopRollsHeldMessagesBack() throws Exception {
+		final String group = JmsListenerBulkheadProperties.DEFAULT_GROUP;
+		final String queue = JmsListenerBulkheadContainerTest.createQueue("stop-held");
+		final JmsListenerBulkheadRegistry registry = this.createDefaultGroupRegistry(groupProperties -> groupProperties.setMaxInFlight(1));
+		final CountDownLatch release = this.createLatch();
+		final Map<String, List<Integer>> processedDeliveryCounts = new ConcurrentHashMap<>();
+		final AtomicInteger processed = new AtomicInteger();
+		final DefaultMessageListenerContainer listenerContainer = this.createContainer(this.createPlainFactory(), registry, queue, "3-3", message -> {
+			if (processed.getAndIncrement() == 0) {
+				JmsListenerBulkheadTestSupport.awaitIgnoringInterrupts(release);
+			}
+			processedDeliveryCounts.computeIfAbsent(JmsListenerBulkheadTestSupport.getMessageId(message), messageId -> new CopyOnWriteArrayList<>())
+					.add(JmsListenerBulkheadTestSupport.getDeliveryCount(message));
+		});
+		this.send(queue, 3);
+		listenerContainer.start();
+		JmsListenerBulkheadTestSupport.waitUntil(() -> registry.getBulkhead(group).getWaitingWithMessage() == 2, "two consumers holding a message");
+		final JmsListenerBulkhead bulkhead = registry.getBulkhead(group);
+
+		listenerContainer.stop();
+		JmsListenerBulkheadTestSupport.waitUntil(() -> bulkhead.getWaitingWithMessage() == 0, Duration.ofMillis(TestHelper.LONG_WAIT), "held messages left on stop");
+		JmsListenerBulkheadTestSupport.waitUntil(() -> this.getAborted(group, queue, "stopped") == 2D, "two stopped waits");
+		release.countDown();
+		JmsListenerBulkheadTestSupport.waitUntil(() -> processedDeliveryCounts.size() == 1, "first message processed");
+		JmsListenerBulkheadTestSupport.waitUntil(() -> bulkhead.getInFlight() == 0, "permit released");
+
+		listenerContainer.start();
+		JmsListenerBulkheadTestSupport.waitUntil(() -> processedDeliveryCounts.size() == 3, "rolled-back messages processed after the restart");
+		Assertions.assertFalse(TestHelper.waitUntilValid(processed::get, processedCount -> processedCount > 3, TestHelper.REGULAR_WAIT, TestHelper.SHORT_WAIT));
+		Assertions.assertEquals(List.of(List.of(1), List.of(2), List.of(2)),
+				processedDeliveryCounts.values().stream().sorted((first, second) -> Integer.compare(first.get(0), second.get(0))).toList());
 		listenerContainer.shutdown();
 		this.assertQueueEmpty(queue);
 	}

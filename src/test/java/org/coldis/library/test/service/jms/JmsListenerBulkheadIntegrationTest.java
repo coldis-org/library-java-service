@@ -159,7 +159,9 @@ public class JmsListenerBulkheadIntegrationTest extends ContainerTestHelper {
 		Assertions.assertEquals(2, bulkhead.getInFlight());
 		Assertions.assertEquals(2D, this.getGauge(JmsListenerBulkheadRegistry.IN_FLIGHT_METRIC));
 		Assertions.assertTrue(this.getGauge(JmsListenerBulkheadRegistry.WAITING_METRIC) >= 1D);
-		Assertions.assertEquals(0D, this.getGauge(JmsListenerBulkheadRegistry.WAITING_WITH_MESSAGE_METRIC));
+		// Only the race after the gate leaves a consumer holding a message: at most the
+		// one idle consumer each container had when the messages arrived.
+		Assertions.assertTrue(this.getGauge(JmsListenerBulkheadRegistry.WAITING_WITH_MESSAGE_METRIC) <= 2D);
 		Assertions.assertEquals(2D, this.getGauge(JmsListenerBulkheadRegistry.MAX_IN_FLIGHT_METRIC));
 
 		// Waiting listeners have not started a transaction; running handlers have.

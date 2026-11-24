@@ -108,12 +108,10 @@ public class ExtendedMessageListenerContainer extends DefaultMessageListenerCont
 			final JmsListenerBulkheadBinding bulkheadBinding,
 			final Object invoker,
 			final Session session) {
-		if (!bulkheadBinding.isGateOpen()) {
-			this.noMessageReceived(invoker, session);
-		}
 		JmsListenerBulkheadAdmission admission = null;
 		try {
-			admission = bulkheadBinding.admit(!this.idleConsumers.contains(invoker), () -> !this.isRunning());
+			admission = bulkheadBinding.admit(!this.idleConsumers.contains(invoker), () -> !this.isRunning(),
+					() -> this.noMessageReceived(invoker, session));
 		}
 		catch (final JmsListenerBulkheadException exception) {
 			this.logger.debug(exception.getMessage());

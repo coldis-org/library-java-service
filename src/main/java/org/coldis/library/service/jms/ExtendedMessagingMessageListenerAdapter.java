@@ -215,6 +215,13 @@ public class ExtendedMessagingMessageListenerAdapter extends MessagingMessageLis
 			this.bulkheadBinding = ((bulkheadRegistry == null) || (this.listenerContainer == null) ? null : bulkheadRegistry.bind(this.listenerContainer, this.factoryBeanName,
 					this.bulkheadGroup));
 			this.isBulkheadBindingResolved = true;
+			// Without the gate the listener still works, but its consumers wait for a
+			// permit holding the message they received: make the fallback visible.
+			if ((this.bulkheadBinding != null) && !(this.listenerContainer instanceof ExtendedMessageListenerContainer)) {
+				ExtendedMessagingMessageListenerAdapter.LOGGER.warn(
+						"JMS listener of '{}' is limited by the bulkhead but its container ({}) has no gate: its consumers wait for a permit holding a received message. Build the container factory with JmsListenerContainerFactoryBuilder.",
+						this.bulkheadBinding.getDestination(), this.listenerContainer.getClass().getName());
+			}
 		}
 		return this.bulkheadBinding;
 	}

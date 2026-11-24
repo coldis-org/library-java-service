@@ -551,6 +551,57 @@ public class JmsListenerBulkhead {
 	}
 
 	/**
+	 * Waits at the gate as {@link #admit(String, boolean, String, BooleanSupplier)}
+	 * does, running a callback just before the consumer queues (only when it has
+	 * to wait).
+	 *
+	 * @param  reservation                  Reservation.
+	 * @param  takesPermit                  If the permit is taken at the gate.
+	 * @param  destination                  Listener destination.
+	 * @param  isContainerStopped           If the listener container stopped.
+	 * @param  beforeWaiting                Run under the bulkhead lock just before
+	 *                                          the consumer queues (may be null;
+	 *                                          must be short and must not block).
+	 * @return                              The admission.
+	 * @throws JmsListenerBulkheadException If the wait ended first.
+	 */
+	public JmsListenerBulkheadAdmission admit(
+			final String reservation,
+			final boolean takesPermit,
+			final String destination,
+			final BooleanSupplier isContainerStopped,
+			final Runnable beforeWaiting) throws JmsListenerBulkheadException {
+		final long startNanos = System.nanoTime();
+		final String actualReservation = this.getActualReservation(reservation);
+		JmsListenerBulkheadAdmission admission = null;
+		this.lock.lock();
+		try {
+			if (this.refreshMaxInFlight()) {
+				this.grantWaiters();
+			}
+			if (this.isGateOpenUnderLock(actualReservation)) {
+				if (takesPermit) {
+					this.countInFlight(actualReservation);
+				}
+				admission = new JmsListenerBulkheadAdmission(this, actualReservation, takesPermit, 0L);
+			}
+			else {
+				if (beforeWaiting != null) {
+					beforeWaiting.run();
+				}
+				final long waitNanos = this.awaitGrant(new Waiter(actualReservation,
+						(takesPermit ? WaiterKind.GATE_WITH_PERMIT : WaiterKind.GATE_WITHOUT_PERMIT), this.lock.newCondition()), destination, startNanos, 0L,
+						Objects.requireNonNull(isContainerStopped));
+				admission = new JmsListenerBulkheadAdmission(this, actualReservation, takesPermit, waitNanos);
+			}
+		}
+		finally {
+			this.lock.unlock();
+		}
+		return admission;
+	}
+
+	/**
 	 * Waits at the gate until the consumer may receive: in arrival order, until
 	 * its listener is admissible (a free reserved permit of its reservation or a
 	 * free shared one). A consumer that arrives while nobody waits and it is
@@ -586,31 +637,7 @@ public class JmsListenerBulkhead {
 			final boolean takesPermit,
 			final String destination,
 			final BooleanSupplier isContainerStopped) throws JmsListenerBulkheadException {
-		final long startNanos = System.nanoTime();
-		final String actualReservation = this.getActualReservation(reservation);
-		JmsListenerBulkheadAdmission admission = null;
-		this.lock.lock();
-		try {
-			if (this.refreshMaxInFlight()) {
-				this.grantWaiters();
-			}
-			if (this.isGateOpenUnderLock(actualReservation)) {
-				if (takesPermit) {
-					this.countInFlight(actualReservation);
-				}
-				admission = new JmsListenerBulkheadAdmission(this, actualReservation, takesPermit, 0L);
-			}
-			else {
-				final long waitNanos = this.awaitGrant(new Waiter(actualReservation,
-						(takesPermit ? WaiterKind.GATE_WITH_PERMIT : WaiterKind.GATE_WITHOUT_PERMIT), this.lock.newCondition()), destination, startNanos, 0L,
-						Objects.requireNonNull(isContainerStopped));
-				admission = new JmsListenerBulkheadAdmission(this, actualReservation, takesPermit, waitNanos);
-			}
-		}
-		finally {
-			this.lock.unlock();
-		}
-		return admission;
+		return this.admit(reservation, takesPermit, destination, isContainerStopped, null);
 	}
 
 	/**

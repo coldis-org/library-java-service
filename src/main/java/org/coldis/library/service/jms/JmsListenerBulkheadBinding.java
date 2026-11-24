@@ -159,14 +159,17 @@ public class JmsListenerBulkheadBinding {
 	 *                                          (the consumer's queue just
 	 *                                          delivered).
 	 * @param  isContainerStopped           If the listener container stopped.
+	 * @param  beforeWaiting                Run just before the consumer queues
+	 *                                          at the gate (may be null).
 	 * @return                              The admission.
 	 * @throws JmsListenerBulkheadException If the wait ended first (container
 	 *                                          stop or interruption).
 	 */
 	public JmsListenerBulkheadAdmission admit(
 			final boolean takesPermit,
-			final BooleanSupplier isContainerStopped) throws JmsListenerBulkheadException {
-		return this.bulkhead.admit(this.reservation, takesPermit, this.destination, isContainerStopped);
+			final BooleanSupplier isContainerStopped,
+			final Runnable beforeWaiting) throws JmsListenerBulkheadException {
+		return this.bulkhead.admit(this.reservation, takesPermit, this.destination, isContainerStopped, beforeWaiting);
 	}
 
 	/**
@@ -177,23 +180,6 @@ public class JmsListenerBulkheadBinding {
 	 */
 	public boolean isGateOpen() {
 		return this.bulkhead.isGateOpen(this.reservation);
-	}
-
-	/**
-	 * Acquires a permit for a received message, recording the wait (0 when the
-	 * permit was immediate) or the aborted wait.
-	 *
-	 * @param  message                      Received message.
-	 * @param  isContainerStopped           If the listener container stopped.
-	 * @return                              The permit, to be closed when the
-	 *                                      handler ends.
-	 * @throws JMSException                 If the message cannot be read.
-	 * @throws JmsListenerBulkheadException If the wait ended without a permit.
-	 */
-	public JmsListenerBulkheadPermit acquire(
-			final Message message,
-			final BooleanSupplier isContainerStopped) throws JMSException, JmsListenerBulkheadException {
-		return this.acquire(message, null, isContainerStopped);
 	}
 
 	/**
@@ -232,6 +218,23 @@ public class JmsListenerBulkheadBinding {
 			this.waitTimer.record((isOwnAdmission ? admission.getWaitNanos() : 0L) + permit.getWaitNanos(), TimeUnit.NANOSECONDS);
 		}
 		return permit;
+	}
+
+	/**
+	 * Acquires a permit for a received message, recording the wait (0 when the
+	 * permit was immediate) or the aborted wait.
+	 *
+	 * @param  message                      Received message.
+	 * @param  isContainerStopped           If the listener container stopped.
+	 * @return                              The permit, to be closed when the
+	 *                                      handler ends.
+	 * @throws JMSException                 If the message cannot be read.
+	 * @throws JmsListenerBulkheadException If the wait ended without a permit.
+	 */
+	public JmsListenerBulkheadPermit acquire(
+			final Message message,
+			final BooleanSupplier isContainerStopped) throws JMSException, JmsListenerBulkheadException {
+		return this.acquire(message, null, isContainerStopped);
 	}
 
 }
