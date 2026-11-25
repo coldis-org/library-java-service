@@ -1,14 +1,16 @@
 # Stale message filter
 
-Opt-in filter that drops (acknowledges without processing) a JMS message when
+Filter that drops (acknowledges without processing) a JMS message when
 a message with the same key started successful processing after this one was
 posted: that processing already reflected the state the older message carried.
 
 ## Enabling
 
-- `org.coldis.library.service.jms.stale-filter.enabled=true` (default `false`).
-- Producers mark messages with a key (`JmsMessage` stale filter key property).
-  Only keyed messages are ever dropped.
+- `org.coldis.library.service.jms.stale-filter.enabled` (default `true`; `false`
+  turns the filter off for a service).
+- Producers opt in per message with a key (`JmsMessage` stale filter key
+  property). Only keyed messages are ever dropped, and an instance that never
+  sees a keyed message does no synchronization work.
 
 ## How a drop is decided
 

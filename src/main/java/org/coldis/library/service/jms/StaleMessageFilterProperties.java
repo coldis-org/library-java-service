@@ -77,7 +77,7 @@ public class StaleMessageFilterProperties {
 	 * @return The enabled.
 	 */
 	public Boolean getEnabled() {
-		this.enabled = (this.enabled == null ? false : this.enabled);
+		this.enabled = (this.enabled == null ? true : this.enabled);
 		return this.enabled;
 	}
 

@@ -436,6 +436,8 @@ public class StaleMessageFilterServiceTest extends ContainerTestHelper {
 		final long now = DateTimeHelper.toTimestamp(DateTimeHelper.getCurrentLocalDateTime());
 		final String messageKey = "lifecycleKey-" + StaleMessageFilterServiceTest.RANDOM.nextInt();
 		service.recordProcessing("queue", messageKey, now - 60_000);
+		// The application context's own filter (enabled by default) runs a thread of the same name.
+		final long baseline = StaleMessageFilterServiceTest.countSyncThreads();
 
 		// Started: a daemon thread sweeps the expired record on its own.
 		service.start();
@@ -450,16 +452,14 @@ public class StaleMessageFilterServiceTest extends ContainerTestHelper {
 		}
 
 		// Stopped: the thread ends.
-		Assertions.assertTrue(TestHelper.waitUntilValid(() -> Thread.getAllStackTraces().keySet().stream()
-				.noneMatch(thread -> StaleMessageFilterService.SYNC_THREAD_NAME.equals(thread.getName()) && thread.isAlive()), Boolean::booleanValue,
+		Assertions.assertTrue(TestHelper.waitUntilValid(StaleMessageFilterServiceTest::countSyncThreads, count -> count == baseline,
 				TestHelper.LONG_WAIT, TestHelper.VERY_SHORT_WAIT));
 
 		// A disabled filter does not start it.
 		properties.setEnabled(false);
 		service.start();
 		try {
-			Assertions.assertTrue(Thread.getAllStackTraces().keySet().stream()
-					.noneMatch(thread -> StaleMessageFilterService.SYNC_THREAD_NAME.equals(thread.getName()) && thread.isAlive()));
+			Assertions.assertEquals(baseline, StaleMessageFilterServiceTest.countSyncThreads());
 		}
 		finally {
 			service.stop();
@@ -513,6 +513,17 @@ public class StaleMessageFilterServiceTest extends ContainerTestHelper {
 		instanceB.synchronize();
 		Assertions.assertEquals(pushSkippedBefore + 1, StaleMessageFilterServiceTest.getSyncCount(meterRegistry, "push", "skipped"));
 		Assertions.assertEquals(StaleMessageFilterService.Source.PULLED, instanceB.getNewerProcessingSource(laterQueue, "key", now - 10_000));
+	}
+
+
+	/**
+	 * Counts the live synchronization threads.
+	 *
+	 * @return The number of live threads named as the synchronization thread.
+	 */
+	private static long countSyncThreads() {
+		return Thread.getAllStackTraces().keySet().stream()
+				.filter(thread -> StaleMessageFilterService.SYNC_THREAD_NAME.equals(thread.getName()) && thread.isAlive()).count();
 	}
 
 }
