@@ -310,7 +310,10 @@ public class StatisticsEventServiceComponent {
 
   /**
    * Enqueues a delete-expired trigger with a fixed last-value key so duplicate enqueues collapse
-   * at the broker (only one pending trigger is ever needed — the listener self-reschedules).
+   * at the broker (only one pending trigger is ever needed — the listener self-reschedules). The
+   * same key is the stale filter key, so a trigger posted before the last one started processing
+   * (e.g. the copy every instance enqueues from the same scheduled run) is dropped on consume where
+   * the broker does not collapse it.
    */
   private void sendDeleteExpiredTrigger() {
     this.jmsTemplateHelper.send(
@@ -318,7 +321,8 @@ public class StatisticsEventServiceComponent {
         new JmsMessage<String>()
             .withDestination(StatisticsEventServiceComponent.DELETE_EXPIRED_QUEUE)
             .withMessage("delete-expired")
-            .withLastValueKey(StatisticsEventServiceComponent.DELETE_EXPIRED_QUEUE));
+            .withLastValueKey(StatisticsEventServiceComponent.DELETE_EXPIRED_QUEUE)
+            .withStaleFilterKey(StatisticsEventServiceComponent.DELETE_EXPIRED_QUEUE));
   }
 
   /**

@@ -12,6 +12,33 @@ posted: that processing already reflected the state the older message carried.
   property). Only keyed messages are ever dropped, and an instance that never
   sees a keyed message does no synchronization work.
 
+## Keys used by the library's own queues
+
+The library's own periodically re-enqueued messages carry both a last-value
+key and a stale filter key, with the same value:
+
+| Queue | Key |
+|---|---|
+| `batch/resume` | the batch key |
+| `batch/delete` | the batch key |
+| `statistics-event/delete/expired` | a constant (one trigger for the service) |
+
+- **Last-value key (broker):** the queue keeps at most one pending message per
+  key, so repeated enqueues do not pile up.
+- **Stale filter key (consumer):** a message posted before the last processing
+  of its key started is dropped on consume. This covers what the broker cap
+  does not, e.g. duplicates already paged out of memory, or the copies every
+  instance enqueues for the same scheduled run.
+
+Producers of other last-value-keyed messages can do the same: set
+`withStaleFilterKey` to the last-value key.
+
+Tests that move the application clock (`DateTimeHelper`) forward while these
+queues are in use must turn the filter off (or reset the clock) first:
+processing starts are recorded with the application clock but posted-at comes
+from the producer's wall-clock JMS headers, so with the application clock ahead
+every later batch or trigger message looks stale and is dropped.
+
 ## How a drop is decided
 
 - **Posted at:** the explicit posted-at property, else the scheduled delivery

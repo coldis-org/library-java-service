@@ -240,9 +240,13 @@ public class BatchServiceComponent {
 		// HDR_SCHEDULED_DELIVERY_TIME is added. This avoids wall-clock vs DateTimeHelper
 		// mismatches (e.g. tests that advance the simulated clock would otherwise schedule
 		// delivery far in the wall-clock future).
+		// The key is both the last-value key (the broker keeps one pending resume per batch) and the
+		// stale filter key (a resume posted before the last one for the batch started is dropped on
+		// consume, where the broker does not collapse it).
 		final JmsMessage<String> jmsMessage = new JmsMessage<String>()
 				.withDestination(BatchServiceComponent.RESUME_QUEUE)
 				.withLastValueKey(keySuffix)
+				.withStaleFilterKey(keySuffix)
 				.withMessage(keySuffix)
 				.withAfterCommit(afterCommit);
 		if (scheduledFor != null) {
@@ -468,7 +472,7 @@ public class BatchServiceComponent {
 			final String key,
 			final Boolean onlyIfShouldBeCleaned) {
 		this.jmsTemplateHelper.send(this.jmsTemplate, new JmsMessage<>().withDestination(BatchServiceComponent.DELETE_QUEUE).withLastValueKey(key)
-				.withMessage(Map.of("key", key, "onlyIfShouldBeCleaned", onlyIfShouldBeCleaned)));
+				.withStaleFilterKey(key).withMessage(Map.of("key", key, "onlyIfShouldBeCleaned", onlyIfShouldBeCleaned)));
 	}
 
 	/**
