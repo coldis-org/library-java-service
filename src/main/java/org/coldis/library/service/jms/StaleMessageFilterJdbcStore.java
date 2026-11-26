@@ -6,6 +6,7 @@ import java.util.Collection;
 import java.util.List;
 import java.util.Map;
 import java.util.TreeMap;
+import java.util.function.LongSupplier;
 
 import javax.sql.DataSource;
 
@@ -166,11 +167,41 @@ public class StaleMessageFilterJdbcStore {
 	 */
 	public Integer deleteSynchronizedBefore(
 			final long synchronizedBefore) {
+		return this.deleteSynchronizedBefore(() -> synchronizedBefore);
+	}
+
+	/**
+	 * Deletes records synchronized longer than the window ago, by the database
+	 * clock (the clock "synchronized at" is written with), unless another
+	 * instance is running the cleanup at the same time. The cutoff is read from
+	 * the database and then bound as a value, so the "synchronized at" index is
+	 * used.
+	 *
+	 * @param  window How long records are kept after their synchronization.
+	 * @return        Deleted rows, or null when another instance held the cleanup
+	 *                lock (nothing was deleted).
+	 */
+	public Integer deleteSynchronizedLongerAgoThan(
+			final Duration window) {
+		return this.deleteSynchronizedBefore(() -> this.jdbcTemplate.queryForObject("SELECT " + StaleMessageFilterJdbcStore.DATABASE_CLOCK_MILLIS, Long.class)
+				- window.toMillis());
+	}
+
+	/**
+	 * Deletes records synchronized before the cutoff (computed inside the
+	 * cleanup transaction, once its lock is held).
+	 *
+	 * @param  synchronizedBefore Cutoff supplier (epoch millis).
+	 * @return                    Deleted rows, or null when another instance held
+	 *                            the cleanup lock.
+	 */
+	private Integer deleteSynchronizedBefore(
+			final LongSupplier synchronizedBefore) {
 		return this.transactionTemplate.execute(status -> {
 			Integer deletedRows = null;
 			if (Boolean.TRUE.equals(this.jdbcTemplate.queryForObject("SELECT pg_try_advisory_xact_lock(?)", Boolean.class,
 					StaleMessageFilterJdbcStore.CLEANUP_LOCK_KEY))) {
-				deletedRows = this.jdbcTemplate.update("DELETE FROM " + this.tableName + " WHERE synchronized_at < ?", synchronizedBefore);
+				deletedRows = this.jdbcTemplate.update("DELETE FROM " + this.tableName + " WHERE synchronized_at < ?", synchronizedBefore.getAsLong());
 			}
 			return deletedRows;
 		});

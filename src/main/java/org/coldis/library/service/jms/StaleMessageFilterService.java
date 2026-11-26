@@ -12,7 +12,6 @@ import java.util.function.IntSupplier;
 
 import javax.sql.DataSource;
 
-import org.coldis.library.helper.DateTimeHelper;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.ObjectProvider;
@@ -42,10 +41,13 @@ import jakarta.annotation.PreDestroy;
  * on any missing or stale information, and cross-instance knowledge lags by up
  * to one synchronization interval.
  *
- * Processing timestamps are epoch millis from the application clock
- * ({@code DateTimeHelper}); posted-at timestamps come from producers (JMS
- * timestamp or scheduled delivery time) and the clock skew margin absorbs
- * small divergences between the two.
+ * Processing and posted-at timestamps are both wall-clock epoch millis
+ * ({@link #getCurrentTimestamp()} here, the JMS timestamp or scheduled
+ * delivery time from producers), never the application clock
+ * ({@code DateTimeHelper}), so a simulated application clock does not make
+ * messages look stale. The clock skew margin absorbs small divergences between
+ * the hosts' clocks. The shared table's "synchronized at" timestamps and its
+ * cleanup cutoff both come from the database clock.
  */
 @Component
 public class StaleMessageFilterService {
@@ -202,6 +204,19 @@ public class StaleMessageFilterService {
 	 */
 	public StaleMessageFilterService(final StaleMessageFilterProperties properties, final ObjectProvider<DataSource> dataSourceProvider) {
 		this(properties, dataSourceProvider, null);
+	}
+
+	/**
+	 * The current wall-clock time (epoch millis), the clock processing starts are
+	 * recorded with. It is deliberately not the application clock
+	 * ({@code DateTimeHelper}): posted-at timestamps (JMS timestamp, scheduled
+	 * delivery time) are wall clock, and a simulated application clock would
+	 * otherwise make every later message look stale.
+	 *
+	 * @return The current wall-clock time (epoch millis).
+	 */
+	public static long getCurrentTimestamp() {
+		return System.currentTimeMillis();
 	}
 
 	/**
@@ -419,17 +434,15 @@ public class StaleMessageFilterService {
 	}
 
 	/**
-	 * Deletes shared records older than the window. The cutoff comes from the
-	 * application clock while "synchronized at" comes from the database clock:
-	 * a small skew between the two only moves the cutoff by that much.
+	 * Deletes shared records older than the window, by the database clock (the
+	 * clock "synchronized at" is written with).
 	 *
 	 * @return Deleted records, or {@link #SKIPPED_ROWS} when another instance was
 	 *         running the cleanup.
 	 */
 	private int deleteExpiredSharedRecords(
 			final StaleMessageFilterJdbcStore store) {
-		final long cutoff = DateTimeHelper.toTimestamp(DateTimeHelper.getCurrentLocalDateTime()) - this.properties.getWindow().toMillis();
-		final Integer deletedRows = store.deleteSynchronizedBefore(cutoff);
+		final Integer deletedRows = store.deleteSynchronizedLongerAgoThan(this.properties.getWindow());
 		return (deletedRows == null ? StaleMessageFilterService.SKIPPED_ROWS : deletedRows);
 	}
 
@@ -437,7 +450,7 @@ public class StaleMessageFilterService {
 	 * Removes local processing records older than the window.
 	 */
 	private void sweepLocalRecords() {
-		final long cutoff = DateTimeHelper.toTimestamp(DateTimeHelper.getCurrentLocalDateTime()) - this.properties.getWindow().toMillis();
+		final long cutoff = StaleMessageFilterService.getCurrentTimestamp() - this.properties.getWindow().toMillis();
 		this.processingStartByEntryKey.values().removeIf(processingStart -> processingStart.timestamp() < cutoff);
 	}
 

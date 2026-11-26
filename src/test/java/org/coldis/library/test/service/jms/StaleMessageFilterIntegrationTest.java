@@ -1,10 +1,10 @@
 package org.coldis.library.test.service.jms;
 
+import java.time.Duration;
 import java.util.Random;
 
 import javax.sql.DataSource;
 
-import org.coldis.library.helper.DateTimeHelper;
 import org.coldis.library.service.jms.ExtendedMessagingMessageListenerAdapter;
 import org.coldis.library.service.jms.JmsMessage;
 import org.coldis.library.service.jms.JmsTemplateHelper;
@@ -117,6 +117,7 @@ public class StaleMessageFilterIntegrationTest extends ContainerTestHelper {
 	 */
 	@AfterEach
 	public void afterEach() {
+		TestHelper.cleanClock();
 		this.staleMessageFilterProperties.setEnabled(false);
 		this.staleMessageFilterProperties.setPersistenceEnabled(true);
 	}
@@ -150,7 +151,7 @@ public class StaleMessageFilterIntegrationTest extends ContainerTestHelper {
 		this.jmsTemplate.convertAndSend(StaleMessageFilterTestListener.TEST_QUEUE, "message2-" + random, jmsMessage -> {
 			jmsMessage.setStringProperty(JmsMessage.STALE_FILTER_KEY_PROPERTY, messageKey);
 			jmsMessage.setLongProperty(JmsMessage.STALE_FILTER_POSTED_AT_PROPERTY,
-					DateTimeHelper.toTimestamp(DateTimeHelper.getCurrentLocalDateTime()) - 60_000);
+					StaleMessageFilterService.getCurrentTimestamp() - 60_000);
 			return jmsMessage;
 		});
 
@@ -178,6 +179,40 @@ public class StaleMessageFilterIntegrationTest extends ContainerTestHelper {
 	}
 
 	/**
+	 * Tests that moving the application clock forward does not make later
+	 * messages look stale: processing starts and posted-at are both wall clock.
+	 *
+	 * @throws Exception If the test fails.
+	 */
+	@Test
+	@DisplayName("Moving the application clock forward does not make later messages look stale")
+	public void testApplicationClockDoesNotMakeMessagesStale() throws Exception {
+		final Double droppedCountBefore = this.getDroppedCount();
+		final Integer random = StaleMessageFilterIntegrationTest.RANDOM.nextInt();
+		final String messageKey = "applicationClockKey-" + random;
+
+		// Message 1 is processed with the application clock an hour ahead.
+		TestHelper.moveClockBy(Duration.ofHours(1));
+		this.jmsTemplateHelper.send(this.jmsTemplate, new JmsMessage<String>().withDestination(StaleMessageFilterTestListener.TEST_QUEUE)
+				.withMessage("clockMessage1-" + random).withStaleFilterKey(messageKey));
+		Assertions.assertTrue(TestHelper.waitUntilValid(() -> StaleMessageFilterTestListener.getProcessedMessages(),
+				processedMessages -> processedMessages.contains("clockMessage1-" + random), TestHelper.LONG_WAIT, TestHelper.SHORT_WAIT));
+
+		// Messages 2 (clock still ahead) and 3 (clock moved further) are posted after
+		// it: both are processed.
+		this.jmsTemplateHelper.send(this.jmsTemplate, new JmsMessage<String>().withDestination(StaleMessageFilterTestListener.TEST_QUEUE)
+				.withMessage("clockMessage2-" + random).withStaleFilterKey(messageKey));
+		Assertions.assertTrue(TestHelper.waitUntilValid(() -> StaleMessageFilterTestListener.getProcessedMessages(),
+				processedMessages -> processedMessages.contains("clockMessage2-" + random), TestHelper.LONG_WAIT, TestHelper.SHORT_WAIT));
+		TestHelper.moveClockBy(Duration.ofHours(6));
+		this.jmsTemplateHelper.send(this.jmsTemplate, new JmsMessage<String>().withDestination(StaleMessageFilterTestListener.TEST_QUEUE)
+				.withMessage("clockMessage3-" + random).withStaleFilterKey(messageKey));
+		Assertions.assertTrue(TestHelper.waitUntilValid(() -> StaleMessageFilterTestListener.getProcessedMessages(),
+				processedMessages -> processedMessages.contains("clockMessage3-" + random), TestHelper.LONG_WAIT, TestHelper.SHORT_WAIT));
+		Assertions.assertEquals(droppedCountBefore, this.getDroppedCount());
+	}
+
+	/**
 	 * Tests that a drop caused by a record another instance shared is counted
 	 * with the pulled source.
 	 *
@@ -201,7 +236,7 @@ public class StaleMessageFilterIntegrationTest extends ContainerTestHelper {
 		// instance pulls it.
 		final StaleMessageFilterService otherInstance = new StaleMessageFilterService(this.staleMessageFilterProperties, this.dataSourceProvider);
 		otherInstance.recordProcessing(StaleMessageFilterTestListener.TEST_QUEUE, messageKey,
-				DateTimeHelper.toTimestamp(DateTimeHelper.getCurrentLocalDateTime()) + 1_000);
+				StaleMessageFilterService.getCurrentTimestamp() + 1_000);
 		otherInstance.synchronize();
 		this.staleMessageFilterService.synchronize();
 
@@ -210,7 +245,7 @@ public class StaleMessageFilterIntegrationTest extends ContainerTestHelper {
 		this.jmsTemplate.convertAndSend(StaleMessageFilterTestListener.TEST_QUEUE, "pulledMessage2-" + random, jmsMessage -> {
 			jmsMessage.setStringProperty(JmsMessage.STALE_FILTER_KEY_PROPERTY, messageKey);
 			jmsMessage.setLongProperty(JmsMessage.STALE_FILTER_POSTED_AT_PROPERTY,
-					DateTimeHelper.toTimestamp(DateTimeHelper.getCurrentLocalDateTime()) - 60_000);
+					StaleMessageFilterService.getCurrentTimestamp() - 60_000);
 			return jmsMessage;
 		});
 		Assertions.assertTrue(TestHelper.waitUntilValid(
