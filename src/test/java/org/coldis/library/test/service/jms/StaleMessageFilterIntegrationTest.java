@@ -103,23 +103,37 @@ public class StaleMessageFilterIntegrationTest extends ContainerTestHelper {
 	}
 
 	/**
-	 * Enables the filter (memory-only) before each test.
+	 * Filter enabled flag before the test (restored after it).
+	 */
+	private Boolean previousEnabled;
+
+	/**
+	 * Filter persistence enabled flag before the test (restored after it).
+	 */
+	private Boolean previousPersistenceEnabled;
+
+	/**
+	 * Enables the filter (memory-only) before each test, saving the shared
+	 * configuration to restore after it.
 	 */
 	@BeforeEach
 	public void beforeEach() {
+		this.previousEnabled = this.staleMessageFilterProperties.getEnabled();
+		this.previousPersistenceEnabled = this.staleMessageFilterProperties.getPersistenceEnabled();
 		StaleMessageFilterTestListener.reset();
 		this.staleMessageFilterProperties.setEnabled(true);
 		this.staleMessageFilterProperties.setPersistenceEnabled(false);
 	}
 
 	/**
-	 * Restores the filter configuration after each test.
+	 * Restores the filter configuration the test found (the shared context's,
+	 * so later test classes run with it).
 	 */
 	@AfterEach
 	public void afterEach() {
 		TestHelper.cleanClock();
-		this.staleMessageFilterProperties.setEnabled(false);
-		this.staleMessageFilterProperties.setPersistenceEnabled(true);
+		this.staleMessageFilterProperties.setEnabled(this.previousEnabled);
+		this.staleMessageFilterProperties.setPersistenceEnabled(this.previousPersistenceEnabled);
 	}
 
 	/**
@@ -151,7 +165,7 @@ public class StaleMessageFilterIntegrationTest extends ContainerTestHelper {
 		this.jmsTemplate.convertAndSend(StaleMessageFilterTestListener.TEST_QUEUE, "message2-" + random, jmsMessage -> {
 			jmsMessage.setStringProperty(JmsMessage.STALE_FILTER_KEY_PROPERTY, messageKey);
 			jmsMessage.setLongProperty(JmsMessage.STALE_FILTER_POSTED_AT_PROPERTY,
-					StaleMessageFilterService.getCurrentTimestamp() - 60_000);
+					StaleMessageFilterService.getCurrentWallClockTimestamp() - 60_000);
 			return jmsMessage;
 		});
 
@@ -236,7 +250,7 @@ public class StaleMessageFilterIntegrationTest extends ContainerTestHelper {
 		// instance pulls it.
 		final StaleMessageFilterService otherInstance = new StaleMessageFilterService(this.staleMessageFilterProperties, this.dataSourceProvider);
 		otherInstance.recordProcessing(StaleMessageFilterTestListener.TEST_QUEUE, messageKey,
-				StaleMessageFilterService.getCurrentTimestamp() + 1_000);
+				StaleMessageFilterService.getCurrentWallClockTimestamp() + 1_000);
 		otherInstance.synchronize();
 		this.staleMessageFilterService.synchronize();
 
@@ -245,7 +259,7 @@ public class StaleMessageFilterIntegrationTest extends ContainerTestHelper {
 		this.jmsTemplate.convertAndSend(StaleMessageFilterTestListener.TEST_QUEUE, "pulledMessage2-" + random, jmsMessage -> {
 			jmsMessage.setStringProperty(JmsMessage.STALE_FILTER_KEY_PROPERTY, messageKey);
 			jmsMessage.setLongProperty(JmsMessage.STALE_FILTER_POSTED_AT_PROPERTY,
-					StaleMessageFilterService.getCurrentTimestamp() - 60_000);
+					StaleMessageFilterService.getCurrentWallClockTimestamp() - 60_000);
 			return jmsMessage;
 		});
 		Assertions.assertTrue(TestHelper.waitUntilValid(

@@ -161,7 +161,7 @@ public class StaleMessageFilterServiceTest extends ContainerTestHelper {
 	@DisplayName("Drops a keyed message only when a same-key processing started after it was posted")
 	public void testDropDecision() {
 		final StaleMessageFilterService service = new StaleMessageFilterService(this.createProperties(false), null);
-		final long now = StaleMessageFilterService.getCurrentTimestamp();
+		final long now = StaleMessageFilterService.getCurrentWallClockTimestamp();
 		final String messageKey = "dropDecisionKey-" + StaleMessageFilterServiceTest.RANDOM.nextInt();
 
 		// Without a processing record, nothing is stale.
@@ -193,7 +193,7 @@ public class StaleMessageFilterServiceTest extends ContainerTestHelper {
 		final StaleMessageFilterProperties properties = this.createProperties(false);
 		properties.setEnabled(false);
 		final StaleMessageFilterService service = new StaleMessageFilterService(properties, null);
-		final long now = StaleMessageFilterService.getCurrentTimestamp();
+		final long now = StaleMessageFilterService.getCurrentWallClockTimestamp();
 		final String messageKey = "disabledKey-" + StaleMessageFilterServiceTest.RANDOM.nextInt();
 
 		service.recordProcessing("queue", messageKey, now);
@@ -209,7 +209,7 @@ public class StaleMessageFilterServiceTest extends ContainerTestHelper {
 		final StaleMessageFilterProperties properties = this.createProperties(false);
 		properties.setWindow(Duration.ofSeconds(30));
 		final StaleMessageFilterService service = new StaleMessageFilterService(properties, null);
-		final long now = StaleMessageFilterService.getCurrentTimestamp();
+		final long now = StaleMessageFilterService.getCurrentWallClockTimestamp();
 		final String messageKey = "sweepKey-" + StaleMessageFilterServiceTest.RANDOM.nextInt();
 
 		// A record older than the window drops even older messages until swept.
@@ -239,7 +239,7 @@ public class StaleMessageFilterServiceTest extends ContainerTestHelper {
 		final StaleMessageFilterProperties properties = this.createProperties(false);
 		properties.setWindow(Duration.ofSeconds(30));
 		final StaleMessageFilterService service = new StaleMessageFilterService(properties, null);
-		final long now = StaleMessageFilterService.getCurrentTimestamp();
+		final long now = StaleMessageFilterService.getCurrentWallClockTimestamp();
 		final String messageKey = "applicationClockSweepKey-" + StaleMessageFilterServiceTest.RANDOM.nextInt();
 		service.recordProcessing("queue", messageKey, now);
 
@@ -247,7 +247,7 @@ public class StaleMessageFilterServiceTest extends ContainerTestHelper {
 		TestHelper.moveClockBy(Duration.ofDays(1));
 		service.synchronize();
 		Assertions.assertTrue(service.hasNewerProcessing("queue", messageKey, now - 10_000));
-		Assertions.assertFalse(service.hasNewerProcessing("queue", messageKey, StaleMessageFilterService.getCurrentTimestamp()));
+		Assertions.assertFalse(service.hasNewerProcessing("queue", messageKey, StaleMessageFilterService.getCurrentWallClockTimestamp()));
 	}
 
 	/**
@@ -261,7 +261,7 @@ public class StaleMessageFilterServiceTest extends ContainerTestHelper {
 		properties.setTableName("stale_message_filter_clock_test");
 		final StaleMessageFilterService instanceA = new StaleMessageFilterService(properties, this.createDataSourceProvider());
 		final StaleMessageFilterService instanceB = new StaleMessageFilterService(properties, this.createDataSourceProvider());
-		final long now = StaleMessageFilterService.getCurrentTimestamp();
+		final long now = StaleMessageFilterService.getCurrentWallClockTimestamp();
 		final String messageKey = "applicationClockCleanupKey-" + StaleMessageFilterServiceTest.RANDOM.nextInt();
 
 		// A pushes a record, then runs the cleanup with the application clock well past the window.
@@ -302,7 +302,7 @@ public class StaleMessageFilterServiceTest extends ContainerTestHelper {
 		final StaleMessageFilterProperties properties = this.createProperties(true);
 		final StaleMessageFilterService instanceA = new StaleMessageFilterService(properties, this.createDataSourceProvider());
 		final StaleMessageFilterService instanceB = new StaleMessageFilterService(properties, this.createDataSourceProvider());
-		final long now = StaleMessageFilterService.getCurrentTimestamp();
+		final long now = StaleMessageFilterService.getCurrentWallClockTimestamp();
 		final String messageKey = "syncKey-" + StaleMessageFilterServiceTest.RANDOM.nextInt();
 
 		// Instance A records a processing locally: instance B (which consumes keyed
@@ -445,7 +445,7 @@ public class StaleMessageFilterServiceTest extends ContainerTestHelper {
 		Assertions.assertNull(jdbcTemplate.queryForObject("SELECT to_regclass(?)::TEXT", String.class, tableName));
 
 		// Once a keyed message is processed, the synchronization runs.
-		service.recordProcessing("queue", "skipKey", StaleMessageFilterService.getCurrentTimestamp());
+		service.recordProcessing("queue", "skipKey", StaleMessageFilterService.getCurrentWallClockTimestamp());
 		service.synchronize();
 		Assertions.assertEquals(1, StaleMessageFilterServiceTest.getSyncCount(meterRegistry, "push", "success"));
 		Assertions.assertEquals(1, StaleMessageFilterServiceTest.getSyncCount(meterRegistry, "pull", "success"));
@@ -464,7 +464,7 @@ public class StaleMessageFilterServiceTest extends ContainerTestHelper {
 		final StaleMessageFilterService instanceA = new StaleMessageFilterService(properties, this.createDataSourceProvider());
 		final StaleMessageFilterService instanceB = new StaleMessageFilterService(properties, this.createDataSourceProvider(),
 				StaleMessageFilterServiceTest.createProvider(meterRegistry));
-		final long now = StaleMessageFilterService.getCurrentTimestamp();
+		final long now = StaleMessageFilterService.getCurrentWallClockTimestamp();
 		final String random = Integer.toString(StaleMessageFilterServiceTest.RANDOM.nextInt());
 		final String consumedQueue = "consumed_" + random;
 		final String otherQueue = "other_" + random;
@@ -505,7 +505,7 @@ public class StaleMessageFilterServiceTest extends ContainerTestHelper {
 		properties.setWindow(Duration.ofSeconds(30));
 		properties.setSynchronizationInterval(Duration.ofMillis(100));
 		final StaleMessageFilterService service = new StaleMessageFilterService(properties, null);
-		final long now = StaleMessageFilterService.getCurrentTimestamp();
+		final long now = StaleMessageFilterService.getCurrentWallClockTimestamp();
 		final String messageKey = "lifecycleKey-" + StaleMessageFilterServiceTest.RANDOM.nextInt();
 		service.recordProcessing("queue", messageKey, now - 60_000);
 		// The application context's own filter (enabled by default) runs a thread of the same name.
@@ -553,7 +553,7 @@ public class StaleMessageFilterServiceTest extends ContainerTestHelper {
 		final StaleMessageFilterService instanceA = new StaleMessageFilterService(properties, this.createDataSourceProvider());
 		final StaleMessageFilterService instanceB = new StaleMessageFilterService(properties, this.createDataSourceProvider(),
 				StaleMessageFilterServiceTest.createProvider(meterRegistry));
-		final long now = StaleMessageFilterService.getCurrentTimestamp();
+		final long now = StaleMessageFilterService.getCurrentWallClockTimestamp();
 		final String random = Integer.toString(StaleMessageFilterServiceTest.RANDOM.nextInt());
 		final String firstQueue = "first_" + random;
 		final String laterQueue = "later_" + random;

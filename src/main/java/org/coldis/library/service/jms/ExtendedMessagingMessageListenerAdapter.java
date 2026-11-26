@@ -494,7 +494,7 @@ public class ExtendedMessagingMessageListenerAdapter extends MessagingMessageLis
 						// posted-at it is compared with (never the application clock): the
 						// clock skew margin absorbs small divergences between hosts.
 						this.countStaleFilterProcessed(message);
-						final long processingStartTimestamp = StaleMessageFilterService.getCurrentTimestamp();
+						final long processingStartTimestamp = StaleMessageFilterService.getCurrentWallClockTimestamp();
 						super.onMessage(message, session);
 						this.recordStaleFilterProcessing(message, processingStartTimestamp);
 					}

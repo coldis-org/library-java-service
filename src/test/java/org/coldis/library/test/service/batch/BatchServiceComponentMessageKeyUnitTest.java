@@ -98,18 +98,19 @@ public class BatchServiceComponentMessageKeyUnitTest {
 	}
 
 	/**
-	 * Tests that a forced delete message has its own stale filter key, so a
-	 * conditional delete that keeps the batch does not make it look stale.
+	 * Tests that a forced delete message has its own keys, so a conditional delete
+	 * (which may keep the batch) neither replaces it at the broker nor makes it
+	 * look stale.
 	 *
 	 * @throws Exception If the test fails.
 	 */
 	@Test
-	@DisplayName("A forced delete message has its own stale filter key")
-	public void testForcedDeleteMessageHasOwnStaleFilterKey() throws Exception {
+	@DisplayName("A forced delete message has its own last-value key and stale filter key")
+	public void testForcedDeleteMessageHasOwnKeys() throws Exception {
 		this.batchService.queueDeleteAsync("forced-delete-key", false);
 		final JmsMessage<?> message = this.getSentMessage();
-		Assertions.assertEquals("forced-delete-key", message.getLastValueKey());
-		Assertions.assertEquals("forced-delete-key" + BatchServiceComponent.FORCED_DELETE_STALE_FILTER_KEY_SUFFIX, message.getStaleFilterKey());
+		Assertions.assertEquals("forced-delete-key" + BatchServiceComponent.FORCED_DELETE_KEY_SUFFIX, message.getLastValueKey());
+		Assertions.assertEquals("forced-delete-key" + BatchServiceComponent.FORCED_DELETE_KEY_SUFFIX, message.getStaleFilterKey());
 	}
 
 }

@@ -98,6 +98,18 @@ public class LibraryQueueStaleFilterIntegrationTest extends ContainerTestHelper 
 	}
 
 	/**
+	 * Gets the count of keyed messages dropped by the filter on a destination.
+	 *
+	 * @param  destination Destination.
+	 * @return             The count.
+	 */
+	private Double getDroppedCount(
+			final String destination) {
+		return this.meterRegistry.find(ExtendedMessagingMessageListenerAdapter.STALE_DROPPED_MESSAGES_METRIC).tag("destination", destination).counters()
+				.stream().mapToDouble(Counter::count).sum();
+	}
+
+	/**
 	 * Waits until a processing of the key has been recorded on the destination
 	 * after the given wall-clock time.
 	 *
@@ -117,22 +129,36 @@ public class LibraryQueueStaleFilterIntegrationTest extends ContainerTestHelper 
 	}
 
 	/**
-	 * Enables the filter (memory-only) before each test.
+	 * Filter enabled flag before the test (restored after it).
+	 */
+	private Boolean previousEnabled;
+
+	/**
+	 * Filter persistence enabled flag before the test (restored after it).
+	 */
+	private Boolean previousPersistenceEnabled;
+
+	/**
+	 * Enables the filter (memory-only) before each test, saving the shared
+	 * configuration to restore after it.
 	 */
 	@BeforeEach
 	public void beforeEach() {
+		this.previousEnabled = this.staleMessageFilterProperties.getEnabled();
+		this.previousPersistenceEnabled = this.staleMessageFilterProperties.getPersistenceEnabled();
 		this.staleMessageFilterProperties.setEnabled(true);
 		this.staleMessageFilterProperties.setPersistenceEnabled(false);
 	}
 
 	/**
-	 * Restores the filter configuration after each test.
+	 * Restores the filter configuration the test found (the shared context's,
+	 * so later test classes run with it).
 	 */
 	@AfterEach
 	public void afterEach() {
 		TestHelper.cleanClock();
-		this.staleMessageFilterProperties.setEnabled(false);
-		this.staleMessageFilterProperties.setPersistenceEnabled(true);
+		this.staleMessageFilterProperties.setEnabled(this.previousEnabled);
+		this.staleMessageFilterProperties.setPersistenceEnabled(this.previousPersistenceEnabled);
 	}
 
 	/**
@@ -151,14 +177,14 @@ public class LibraryQueueStaleFilterIntegrationTest extends ContainerTestHelper 
 		final String keySuffix = "staleFilterResume-" + LibraryQueueStaleFilterIntegrationTest.RANDOM.nextInt();
 
 		// A first resume (for a batch that does not exist, so it does no work) records a processing for the key.
-		final long firstSentAt = StaleMessageFilterService.getCurrentTimestamp();
+		final long firstSentAt = StaleMessageFilterService.getCurrentWallClockTimestamp();
 		this.batchServiceComponent.queueResumeAsync(keySuffix, null);
 		Assertions.assertTrue(this.waitForProcessing(LibraryQueueStaleFilterIntegrationTest.RESUME_QUEUE, keySuffix, firstSentAt));
 
 		// A second resume is scheduled a minute in the past, before that processing started. It is sent
 		// after it, so it must be processed (and record a newer processing), not dropped.
 		final Double checkedCountBefore = this.getCheckedCount(LibraryQueueStaleFilterIntegrationTest.RESUME_QUEUE);
-		final long secondSentAt = StaleMessageFilterService.getCurrentTimestamp();
+		final long secondSentAt = StaleMessageFilterService.getCurrentWallClockTimestamp();
 		this.batchServiceComponent.queueResumeAsync(keySuffix, DateTimeHelper.getCurrentLocalDateTime().minusMinutes(1));
 		Assertions.assertTrue(TestHelper.waitUntilValid(() -> this.getCheckedCount(LibraryQueueStaleFilterIntegrationTest.RESUME_QUEUE),
 				checkedCount -> checkedCount > checkedCountBefore, TestHelper.LONG_WAIT, TestHelper.SHORT_WAIT));
@@ -166,21 +192,32 @@ public class LibraryQueueStaleFilterIntegrationTest extends ContainerTestHelper 
 	}
 
 	/**
-	 * Tests that conditional and forced batch deletes reach the listener under
-	 * different stale filter keys.
+	 * Tests that a forced batch delete is not dropped by a processing of a
+	 * conditional delete of the same batch that started after it was posted
+	 * (a conditional delete may keep the batch), while a conditional delete is.
 	 *
 	 * @throws Exception If the test fails.
 	 */
 	@Test
-	@DisplayName("Conditional and forced batch deletes are filtered under different keys")
-	public void testBatchDeleteKeys() throws Exception {
+	@DisplayName("A forced batch delete is not dropped by a later conditional delete of the same batch")
+	public void testForcedDeleteIsNotDroppedByConditionalDelete() throws Exception {
 		final String key = "staleFilterDelete-" + LibraryQueueStaleFilterIntegrationTest.RANDOM.nextInt();
-		final long sentAt = StaleMessageFilterService.getCurrentTimestamp();
-		this.batchServiceComponent.queueDeleteAsync(key, true);
-		Assertions.assertTrue(this.waitForProcessing(LibraryQueueStaleFilterIntegrationTest.DELETE_QUEUE, key, sentAt));
+
+		// A conditional delete of the batch is recorded as started a minute from now, so after any delete sent now.
+		final long conditionalStartedAt = StaleMessageFilterService.getCurrentWallClockTimestamp() + 60_000;
+		this.staleMessageFilterService.recordProcessing(LibraryQueueStaleFilterIntegrationTest.DELETE_QUEUE, key, conditionalStartedAt);
+
+		// A forced delete sent now is still processed, under its own key.
+		final long forcedSentAt = StaleMessageFilterService.getCurrentWallClockTimestamp();
 		this.batchServiceComponent.queueDeleteAsync(key, false);
 		Assertions.assertTrue(this.waitForProcessing(LibraryQueueStaleFilterIntegrationTest.DELETE_QUEUE,
-				key + BatchServiceComponent.FORCED_DELETE_STALE_FILTER_KEY_SUFFIX, sentAt));
+				key + BatchServiceComponent.FORCED_DELETE_KEY_SUFFIX, forcedSentAt));
+
+		// A conditional delete sent now is dropped.
+		final Double droppedCountBefore = this.getDroppedCount(LibraryQueueStaleFilterIntegrationTest.DELETE_QUEUE);
+		this.batchServiceComponent.queueDeleteAsync(key, true);
+		Assertions.assertTrue(TestHelper.waitUntilValid(() -> this.getDroppedCount(LibraryQueueStaleFilterIntegrationTest.DELETE_QUEUE),
+				droppedCount -> droppedCount > droppedCountBefore, TestHelper.LONG_WAIT, TestHelper.SHORT_WAIT));
 	}
 
 	/**
@@ -192,7 +229,7 @@ public class LibraryQueueStaleFilterIntegrationTest extends ContainerTestHelper 
 	@Test
 	@DisplayName("The statistics delete-expired trigger is checked by the filter")
 	public void testDeleteExpiredTriggerIsKeyed() throws Exception {
-		final long sentAt = StaleMessageFilterService.getCurrentTimestamp();
+		final long sentAt = StaleMessageFilterService.getCurrentWallClockTimestamp();
 		this.statisticsEventServiceComponent.scheduleDeleteExpired();
 		Assertions.assertTrue(this.waitForProcessing(LibraryQueueStaleFilterIntegrationTest.DELETE_EXPIRED_QUEUE,
 				LibraryQueueStaleFilterIntegrationTest.DELETE_EXPIRED_QUEUE, sentAt));

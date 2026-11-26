@@ -42,7 +42,7 @@ import jakarta.annotation.PreDestroy;
  * to one synchronization interval.
  *
  * Processing and posted-at timestamps are both wall-clock epoch millis
- * ({@link #getCurrentTimestamp()} here, the JMS timestamp or scheduled
+ * ({@link #getCurrentWallClockTimestamp()} here, the JMS timestamp or scheduled
  * delivery time from producers), never the application clock
  * ({@code DateTimeHelper}), so a simulated application clock does not make
  * messages look stale. The clock skew margin absorbs small divergences between
@@ -215,7 +215,7 @@ public class StaleMessageFilterService {
 	 *
 	 * @return The current wall-clock time (epoch millis).
 	 */
-	public static long getCurrentTimestamp() {
+	public static long getCurrentWallClockTimestamp() {
 		return System.currentTimeMillis();
 	}
 
@@ -450,7 +450,7 @@ public class StaleMessageFilterService {
 	 * Removes local processing records older than the window.
 	 */
 	private void sweepLocalRecords() {
-		final long cutoff = StaleMessageFilterService.getCurrentTimestamp() - this.properties.getWindow().toMillis();
+		final long cutoff = StaleMessageFilterService.getCurrentWallClockTimestamp() - this.properties.getWindow().toMillis();
 		this.processingStartByEntryKey.values().removeIf(processingStart -> processingStart.timestamp() < cutoff);
 	}
 

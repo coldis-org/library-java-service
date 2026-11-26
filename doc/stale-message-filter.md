@@ -20,7 +20,7 @@ key and a stale filter key, with the same value:
 | Queue | Key |
 |---|---|
 | `batch/resume` | the batch key suffix |
-| `batch/delete` | the batch key; the stale filter key of a forced delete (not conditioned on the batch being due for cleaning) adds `/forced`, so a conditional delete that keeps the batch never makes it look stale |
+| `batch/delete` | the batch key; a forced delete (not conditioned on the batch being due for cleaning) adds `/forced` to both keys, so a conditional delete, which may keep the batch, neither replaces it at the broker nor makes it look stale |
 | `statistics-event/delete/expired` | a constant (one trigger for the service) |
 
 - **Last-value key (broker):** the queue keeps at most one pending message per
