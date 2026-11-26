@@ -157,6 +157,12 @@ Events can have an optional `expiredAt` timestamp. A scheduled job (default 3 AM
 2. Listener deletes a batch of expired events (native SQL with `LIMIT`).
 3. If rows were deleted, sends another message to continue the loop.
 
+Every instance runs the cron, so each run enqueues one trigger per instance. The
+trigger uses a constant key as both its last-value key (the broker keeps one
+pending trigger) and its stale filter key (a trigger posted before the last one
+started processing is dropped on consume; see
+[stale-message-filter.md](stale-message-filter.md)).
+
 Expired event deletion does **not** update summaries — old summary data is expected to age out naturally.
 
 ### Context-Aware Time Truncation

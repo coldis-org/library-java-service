@@ -8,7 +8,6 @@ import java.util.stream.Collectors;
 
 import org.apache.activemq.artemis.jms.client.ActiveMQDestination;
 import org.apache.activemq.artemis.utils.CompositeAddress;
-import org.coldis.library.helper.DateTimeHelper;
 import org.coldis.library.model.RetriableIn;
 import org.coldis.library.thread.ThreadMapContextHolder;
 import org.slf4j.Logger;
@@ -334,8 +333,10 @@ public class ExtendedMessagingMessageListenerAdapter extends MessagingMessageLis
 
 	/**
 	 * Resolves when the message was posted (wall-clock epoch millis): the
-	 * explicit override property, the scheduled delivery time (a delayed message
-	 * only becomes current at its scheduled time) or the JMS timestamp.
+	 * explicit override property (which producers must also set in wall-clock
+	 * epoch millis, e.g. {@code System.currentTimeMillis()}, never from the
+	 * application clock), the scheduled delivery time (a delayed message only
+	 * becomes current at its scheduled time) or the JMS timestamp.
 	 *
 	 * @return When the message was posted, or null when unknown (fail-open).
 	 */
@@ -489,10 +490,11 @@ public class ExtendedMessagingMessageListenerAdapter extends MessagingMessageLis
 						this.dropSupersededMessage(message, waitedSupersedingSource);
 					}
 					else {
-						// Processes the message. The JMS timestamp is producer wall-clock: the
-						// clock skew margin absorbs small divergences from the local clock.
+						// Processes the message. The processing start is wall clock, like the
+						// posted-at it is compared with (never the application clock): the
+						// clock skew margin absorbs small divergences between hosts.
 						this.countStaleFilterProcessed(message);
-						final long processingStartTimestamp = DateTimeHelper.toTimestamp(DateTimeHelper.getCurrentLocalDateTime());
+						final long processingStartTimestamp = StaleMessageFilterService.getCurrentWallClockTimestamp();
 						super.onMessage(message, session);
 						this.recordStaleFilterProcessing(message, processingStartTimestamp);
 					}

@@ -12,13 +12,45 @@ posted: that processing already reflected the state the older message carried.
   property). Only keyed messages are ever dropped, and an instance that never
   sees a keyed message does no synchronization work.
 
+## Keys used by the library's own queues
+
+The library's own periodically re-enqueued messages carry both a last-value
+key and a stale filter key, with the same value:
+
+| Queue | Key |
+|---|---|
+| `batch/resume` | the batch key suffix |
+| `batch/delete` | the batch key; a forced delete (not conditioned on the batch being due for cleaning) adds `/forced` to both keys, so a conditional delete, which may keep the batch, neither replaces it at the broker nor makes it look stale |
+| `statistics-event/delete/expired` | a constant (one trigger for the service) |
+
+- **Last-value key (broker):** the queue keeps at most one pending message per
+  key, so repeated enqueues do not pile up.
+- **Stale filter key (consumer):** a message posted before the last processing
+  of its key started is dropped on consume. This covers what the broker cap
+  does not, e.g. duplicates already paged out of memory, or the copies every
+  instance enqueues for the same scheduled run.
+
+Producers of other last-value-keyed messages can do the same: set
+`withStaleFilterKey` to the last-value key.
+
 ## How a drop is decided
 
 - **Posted at:** the explicit posted-at property, else the scheduled delivery
-  time, else the JMS timestamp. This is the producer's clock.
+  time, else the JMS timestamp. This is the producer's wall clock.
+  `JmsTemplateHelper` sets the scheduled delivery time only when it is still
+  ahead when the message is sent; a message already due (e.g. a batch resume
+  whose scheduled time passed during a slow commit, or a rescue of an overdue
+  batch) is sent unscheduled and counts from when it was sent.
 - **Last processing start:** recorded per destination and key by consumers
-  (any instance, shared through the database). This is the consumer's clock.
+  (any instance, shared through the database). This is the consumer's wall
+  clock.
 - The message is dropped when `postedAt + clockSkewMargin < lastProcessingStart`.
+
+Both sides are wall-clock epoch millis (`System.currentTimeMillis()`), never the
+application clock (`DateTimeHelper`). A simulated application clock, e.g.
+`DateTimeHelper.setClock` or `TestHelper.moveClockBy` in tests, does not affect
+the filter. A producer that sets the posted-at property (`staleFilterPostedAt`)
+itself must set it in wall-clock epoch millis too.
 
 Producer and consumer hosts must be clock-synchronized well below
 `clock-skew-margin` (default 1 second). A producer clock running behind by more
@@ -35,8 +67,9 @@ table:
    and do not deadlock each other).
 2. **Pull:** the records other instances pushed since the last pull, only for
    the destinations this instance has seen keyed messages on.
-3. **Delete:** records older than `window`. Only one instance runs it at a
-   time (a transaction-level advisory lock that is never waited for: an
+3. **Delete:** records synchronized longer than `window` ago, by the database
+   clock (the clock `synchronized_at` is written with). Only one instance runs
+   it at a time (a transaction-level advisory lock that is never waited for: an
    instance that does not get it skips the cleanup for that cycle).
 
 The instance learns which destinations it consumes keyed messages from as the
@@ -107,8 +140,12 @@ CREATE INDEX IF NOT EXISTS stale_message_filter_synchronized_at_idx
 - It is `UNLOGGED`: its content is a cache of recent processing starts and may
   be lost on a database crash (the filter then simply drops nothing until it
   fills again).
+- `processed_at` is the consumer's wall clock (epoch millis);
+  `synchronized_at` is the database clock (epoch millis) and is the only value
+  the pull watermark and the cleanup compare with.
 - Records older than the window are deleted by the filter itself, with a
-  cutoff bound as a parameter so the `synchronized_at` index is used.
+  cutoff read from the database clock and bound as a parameter so the
+  `synchronized_at` index is used.
 - Services that manage every table through migrations can set
   `create-schema=false` and add the statements above to their own migrations.
   A schema change in a future version will be announced in the release notes,

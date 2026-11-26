@@ -240,9 +240,13 @@ public class BatchServiceComponent {
 		// HDR_SCHEDULED_DELIVERY_TIME is added. This avoids wall-clock vs DateTimeHelper
 		// mismatches (e.g. tests that advance the simulated clock would otherwise schedule
 		// delivery far in the wall-clock future).
+		// The key is both the last-value key (the broker keeps one pending resume per batch) and the
+		// stale filter key (a resume posted before the last one for the batch started is dropped on
+		// consume, where the broker does not collapse it).
 		final JmsMessage<String> jmsMessage = new JmsMessage<String>()
 				.withDestination(BatchServiceComponent.RESUME_QUEUE)
 				.withLastValueKey(keySuffix)
+				.withStaleFilterKey(keySuffix)
 				.withMessage(keySuffix)
 				.withAfterCommit(afterCommit);
 		if (scheduledFor != null) {
@@ -460,15 +464,28 @@ public class BatchServiceComponent {
 	}
 
 	/**
-	 * Deletes a batch record.
+	 * Suffix of the keys (last-value and stale filter) of a forced batch delete
+	 * (one not conditioned on the batch being due for cleaning).
+	 */
+	public static final String FORCED_DELETE_KEY_SUFFIX = "/forced";
+
+	/**
+	 * Deletes a batch record. The message keys (last-value and stale filter) are
+	 * the batch key for a conditional delete and the batch key with
+	 * {@link #FORCED_DELETE_KEY_SUFFIX} for a forced one: a conditional delete
+	 * (which may keep the batch) neither replaces a pending forced delete at the
+	 * broker nor makes an earlier one look stale.
 	 *
-	 * @param key Key.
+	 * @param key                   Key.
+	 * @param onlyIfShouldBeCleaned If the batch is only deleted when it should be
+	 *                                  cleaned.
 	 */
 	public void queueDeleteAsync(
 			final String key,
 			final Boolean onlyIfShouldBeCleaned) {
-		this.jmsTemplateHelper.send(this.jmsTemplate, new JmsMessage<>().withDestination(BatchServiceComponent.DELETE_QUEUE).withLastValueKey(key)
-				.withMessage(Map.of("key", key, "onlyIfShouldBeCleaned", onlyIfShouldBeCleaned)));
+		final String messageKey = (Boolean.FALSE.equals(onlyIfShouldBeCleaned) ? key + BatchServiceComponent.FORCED_DELETE_KEY_SUFFIX : key);
+		this.jmsTemplateHelper.send(this.jmsTemplate, new JmsMessage<>().withDestination(BatchServiceComponent.DELETE_QUEUE).withLastValueKey(messageKey)
+				.withStaleFilterKey(messageKey).withMessage(Map.of("key", key, "onlyIfShouldBeCleaned", onlyIfShouldBeCleaned)));
 	}
 
 	/**
