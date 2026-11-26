@@ -9,14 +9,12 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 
-import org.apache.commons.collections4.CollectionUtils;
 import org.apache.commons.lang3.ArrayUtils;
 import org.apache.commons.lang3.StringUtils;
 import org.apache.commons.lang3.reflect.MethodUtils;
 import org.coldis.library.exception.BusinessException;
 import org.coldis.library.exception.IntegrationException;
 import org.coldis.library.helper.ObjectHelper;
-import org.coldis.library.helper.RandomHelper;
 import org.coldis.library.helper.ReflectionHelper;
 import org.coldis.library.model.SimpleMessage;
 import org.coldis.library.service.client.GenericRestServiceClient;
@@ -83,6 +81,15 @@ public class ExceptionHandlerServiceClient implements ApplicationContextAware, E
 	 */
 	@Value("${org.coldis.library.service-client.always-sync:false}")
 	private Boolean alwaysSync;
+
+	/**
+	 * Read timeout of this client's calls, in seconds:
+	 * org.coldis.library.service-client.timeout.ExceptionHandlerServiceClient (none, zero or negative: the template's).
+	 * Applies only to templates whose request factory is the library's (ServiceClientRequestFactory).
+	 * The key sits under the global timeout's, so in YAML it is written flat (quoted), not nested.
+	 */
+	@Value("${org.coldis.library.service-client.timeout.ExceptionHandlerServiceClient:#{null}}")
+	private Long readTimeoutSeconds;
 
 	/**
 	 * JMS template.
@@ -171,7 +178,7 @@ public class ExceptionHandlerServiceClient implements ApplicationContextAware, E
 	}
 
 	/**
-	 * Gets all available endpoints.
+	 * Gets all available endpoints (the operation fails over them).
 	 * @return All available endpoints.
 	 */
 	private List<String> getEndpoints() {
@@ -179,15 +186,6 @@ public class ExceptionHandlerServiceClient implements ApplicationContextAware, E
 		return (endpoints == null ? null : List.of(endpoints.split(",")));
 	}
 
-	/**
-	 * Gets one endpoint (balanced).
-	 * @return One endpoint (balanced).
-	 */
-	private String getEndpoint() {
-		List<String> endpoints = this.getEndpoints();
-		return (CollectionUtils.isEmpty(endpoints) ? "" : endpoints.get(RandomHelper.getPositiveRandomLong((long) (endpoints.size())).intValue()));
-	}
-	
 	/**
 	 * Gets the service path.
 	 * @return The service path.
@@ -222,7 +220,7 @@ java.lang.Object[] parameters
 		// Operation parameters.
 		String endpointPath = endpointPath1;
 		endpointPath = (StringUtils.isBlank(endpointPath) || endpointPath.startsWith("/") ? endpointPath : "/" + endpointPath);
-		StringBuilder url = new StringBuilder(this.getEndpoint() + this.getPath() + endpointPath + "?");
+		StringBuilder pathAndQuery = new StringBuilder(this.getPath() + endpointPath + "?");
 		final HttpMethod method = HttpMethod.POST;
 		final MultiValueMap<String, String> headers = new LinkedMultiValueMap<>();
 		Object body = null;
@@ -240,7 +238,7 @@ MediaType.APPLICATION_JSON_VALUE);
 			for (Integer parameterItemIndex = 0; parameterItemIndex < codes.size(); parameterItemIndex++) {
 				// Adds the URI parameter to the map.
 				uriParameters.put("code" + parameterItemIndex, codes.get(parameterItemIndex));
-				url.append("code={code" + parameterItemIndex + "}&");
+				pathAndQuery.append("code={code" + parameterItemIndex + "}&");
 			}
 		}
 		// If the parameter is a collection.
@@ -250,14 +248,14 @@ MediaType.APPLICATION_JSON_VALUE);
 			for (Integer parameterItemIndex = 0; codes.hasNext(); parameterItemIndex++) {
 				// Adds the URI parameter to the map.
 				uriParameters.put("code" + parameterItemIndex, codes.next());
-				url.append("code={code" + parameterItemIndex + "}&");
+				pathAndQuery.append("code={code" + parameterItemIndex + "}&");
 			}
 		}
 		// If the parameter is not a collection nor an array.
 		else if (code != null) {
 			// Adds the URI parameter to the map.
 			uriParameters.put("code", code);
-			url.append("code={code}&");
+			pathAndQuery.append("code={code}&");
 		}
 		// If the parameter is an array.
 		if (parameters != null && parameters.getClass().isArray()) {
@@ -266,7 +264,7 @@ MediaType.APPLICATION_JSON_VALUE);
 			for (Integer parameterItemIndex = 0; parameterItemIndex < parameterss.size(); parameterItemIndex++) {
 				// Adds the URI parameter to the map.
 				uriParameters.put("parameters" + parameterItemIndex, parameterss.get(parameterItemIndex));
-				url.append("parameters={parameters" + parameterItemIndex + "}&");
+				pathAndQuery.append("parameters={parameters" + parameterItemIndex + "}&");
 			}
 		}
 		// If the parameter is a collection.
@@ -276,19 +274,20 @@ MediaType.APPLICATION_JSON_VALUE);
 			for (Integer parameterItemIndex = 0; parameterss.hasNext(); parameterItemIndex++) {
 				// Adds the URI parameter to the map.
 				uriParameters.put("parameters" + parameterItemIndex, parameterss.next());
-				url.append("parameters={parameters" + parameterItemIndex + "}&");
+				pathAndQuery.append("parameters={parameters" + parameterItemIndex + "}&");
 			}
 		}
 		// If the parameter is not a collection nor an array.
 		else if (parameters != null) {
 			// Adds the URI parameter to the map.
 			uriParameters.put("parameters", parameters);
-			url.append("parameters={parameters}&");
+			pathAndQuery.append("parameters={parameters}&");
 		}
-		// Executes the operation and returns the response.
-this.serviceClient.executeOperation(url.toString(), method, headers,
+		// Executes the operation (failing over the endpoints) and returns the response.
+this.serviceClient.executeOperation(this.getEndpoints(), pathAndQuery.toString(), method, headers,
 				partParameters.isEmpty() ? body : partParameters,
-				uriParameters, returnType);
+				uriParameters, returnType, null,
+				(this.readTimeoutSeconds == null ? null : java.time.Duration.ofSeconds(this.readTimeoutSeconds)), "ExceptionHandlerServiceClient");
 				
 	}
 	
@@ -316,7 +315,7 @@ java.lang.Object[] parameters
 		// Operation parameters.
 		String endpointPath = endpointPath2;
 		endpointPath = (StringUtils.isBlank(endpointPath) || endpointPath.startsWith("/") ? endpointPath : "/" + endpointPath);
-		StringBuilder url = new StringBuilder(this.getEndpoint() + this.getPath() + endpointPath + "?");
+		StringBuilder pathAndQuery = new StringBuilder(this.getPath() + endpointPath + "?");
 		final HttpMethod method = HttpMethod.POST;
 		final MultiValueMap<String, String> headers = new LinkedMultiValueMap<>();
 		Object body = null;
@@ -334,7 +333,7 @@ MediaType.APPLICATION_JSON_VALUE);
 			for (Integer parameterItemIndex = 0; parameterItemIndex < codes.size(); parameterItemIndex++) {
 				// Adds the URI parameter to the map.
 				uriParameters.put("code" + parameterItemIndex, codes.get(parameterItemIndex));
-				url.append("code={code" + parameterItemIndex + "}&");
+				pathAndQuery.append("code={code" + parameterItemIndex + "}&");
 			}
 		}
 		// If the parameter is a collection.
@@ -344,14 +343,14 @@ MediaType.APPLICATION_JSON_VALUE);
 			for (Integer parameterItemIndex = 0; codes.hasNext(); parameterItemIndex++) {
 				// Adds the URI parameter to the map.
 				uriParameters.put("code" + parameterItemIndex, codes.next());
-				url.append("code={code" + parameterItemIndex + "}&");
+				pathAndQuery.append("code={code" + parameterItemIndex + "}&");
 			}
 		}
 		// If the parameter is not a collection nor an array.
 		else if (code != null) {
 			// Adds the URI parameter to the map.
 			uriParameters.put("code", code);
-			url.append("code={code}&");
+			pathAndQuery.append("code={code}&");
 		}
 		// If the parameter is an array.
 		if (parameters != null && parameters.getClass().isArray()) {
@@ -360,7 +359,7 @@ MediaType.APPLICATION_JSON_VALUE);
 			for (Integer parameterItemIndex = 0; parameterItemIndex < parameterss.size(); parameterItemIndex++) {
 				// Adds the URI parameter to the map.
 				uriParameters.put("parameters" + parameterItemIndex, parameterss.get(parameterItemIndex));
-				url.append("parameters={parameters" + parameterItemIndex + "}&");
+				pathAndQuery.append("parameters={parameters" + parameterItemIndex + "}&");
 			}
 		}
 		// If the parameter is a collection.
@@ -370,19 +369,20 @@ MediaType.APPLICATION_JSON_VALUE);
 			for (Integer parameterItemIndex = 0; parameterss.hasNext(); parameterItemIndex++) {
 				// Adds the URI parameter to the map.
 				uriParameters.put("parameters" + parameterItemIndex, parameterss.next());
-				url.append("parameters={parameters" + parameterItemIndex + "}&");
+				pathAndQuery.append("parameters={parameters" + parameterItemIndex + "}&");
 			}
 		}
 		// If the parameter is not a collection nor an array.
 		else if (parameters != null) {
 			// Adds the URI parameter to the map.
 			uriParameters.put("parameters", parameters);
-			url.append("parameters={parameters}&");
+			pathAndQuery.append("parameters={parameters}&");
 		}
-		// Executes the operation and returns the response.
-this.serviceClient.executeOperation(url.toString(), method, headers,
+		// Executes the operation (failing over the endpoints) and returns the response.
+this.serviceClient.executeOperation(this.getEndpoints(), pathAndQuery.toString(), method, headers,
 				partParameters.isEmpty() ? body : partParameters,
-				uriParameters, returnType);
+				uriParameters, returnType, null,
+				(this.readTimeoutSeconds == null ? null : java.time.Duration.ofSeconds(this.readTimeoutSeconds)), "ExceptionHandlerServiceClient");
 				
 	}
 	
@@ -407,7 +407,7 @@ org.coldis.library.test.service.exception.ExceptionTestClass object
 		// Operation parameters.
 		String endpointPath = endpointPath3;
 		endpointPath = (StringUtils.isBlank(endpointPath) || endpointPath.startsWith("/") ? endpointPath : "/" + endpointPath);
-		StringBuilder url = new StringBuilder(this.getEndpoint() + this.getPath() + endpointPath + "?");
+		StringBuilder pathAndQuery = new StringBuilder(this.getPath() + endpointPath + "?");
 		final HttpMethod method = HttpMethod.POST;
 		final MultiValueMap<String, String> headers = new LinkedMultiValueMap<>();
 		Object body = null;
@@ -420,10 +420,11 @@ org.coldis.library.test.service.exception.ExceptionTestClass object
 MediaType.APPLICATION_JSON_VALUE);
 		// Sets the operation body.
 		body = object;
-		// Executes the operation and returns the response.
-this.serviceClient.executeOperation(url.toString(), method, headers,
+		// Executes the operation (failing over the endpoints) and returns the response.
+this.serviceClient.executeOperation(this.getEndpoints(), pathAndQuery.toString(), method, headers,
 				partParameters.isEmpty() ? body : partParameters,
-				uriParameters, returnType);
+				uriParameters, returnType, null,
+				(this.readTimeoutSeconds == null ? null : java.time.Duration.ofSeconds(this.readTimeoutSeconds)), "ExceptionHandlerServiceClient");
 				
 	}
 	
