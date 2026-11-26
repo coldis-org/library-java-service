@@ -2,9 +2,11 @@ package org.coldis.library.test.service.throttle;
 
 import java.sql.Connection;
 import java.sql.PreparedStatement;
+import java.lang.reflect.Method;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
 import java.util.Random;
 import java.util.concurrent.CountDownLatch;
@@ -16,9 +18,9 @@ import java.util.concurrent.TimeUnit;
 import javax.sql.DataSource;
 
 import org.coldis.library.service.throttle.SynchronizedThrottle;
-import org.coldis.library.service.throttle.SynchronizedThrottleJdbcStore;
 import org.coldis.library.service.throttle.SynchronizedThrottleProperties;
 import org.coldis.library.service.throttle.SynchronizedThrottleReservation;
+import org.coldis.library.service.throttle.repository.SynchronizedThrottleRepository;
 import org.coldis.library.test.StartTestWithContainerExtension;
 import org.coldis.library.test.TestHelper;
 import org.coldis.library.test.TestWithContainer;
@@ -78,6 +80,12 @@ public class SynchronizedThrottleTest extends ContainerTestHelper {
 	 */
 	@Autowired
 	private SynchronizedThrottle contextThrottle;
+
+	/**
+	 * The application context's repository (created with a data source).
+	 */
+	@Autowired
+	private ObjectProvider<SynchronizedThrottleRepository> contextRepositoryProvider;
 
 	/**
 	 * Creates a provider of a fixed object for manually constructed throttles.
@@ -145,14 +153,26 @@ public class SynchronizedThrottleTest extends ContainerTestHelper {
 	}
 
 	/**
-	 * Creates a throttle sharing runs through the test database.
+	 * Creates a repository on the test database.
+	 *
+	 * @param  properties Properties (table name and query timeout).
+	 * @return            The repository.
+	 */
+	private SynchronizedThrottleRepository createRepository(
+			final SynchronizedThrottleProperties properties) {
+		return new SynchronizedThrottleRepository(this.dataSource, properties.getTableName(), properties.getQueryTimeout());
+	}
+
+	/**
+	 * Creates a throttle sharing runs through the test database (each throttle
+	 * stands for an instance).
 	 *
 	 * @param  properties Properties.
 	 * @return            The throttle.
 	 */
 	private SynchronizedThrottle createThrottle(
 			final SynchronizedThrottleProperties properties) {
-		return new SynchronizedThrottle(properties, SynchronizedThrottleTest.createProvider(this.dataSource));
+		return new SynchronizedThrottle(properties, SynchronizedThrottleTest.createProvider(this.createRepository(properties)));
 	}
 
 	/**
@@ -163,6 +183,7 @@ public class SynchronizedThrottleTest extends ContainerTestHelper {
 	public void testBean() {
 		Assertions.assertNotNull(this.contextThrottle);
 		Assertions.assertTrue(this.contextThrottle.isEnabled());
+		Assertions.assertNotNull(this.contextRepositoryProvider.getIfAvailable());
 	}
 
 	/**
@@ -362,7 +383,7 @@ public class SynchronizedThrottleTest extends ContainerTestHelper {
 	@Test
 	@DisplayName("Expired rows are deleted and not pulled")
 	public void testExpiredRowsDeleted() {
-		final SynchronizedThrottleJdbcStore store = new SynchronizedThrottleJdbcStore(this.dataSource, SynchronizedThrottleTest.TABLE_NAME);
+		final SynchronizedThrottleRepository store = new SynchronizedThrottleRepository(this.dataSource, SynchronizedThrottleTest.TABLE_NAME);
 		store.ensureSchema();
 		final JdbcTemplate jdbcTemplate = new JdbcTemplate(this.dataSource);
 		final long now = SynchronizedThrottle.getCurrentWallClockTimestamp();
@@ -395,11 +416,11 @@ public class SynchronizedThrottleTest extends ContainerTestHelper {
 	@Test
 	@DisplayName("The cleanup is skipped while another instance holds its lock")
 	public void testCleanupLock() throws Exception {
-		final SynchronizedThrottleJdbcStore store = new SynchronizedThrottleJdbcStore(this.dataSource, SynchronizedThrottleTest.TABLE_NAME);
+		final SynchronizedThrottleRepository store = new SynchronizedThrottleRepository(this.dataSource, SynchronizedThrottleTest.TABLE_NAME);
 		store.ensureSchema();
 		try (Connection lockHolder = this.dataSource.getConnection()) {
 			try (PreparedStatement statement = lockHolder.prepareStatement("SELECT pg_advisory_lock(?)")) {
-				statement.setLong(1, SynchronizedThrottleJdbcStore.CLEANUP_LOCK_KEY);
+				statement.setLong(1, SynchronizedThrottleRepository.CLEANUP_LOCK_KEY);
 				statement.executeQuery().close();
 			}
 			try {
@@ -407,7 +428,7 @@ public class SynchronizedThrottleTest extends ContainerTestHelper {
 			}
 			finally {
 				try (PreparedStatement statement = lockHolder.prepareStatement("SELECT pg_advisory_unlock(?)")) {
-					statement.setLong(1, SynchronizedThrottleJdbcStore.CLEANUP_LOCK_KEY);
+					statement.setLong(1, SynchronizedThrottleRepository.CLEANUP_LOCK_KEY);
 					statement.executeQuery().close();
 				}
 			}
@@ -428,7 +449,7 @@ public class SynchronizedThrottleTest extends ContainerTestHelper {
 		final SynchronizedThrottleProperties properties = this.createProperties(true);
 		properties.setTableName(tableName);
 		final MeterRegistry meterRegistry = new SimpleMeterRegistry();
-		final SynchronizedThrottle throttle = new SynchronizedThrottle(properties, SynchronizedThrottleTest.createProvider(this.dataSource),
+		final SynchronizedThrottle throttle = new SynchronizedThrottle(properties, SynchronizedThrottleTest.createProvider(this.createRepository(properties)),
 				SynchronizedThrottleTest.createProvider(meterRegistry));
 
 		throttle.synchronize();
@@ -457,7 +478,9 @@ public class SynchronizedThrottleTest extends ContainerTestHelper {
 			final SynchronizedThrottleProperties properties,
 			final DataSource dataSource) {
 		final MeterRegistry meterRegistry = new SimpleMeterRegistry();
-		final SynchronizedThrottle throttle = new SynchronizedThrottle(properties, SynchronizedThrottleTest.createProvider(dataSource),
+		final SynchronizedThrottleRepository repository = new SynchronizedThrottleRepository(dataSource, properties.getTableName(),
+				properties.getQueryTimeout());
+		final SynchronizedThrottle throttle = new SynchronizedThrottle(properties, SynchronizedThrottleTest.createProvider(repository),
 				SynchronizedThrottleTest.createProvider(meterRegistry));
 		final String key = SynchronizedThrottleTest.createKey("failOpen");
 
@@ -494,7 +517,8 @@ public class SynchronizedThrottleTest extends ContainerTestHelper {
 	@Test
 	@DisplayName("An unreachable database fails open")
 	public void testFailOpenUnreachableDatabase() {
-		final DriverManagerDataSource unreachableDataSource = new DriverManagerDataSource("jdbc:postgresql://127.0.0.1:1/missing", "user", "password");
+		final DriverManagerDataSource unreachableDataSource = new DriverManagerDataSource("jdbc:postgresql://127.0.0.1:1/missing", "unreachable-test-user",
+				"unreachable-test-password");
 		final SynchronizedThrottleProperties properties = this.createProperties(true);
 		properties.setCreateSchema(false);
 		this.assertFailsOpen(properties, unreachableDataSource);
@@ -542,6 +566,132 @@ public class SynchronizedThrottleTest extends ContainerTestHelper {
 			throttle.synchronize();
 			return meterRegistry.find(SynchronizedThrottle.RECORDS_METRIC).gauge().value();
 		}, records -> records == 1.0, TestHelper.LONG_WAIT, TestHelper.VERY_SHORT_WAIT));
+	}
+
+	/**
+	 * Gets the previous run kept by a reservation (package-private, read
+	 * reflectively).
+	 *
+	 * @param  reservation Reservation.
+	 * @return             The previous run (null when there was none).
+	 * @throws Exception   If it cannot be read.
+	 */
+	private static Object getPreviousRun(
+			final SynchronizedThrottleReservation reservation) throws Exception {
+		final Method getPreviousRun = SynchronizedThrottleReservation.class.getDeclaredMethod("getPreviousRun");
+		getPreviousRun.setAccessible(true);
+		return getPreviousRun.invoke(reservation);
+	}
+
+	/**
+	 * Gets the reservation held by a local run (package-private, read
+	 * reflectively).
+	 *
+	 * @param  localRun  Local run.
+	 * @return           Its reservation (null when none).
+	 * @throws Exception If it cannot be read.
+	 */
+	private static Object getLocalRunReservation(
+			final Object localRun) throws Exception {
+		final Method reservation = localRun.getClass().getDeclaredMethod("reservation");
+		reservation.setAccessible(true);
+		return reservation.invoke(localRun);
+	}
+
+	/**
+	 * Tests that a reservation keeps one step of history: its previous run holds
+	 * no reservation, so a busy key does not chain every earlier run.
+	 *
+	 * @throws Exception If the test fails.
+	 */
+	@Test
+	@DisplayName("A reservation keeps one step of history")
+	public void testOneStepHistory() throws Exception {
+		final SynchronizedThrottle throttle = new SynchronizedThrottle(this.createProperties(false), null);
+		final String key = SynchronizedThrottleTest.createKey("history");
+		final Duration interval = Duration.ofMillis(1);
+		SynchronizedThrottleReservation lastReservation = throttle.tryAcquire(SynchronizedThrottleTest.THROTTLE_NAME, key, interval);
+		Assertions.assertNull(SynchronizedThrottleTest.getPreviousRun(lastReservation));
+
+		// Acquires the key again and again (each time its 1 ms interval passed).
+		SynchronizedThrottleReservation earlierReservation = null;
+		for (int acquisition = 0; acquisition < 50; acquisition++) {
+			final long deadline = SynchronizedThrottle.getCurrentWallClockTimestamp() + TestHelper.LONG_WAIT;
+			SynchronizedThrottleReservation reservation = null;
+			while ((reservation == null) && (SynchronizedThrottle.getCurrentWallClockTimestamp() < deadline)) {
+				reservation = throttle.tryAcquire(SynchronizedThrottleTest.THROTTLE_NAME, key, interval);
+			}
+			Assertions.assertNotNull(reservation);
+			final Object previousRun = SynchronizedThrottleTest.getPreviousRun(reservation);
+			Assertions.assertNotNull(previousRun);
+			Assertions.assertNull(SynchronizedThrottleTest.getLocalRunReservation(previousRun));
+			earlierReservation = lastReservation;
+			lastReservation = reservation;
+		}
+
+		// Releasing the last run restores the previous one without its reservation.
+		Assertions.assertTrue(throttle.release(lastReservation));
+		Assertions.assertFalse(throttle.release(earlierReservation));
+	}
+
+	/**
+	 * Tests that a push only moves a key forward.
+	 */
+	@Test
+	@DisplayName("A push only moves a key forward")
+	public void testPushOnlyMovesForward() {
+		final SynchronizedThrottleRepository repository = this.createRepository(this.createProperties(true));
+		repository.ensureSchema();
+		final JdbcTemplate jdbcTemplate = new JdbcTemplate(this.dataSource);
+		final String throttleKey = SynchronizedThrottleTest.THROTTLE_NAME + SynchronizedThrottle.THROTTLE_KEY_SEPARATOR
+				+ SynchronizedThrottleTest.createKey("forward");
+		final String select = "SELECT last_run_at, next_run_after, synchronized_at FROM " + SynchronizedThrottleTest.TABLE_NAME + " WHERE throttle_key = ?";
+
+		repository.push(Map.of(throttleKey, new SynchronizedThrottleRepository.ThrottleRun(1_000, 2_000)));
+		final Map<String, Object> firstRow = jdbcTemplate.queryForMap(select, throttleKey);
+
+		// An earlier run does not replace the stored one.
+		repository.push(Map.of(throttleKey, new SynchronizedThrottleRepository.ThrottleRun(500, 1_500)));
+		Assertions.assertEquals(firstRow, jdbcTemplate.queryForMap(select, throttleKey));
+
+		// The same run again leaves the row (and its "synchronized at") untouched.
+		repository.push(Map.of(throttleKey, new SynchronizedThrottleRepository.ThrottleRun(1_000, 2_000)));
+		Assertions.assertEquals(firstRow, jdbcTemplate.queryForMap(select, throttleKey));
+
+		// A later run replaces it.
+		repository.push(Map.of(throttleKey, new SynchronizedThrottleRepository.ThrottleRun(3_000, 4_000)));
+		final Map<String, Object> laterRow = jdbcTemplate.queryForMap(select, throttleKey);
+		Assertions.assertEquals(3_000L, ((Number) laterRow.get("last_run_at")).longValue());
+		Assertions.assertEquals(4_000L, ((Number) laterRow.get("next_run_after")).longValue());
+		Assertions.assertTrue(((Number) laterRow.get("synchronized_at")).longValue() >= ((Number) firstRow.get("synchronized_at")).longValue());
+	}
+
+	/**
+	 * Tests that a later run from another instance replaces the local one: its
+	 * reservation can no longer release the key, and the key is refused.
+	 *
+	 * @throws Exception If the test fails.
+	 */
+	@Test
+	@DisplayName("A later run pulled from another instance replaces the local run")
+	public void testLaterPulledRunReplacesLocal() throws Exception {
+		final SynchronizedThrottleProperties properties = this.createProperties(true);
+		final SynchronizedThrottle instanceA = this.createThrottle(properties);
+		final SynchronizedThrottle instanceB = this.createThrottle(properties);
+		final String key = SynchronizedThrottleTest.createKey("laterPulled");
+		final Duration shortInterval = Duration.ofMillis(200);
+
+		final SynchronizedThrottleReservation reservationA = instanceA.tryAcquire(SynchronizedThrottleTest.THROTTLE_NAME, key, shortInterval);
+		Assertions.assertNotNull(reservationA);
+		Assertions.assertTrue(TestHelper.waitUntilValid(SynchronizedThrottle::getCurrentWallClockTimestamp,
+				now -> now > reservationA.getNextRunAfter(), TestHelper.LONG_WAIT, TestHelper.VERY_SHORT_WAIT));
+
+		// B runs the key later (with a long interval), pushes, and A pulls.
+		Assertions.assertNotNull(instanceB.tryAcquire(SynchronizedThrottleTest.THROTTLE_NAME, key, SynchronizedThrottleTest.LONG_INTERVAL));
+		instanceB.synchronize();
+		instanceA.synchronize();
+		Assertions.assertFalse(instanceA.release(reservationA));
+		Assertions.assertNull(instanceA.tryAcquire(SynchronizedThrottleTest.THROTTLE_NAME, key, shortInterval));
 	}
 
 }

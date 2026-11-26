@@ -1,4 +1,4 @@
-package org.coldis.library.service.throttle;
+package org.coldis.library.service.throttle.repository;
 
 import java.time.Duration;
 import java.util.ArrayList;
@@ -14,15 +14,17 @@ import org.springframework.jdbc.datasource.DataSourceTransactionManager;
 import org.springframework.transaction.support.TransactionTemplate;
 
 /**
- * Synchronized throttle JDBC store (runs shared between instances).
+ * Synchronized throttle repository: data access to the runs shared between
+ * instances. It holds no throttle policy (when to push, pull or delete, and how
+ * pulled runs merge, are the throttle's decisions).
  *
  * The table is unlogged: rows only live until their key may run again, and
- * the throttle fails open when they are lost, so skipping the WAL is a free
+ * losing them only makes keys run earlier, so skipping the WAL is a free
  * performance gain. "Synchronized at" values are set by the database clock (a
  * single time domain across instances, used for the pull watermark), while
  * "last run at" and "next run after" stay in the instances' wall-clock domain.
  */
-public class SynchronizedThrottleJdbcStore {
+public class SynchronizedThrottleRepository {
 
 	/**
 	 * Advisory lock key that lets a single instance at a time run the cleanup.
@@ -88,7 +90,7 @@ public class SynchronizedThrottleJdbcStore {
 	 * @param queryTimeout Statement timeout (rounded up to whole seconds, zero for
 	 *                         none).
 	 */
-	public SynchronizedThrottleJdbcStore(final DataSource dataSource, final String tableName, final Duration queryTimeout) {
+	public SynchronizedThrottleRepository(final DataSource dataSource, final String tableName, final Duration queryTimeout) {
 		if (!tableName.matches("[A-Za-z_][A-Za-z0-9_]*")) {
 			throw new IllegalArgumentException("Invalid synchronized throttle table name '" + tableName + "'.");
 		}
@@ -104,8 +106,8 @@ public class SynchronizedThrottleJdbcStore {
 	 * @param dataSource Data source.
 	 * @param tableName  Table name (validated as a plain SQL identifier).
 	 */
-	public SynchronizedThrottleJdbcStore(final DataSource dataSource, final String tableName) {
-		this(dataSource, tableName, SynchronizedThrottleJdbcStore.DEFAULT_QUERY_TIMEOUT);
+	public SynchronizedThrottleRepository(final DataSource dataSource, final String tableName) {
+		this(dataSource, tableName, SynchronizedThrottleRepository.DEFAULT_QUERY_TIMEOUT);
 	}
 
 	/**
@@ -130,10 +132,10 @@ public class SynchronizedThrottleJdbcStore {
 			final Map<String, ThrottleRun> runs) {
 		final List<Map.Entry<String, ThrottleRun>> entries = new ArrayList<>(new TreeMap<>(runs).entrySet());
 		final String statement = "INSERT INTO " + this.tableName + " (throttle_key, last_run_at, next_run_after, synchronized_at) VALUES (?, ?, ?, "
-				+ SynchronizedThrottleJdbcStore.DATABASE_CLOCK_MILLIS + ") ON CONFLICT (throttle_key) DO UPDATE SET last_run_at = EXCLUDED.last_run_at,"
+				+ SynchronizedThrottleRepository.DATABASE_CLOCK_MILLIS + ") ON CONFLICT (throttle_key) DO UPDATE SET last_run_at = EXCLUDED.last_run_at,"
 				+ " next_run_after = EXCLUDED.next_run_after, synchronized_at = EXCLUDED.synchronized_at WHERE EXCLUDED.last_run_at > " + this.tableName
 				+ ".last_run_at";
-		this.jdbcTemplate.batchUpdate(statement, entries, SynchronizedThrottleJdbcStore.PUSH_BATCH_SIZE, (preparedStatement, entry) -> {
+		this.jdbcTemplate.batchUpdate(statement, entries, SynchronizedThrottleRepository.PUSH_BATCH_SIZE, (preparedStatement, entry) -> {
 			preparedStatement.setString(1, entry.getKey());
 			preparedStatement.setLong(2, entry.getValue().lastRunAt());
 			preparedStatement.setLong(3, entry.getValue().nextRunAfter());
@@ -168,7 +170,7 @@ public class SynchronizedThrottleJdbcStore {
 		return this.transactionTemplate.execute(status -> {
 			Integer deletedRows = null;
 			if (Boolean.TRUE.equals(this.jdbcTemplate.queryForObject("SELECT pg_try_advisory_xact_lock(?)", Boolean.class,
-					SynchronizedThrottleJdbcStore.CLEANUP_LOCK_KEY))) {
+					SynchronizedThrottleRepository.CLEANUP_LOCK_KEY))) {
 				deletedRows = this.jdbcTemplate.update("DELETE FROM " + this.tableName + " WHERE next_run_after < ?", nextRunBefore.getAsLong());
 			}
 			return deletedRows;
@@ -202,7 +204,7 @@ public class SynchronizedThrottleJdbcStore {
 	 */
 	public Integer deleteExpired() {
 		return this.deleteNextRunBefore(
-				() -> this.jdbcTemplate.queryForObject("SELECT " + SynchronizedThrottleJdbcStore.DATABASE_CLOCK_MILLIS, Long.class));
+				() -> this.jdbcTemplate.queryForObject("SELECT " + SynchronizedThrottleRepository.DATABASE_CLOCK_MILLIS, Long.class));
 	}
 
 }

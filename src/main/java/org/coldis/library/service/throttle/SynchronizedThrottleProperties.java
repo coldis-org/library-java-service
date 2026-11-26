@@ -2,6 +2,7 @@ package org.coldis.library.service.throttle;
 
 import java.time.Duration;
 
+import org.coldis.library.service.throttle.repository.SynchronizedThrottleRepository;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 import org.springframework.stereotype.Component;
 
@@ -25,6 +26,12 @@ public class SynchronizedThrottleProperties {
 	 * default).
 	 */
 	public static final String ENABLED_PROPERTY = SynchronizedThrottleProperties.PREFIX + ".enabled";
+
+	/**
+	 * Persistence enabled property (the repository bean is only created when it
+	 * is true, the default, and a data source exists).
+	 */
+	public static final String PERSISTENCE_ENABLED_PROPERTY = SynchronizedThrottleProperties.PREFIX + ".persistence-enabled";
 
 	/**
 	 * If the synchronized throttle is enabled (its bean is created and its
@@ -168,7 +175,7 @@ public class SynchronizedThrottleProperties {
 	 * @return The queryTimeout.
 	 */
 	public Duration getQueryTimeout() {
-		this.queryTimeout = (this.queryTimeout == null ? SynchronizedThrottleJdbcStore.DEFAULT_QUERY_TIMEOUT : this.queryTimeout);
+		this.queryTimeout = (this.queryTimeout == null ? SynchronizedThrottleRepository.DEFAULT_QUERY_TIMEOUT : this.queryTimeout);
 		return this.queryTimeout;
 	}
 

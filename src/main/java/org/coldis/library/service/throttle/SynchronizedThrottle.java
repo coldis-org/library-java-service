@@ -13,8 +13,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.IntSupplier;
 
-import javax.sql.DataSource;
-
+import org.coldis.library.service.throttle.repository.SynchronizedThrottleRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.ObjectProvider;
@@ -55,6 +54,14 @@ import jakarta.annotation.PreDestroy;
  * no data source, or persistence is disabled) it keeps throttling locally, and
  * the synchronization failure is logged as a warning, never propagated.</li>
  * </ul>
+ *
+ * Because it fails open and is eventually consistent, this throttle must not
+ * be the only control on authentication, verification or lookup-probing flows
+ * (logins, codes, lookups by identifiers): those need a strict limit that holds
+ * when the database is unavailable and across instances at once.
+ *
+ * Without a {@link SynchronizedThrottleRepository} bean (no data source, or
+ * persistence disabled), the throttle is local only.
  *
  * Run times are wall-clock epoch millis ({@link #getCurrentWallClockTimestamp()}),
  * never the application clock ({@code DateTimeHelper}): runs are compared
@@ -112,10 +119,10 @@ public class SynchronizedThrottle {
 	 * @param nextRunAfter When the key may run again (wall-clock epoch millis).
 	 * @param reservation  The reservation that may release the run (null when the
 	 *                         run was pulled or restored by a release).
-	 * @param pulled       If the run was pulled from the shared store (recorded by
+	 * @param isPulled     If the run was pulled from the shared store (recorded by
 	 *                         another instance, so not pushed back).
 	 */
-	record LocalRun(long lastRunAt, long nextRunAfter, SynchronizedThrottleReservation reservation, boolean pulled) {}
+	record LocalRun(long lastRunAt, long nextRunAfter, SynchronizedThrottleReservation reservation, boolean isPulled) {}
 
 	/**
 	 * A run this instance released (pulls skip it, so a run pushed before its
@@ -132,10 +139,10 @@ public class SynchronizedThrottle {
 	private final SynchronizedThrottleProperties properties;
 
 	/**
-	 * Data source provider (resolved lazily so the throttle never forces early
-	 * data source initialization; may be null).
+	 * Repository provider (resolved lazily; may be null). Without a repository
+	 * the throttle is local only.
 	 */
-	private final ObjectProvider<DataSource> dataSourceProvider;
+	private final ObjectProvider<SynchronizedThrottleRepository> repositoryProvider;
 
 	/**
 	 * Meter registry provider (may be null).
@@ -161,7 +168,7 @@ public class SynchronizedThrottle {
 	 * If this instance has acquired any run (until then, the synchronization
 	 * does not touch the database).
 	 */
-	private volatile boolean used;
+	private volatile boolean hasAcquiredAnyRun;
 
 	/**
 	 * Meter registry (resolved on first use).
@@ -172,12 +179,6 @@ public class SynchronizedThrottle {
 	 * Synchronization scheduler (null when not started).
 	 */
 	private ScheduledExecutorService synchronizationScheduler;
-
-	/**
-	 * Shared store (lazily initialized when persistence is enabled and a data
-	 * source is available).
-	 */
-	private volatile SynchronizedThrottleJdbcStore sharedStore;
 
 	/**
 	 * If the shared store schema has been ensured.
@@ -194,15 +195,15 @@ public class SynchronizedThrottle {
 	 * Constructor.
 	 *
 	 * @param properties            Synchronized throttle properties.
-	 * @param dataSourceProvider    Data source provider (may be null; without a
-	 *                                  data source the throttle is local only).
+	 * @param repositoryProvider    Repository provider (may be null; without a
+	 *                                  repository the throttle is local only).
 	 * @param meterRegistryProvider Meter registry provider (may be null).
 	 */
 	@Autowired
-	public SynchronizedThrottle(final SynchronizedThrottleProperties properties, final ObjectProvider<DataSource> dataSourceProvider,
+	public SynchronizedThrottle(final SynchronizedThrottleProperties properties, final ObjectProvider<SynchronizedThrottleRepository> repositoryProvider,
 			final ObjectProvider<MeterRegistry> meterRegistryProvider) {
 		this.properties = properties;
-		this.dataSourceProvider = dataSourceProvider;
+		this.repositoryProvider = repositoryProvider;
 		this.meterRegistryProvider = meterRegistryProvider;
 	}
 
@@ -210,11 +211,11 @@ public class SynchronizedThrottle {
 	 * Constructor without metrics.
 	 *
 	 * @param properties         Synchronized throttle properties.
-	 * @param dataSourceProvider Data source provider (may be null; without a data
-	 *                               source the throttle is local only).
+	 * @param repositoryProvider Repository provider (may be null; without a
+	 *                               repository the throttle is local only).
 	 */
-	public SynchronizedThrottle(final SynchronizedThrottleProperties properties, final ObjectProvider<DataSource> dataSourceProvider) {
-		this(properties, dataSourceProvider, null);
+	public SynchronizedThrottle(final SynchronizedThrottleProperties properties, final ObjectProvider<SynchronizedThrottleRepository> repositoryProvider) {
+		this(properties, repositoryProvider, null);
 	}
 
 	/**
@@ -298,6 +299,10 @@ public class SynchronizedThrottle {
 	 * Concurrent callers of the same key on this instance never both acquire it.
 	 * The run is shared with other instances on the next synchronization.
 	 *
+	 * Throttle names and keys are stored in the shared table and may appear in
+	 * diagnostic logs: they should not contain personal data (hash keys derived
+	 * from it).
+	 *
 	 * @param  throttleName                Throttle name (non-empty, without
 	 *                                         {@value #THROTTLE_KEY_SEPARATOR}).
 	 * @param  key                         Key (within the throttle; not null).
@@ -321,15 +326,19 @@ public class SynchronizedThrottle {
 		this.localRunByThrottleKey.compute(throttleKey, (currentThrottleKey, currentRun) -> {
 			LocalRun newRun = currentRun;
 			if ((currentRun == null) || (now >= currentRun.nextRunAfter())) {
+				// One step of history: the previous run without its reservation (which
+				// would chain every earlier run).
+				final LocalRun previousRun = (currentRun == null ? null
+						: new LocalRun(currentRun.lastRunAt(), currentRun.nextRunAfter(), null, currentRun.isPulled()));
 				final SynchronizedThrottleReservation reservation = new SynchronizedThrottleReservation(throttleName, key, currentThrottleKey, now,
-						nextRunAfter, currentRun);
+						nextRunAfter, previousRun);
 				newRun = new LocalRun(now, nextRunAfter, reservation, false);
 				acquiredReservation.set(reservation);
 			}
 			return newRun;
 		});
 		if (acquiredReservation.get() != null) {
-			this.used = true;
+			this.hasAcquiredAnyRun = true;
 			this.throttleKeysPendingPush.add(throttleKey);
 		}
 		return acquiredReservation.get();
@@ -359,48 +368,41 @@ public class SynchronizedThrottle {
 	 */
 	public boolean release(
 			final SynchronizedThrottleReservation reservation) {
-		final AtomicBoolean released = new AtomicBoolean();
+		final AtomicBoolean isReleased = new AtomicBoolean();
 		if (reservation != null) {
 			this.localRunByThrottleKey.computeIfPresent(reservation.getThrottleKey(), (throttleKey, currentRun) -> {
 				LocalRun newRun = currentRun;
 				if (currentRun.reservation() == reservation) {
 					this.nextRunAfterByReleasedRun.put(new ReleasedRun(throttleKey, currentRun.lastRunAt()), currentRun.nextRunAfter());
 					final LocalRun previousRun = reservation.getPreviousRun();
-					newRun = (previousRun == null ? null : new LocalRun(previousRun.lastRunAt(), previousRun.nextRunAfter(), null, previousRun.pulled()));
-					released.set(true);
+					newRun = previousRun;
+					isReleased.set(true);
 				}
 				return newRun;
 			});
 		}
-		return released.get();
+		return isReleased.get();
 	}
 
 	/**
-	 * Gets the shared store, initializing it when persistence is enabled and a
-	 * data source is available.
+	 * Gets the repository, when persistence is enabled and one is available.
 	 *
-	 * @return The shared store, or null when unavailable.
+	 * @return The repository, or null when unavailable (local only).
 	 */
-	private SynchronizedThrottleJdbcStore getSharedStore() {
-		if ((this.sharedStore == null) && this.properties.getPersistenceEnabled() && (this.dataSourceProvider != null)) {
-			final DataSource dataSource = this.dataSourceProvider.getIfAvailable();
-			if (dataSource != null) {
-				this.sharedStore = new SynchronizedThrottleJdbcStore(dataSource, this.properties.getTableName(), this.properties.getQueryTimeout());
-			}
-		}
-		return this.sharedStore;
+	private SynchronizedThrottleRepository getRepository() {
+		return ((this.properties.getPersistenceEnabled() && (this.repositoryProvider != null)) ? this.repositoryProvider.getIfAvailable() : null);
 	}
 
 	/**
 	 * Ensures the shared store schema exists.
 	 *
-	 * @param store Shared store.
+	 * @param repository Repository.
 	 */
 	private void ensureSchema(
-			final SynchronizedThrottleJdbcStore store) {
+			final SynchronizedThrottleRepository repository) {
 		if (!this.schemaEnsured) {
 			if (this.properties.getCreateSchema()) {
-				store.ensureSchema();
+				repository.ensureSchema();
 			}
 			this.schemaEnsured = true;
 		}
@@ -411,22 +413,22 @@ public class SynchronizedThrottle {
 	 * replaced by a later pulled run since are not pushed). Failed pushes are
 	 * re-queued for the next synchronization.
 	 *
-	 * @param  store Shared store.
+	 * @param  repository Repository.
 	 * @return       Pushed runs, or {@link #SKIPPED_ROWS} when there were none.
 	 */
 	private int pushPendingRuns(
-			final SynchronizedThrottleJdbcStore store) {
-		final Map<String, SynchronizedThrottleJdbcStore.ThrottleRun> pendingRuns = new HashMap<>();
+			final SynchronizedThrottleRepository repository) {
+		final Map<String, SynchronizedThrottleRepository.ThrottleRun> pendingRuns = new HashMap<>();
 		for (final String throttleKey : this.throttleKeysPendingPush) {
 			this.throttleKeysPendingPush.remove(throttleKey);
 			final LocalRun localRun = this.localRunByThrottleKey.get(throttleKey);
-			if ((localRun != null) && !localRun.pulled()) {
-				pendingRuns.put(throttleKey, new SynchronizedThrottleJdbcStore.ThrottleRun(localRun.lastRunAt(), localRun.nextRunAfter()));
+			if ((localRun != null) && !localRun.isPulled()) {
+				pendingRuns.put(throttleKey, new SynchronizedThrottleRepository.ThrottleRun(localRun.lastRunAt(), localRun.nextRunAfter()));
 			}
 		}
 		if (!pendingRuns.isEmpty()) {
 			try {
-				store.push(pendingRuns);
+				repository.push(pendingRuns);
 			}
 			catch (final Exception exception) {
 				this.throttleKeysPendingPush.addAll(pendingRuns.keySet());
@@ -445,7 +447,7 @@ public class SynchronizedThrottle {
 	 * @param pulledRecord Pulled run.
 	 */
 	private void mergePulledRun(
-			final SynchronizedThrottleJdbcStore.ThrottleRecord pulledRecord) {
+			final SynchronizedThrottleRepository.ThrottleRecord pulledRecord) {
 		final ReleasedRun releasedRun = new ReleasedRun(pulledRecord.throttleKey(), pulledRecord.lastRunAt());
 		final LocalRun pulledRun = new LocalRun(pulledRecord.lastRunAt(), pulledRecord.nextRunAfter(), null, true);
 		this.localRunByThrottleKey.compute(pulledRecord.throttleKey(), (throttleKey, currentRun) -> {
@@ -463,16 +465,16 @@ public class SynchronizedThrottle {
 	 * synchronization interval so rows committed late are not missed (merges are
 	 * idempotent).
 	 *
-	 * @param  store Shared store.
+	 * @param  repository Repository.
 	 * @return       Pulled runs.
 	 */
 	private int pullSharedRuns(
-			final SynchronizedThrottleJdbcStore store) {
+			final SynchronizedThrottleRepository repository) {
 		final long overlapMillis = this.properties.getSynchronizationInterval().toMillis();
-		final List<SynchronizedThrottleJdbcStore.ThrottleRecord> pulledRecords = store.pull(Math.max(0, this.pullWatermark - overlapMillis));
+		final List<SynchronizedThrottleRepository.ThrottleRecord> pulledRecords = repository.pull(Math.max(0, this.pullWatermark - overlapMillis));
 		final long now = SynchronizedThrottle.getCurrentWallClockTimestamp();
 		long newWatermark = this.pullWatermark;
-		for (final SynchronizedThrottleJdbcStore.ThrottleRecord pulledRecord : pulledRecords) {
+		for (final SynchronizedThrottleRepository.ThrottleRecord pulledRecord : pulledRecords) {
 			if (pulledRecord.nextRunAfter() > now) {
 				this.mergePulledRun(pulledRecord);
 			}
@@ -485,13 +487,13 @@ public class SynchronizedThrottle {
 	/**
 	 * Deletes the expired shared rows, from one instance at a time.
 	 *
-	 * @param  store Shared store.
+	 * @param  repository Repository.
 	 * @return       Deleted rows, or {@link #SKIPPED_ROWS} when another instance
 	 *               was running the cleanup.
 	 */
 	private int deleteExpiredSharedRuns(
-			final SynchronizedThrottleJdbcStore store) {
-		final Integer deletedRows = store.deleteExpired();
+			final SynchronizedThrottleRepository repository) {
+		final Integer deletedRows = repository.deleteExpired();
 		return (deletedRows == null ? SynchronizedThrottle.SKIPPED_ROWS : deletedRows);
 	}
 
@@ -538,36 +540,42 @@ public class SynchronizedThrottle {
 	 * Synchronizes runs with the shared store: sweeps expired local runs, pushes
 	 * local runs, pulls other instances' runs and deletes expired shared rows.
 	 * Until this instance acquires a run, every database phase is skipped without
-	 * touching the database. Without a shared store (persistence disabled or no
+	 * touching the database. Without a repository (persistence disabled or no
 	 * data source) only the local sweep runs. Failures are logged and never
 	 * propagate (the throttle keeps working locally until the next
 	 * synchronization).
 	 */
 	public void synchronize() {
 		if (this.isEnabled()) {
+			String phase = "sweep";
 			try {
 				this.getMeterRegistry();
 				this.sweepLocalRuns();
-				final SynchronizedThrottleJdbcStore store = this.getSharedStore();
-				if (store == null) {
+				final SynchronizedThrottleRepository repository = this.getRepository();
+				if (repository == null) {
 					this.throttleKeysPendingPush.clear();
 				}
-				else if (!this.used) {
+				else if (!this.hasAcquiredAnyRun) {
 					this.runSynchronizationPhase("push", () -> SynchronizedThrottle.SKIPPED_ROWS);
 					this.runSynchronizationPhase("pull", () -> SynchronizedThrottle.SKIPPED_ROWS);
 					this.runSynchronizationPhase("delete", () -> SynchronizedThrottle.SKIPPED_ROWS);
 				}
 				else {
-					this.ensureSchema(store);
-					this.runSynchronizationPhase("push", () -> this.pushPendingRuns(store));
-					this.runSynchronizationPhase("pull", () -> this.pullSharedRuns(store));
-					this.runSynchronizationPhase("delete", () -> this.deleteExpiredSharedRuns(store));
+					phase = "schema";
+					this.ensureSchema(repository);
+					phase = "push";
+					this.runSynchronizationPhase(phase, () -> this.pushPendingRuns(repository));
+					phase = "pull";
+					this.runSynchronizationPhase(phase, () -> this.pullSharedRuns(repository));
+					phase = "delete";
+					this.runSynchronizationPhase(phase, () -> this.deleteExpiredSharedRuns(repository));
 				}
 			}
 			catch (final Exception exception) {
-				SynchronizedThrottle.LOGGER.warn("Synchronized throttle synchronization failed (the throttle stays local until the next synchronization): "
-						+ exception.getLocalizedMessage());
-				SynchronizedThrottle.LOGGER.debug("Synchronized throttle synchronization failed.", exception);
+				// The exception message may carry bound values (throttle keys): only at debug.
+				SynchronizedThrottle.LOGGER.warn("Synchronized throttle synchronization failed in phase '" + phase + "' with "
+						+ exception.getClass().getName() + " (the throttle stays local until the next synchronization).");
+				SynchronizedThrottle.LOGGER.debug("Synchronized throttle synchronization failed in phase '" + phase + "'.", exception);
 			}
 		}
 	}
