@@ -33,12 +33,6 @@ key and a stale filter key, with the same value:
 Producers of other last-value-keyed messages can do the same: set
 `withStaleFilterKey` to the last-value key.
 
-Tests that move the application clock (`DateTimeHelper`) forward while these
-queues are in use must turn the filter off (or reset the clock) first:
-processing starts are recorded with the application clock but posted-at comes
-from the producer's wall-clock JMS headers, so with the application clock ahead
-every later batch or trigger message looks stale and is dropped.
-
 ## How a drop is decided
 
 - **Posted at:** the explicit posted-at property, else the scheduled delivery

@@ -20,7 +20,6 @@ import org.coldis.library.service.batch.BatchPostponedException;
 import org.coldis.library.service.batch.BatchAction;
 import org.coldis.library.service.batch.BatchService;
 import org.coldis.library.service.batch.BatchServiceComponent;
-import org.coldis.library.service.jms.StaleMessageFilterProperties;
 import org.coldis.library.test.StartTestWithContainerExtension;
 import org.coldis.library.test.TestHelper;
 import org.coldis.library.test.TestWithContainer;
@@ -74,28 +73,6 @@ public class BatchServiceTest extends ContainerTestHelper {
 	private BatchServiceComponent batchServiceComponent;
 
 	/**
-	 * Stale message filter properties.
-	 */
-	@Autowired
-	private StaleMessageFilterProperties staleMessageFilterProperties;
-
-	/**
-	 * Advances the application clock. The stale message filter is turned off
-	 * from then on until the end of the test: it records processing starts with
-	 * the application clock but reads posted-at from the producer's wall-clock
-	 * JMS headers, so with the application clock ahead every later batch message
-	 * would look stale and be dropped. Turning it off also keeps records dated in
-	 * the future out of the shared table.
-	 *
-	 * @param duration How much to advance the clock.
-	 */
-	private void advanceClock(
-			final Duration duration) {
-		this.staleMessageFilterProperties.setEnabled(false);
-		DateTimeHelper.setClock(Clock.offset(DateTimeHelper.getClock(), duration));
-	}
-
-	/**
 	 * Cleans after each test.
 	 *
 	 * @throws Exception If the test fails.
@@ -123,7 +100,6 @@ public class BatchServiceTest extends ContainerTestHelper {
 	public void cleanAfterEachTest() throws BusinessException {
 		// Sets back to the regular clock.
 		DateTimeHelper.setClock(BatchServiceTest.REGULAR_CLOCK);
-		this.staleMessageFilterProperties.setEnabled(true);
 	}
 
 	/**
@@ -220,11 +196,11 @@ public class BatchServiceTest extends ContainerTestHelper {
 
 		// Tests the batch twice.
 		this.testBatch(testBatchExecutor, 100L, 100L);
-		this.advanceClock(Duration.ofHours(1));
+		DateTimeHelper.setClock(Clock.offset(DateTimeHelper.getClock(), Duration.ofHours(1)));
 		this.testBatch(testBatchExecutor, 100L, 200L);
 
 		// Advances the clock and make sure the record is deleted.
-		this.advanceClock(Duration.ofHours(6));
+		DateTimeHelper.setClock(Clock.offset(DateTimeHelper.getClock(), Duration.ofHours(6)));
 		this.batchService.checkAll();
 		TestHelper.waitUntilValid(() -> {
 			try {
@@ -291,7 +267,7 @@ public class BatchServiceTest extends ContainerTestHelper {
 		Assertions.assertFalse(batchRecord.isFinished());
 
 		// Advances the clock and make sure the record is deleted.
-		this.advanceClock(Duration.ofHours(6));
+		DateTimeHelper.setClock(Clock.offset(DateTimeHelper.getClock(), Duration.ofHours(6)));
 		this.batchService.checkAll();
 		TestHelper.waitUntilValid(() -> {
 			try {
@@ -354,7 +330,7 @@ public class BatchServiceTest extends ContainerTestHelper {
 		Assertions.assertFalse(batchRecord.isFinished());
 
 		// Advances the clock and make sure the record is deleted.
-		this.advanceClock(Duration.ofHours(6));
+		DateTimeHelper.setClock(Clock.offset(DateTimeHelper.getClock(), Duration.ofHours(6)));
 		this.batchService.checkAll();
 		TestHelper.waitUntilValid(() -> {
 			try {
