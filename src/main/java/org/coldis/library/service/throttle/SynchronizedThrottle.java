@@ -1,7 +1,11 @@
 package org.coldis.library.service.throttle;
 
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 import java.time.Duration;
 import java.util.HashMap;
+import java.util.HexFormat;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -19,14 +23,13 @@ import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
+import org.springframework.context.SmartLifecycle;
 import org.springframework.stereotype.Component;
 
 import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.Gauge;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.Timer;
-import jakarta.annotation.PostConstruct;
-import jakarta.annotation.PreDestroy;
 
 /**
  * Synchronized throttle: lets a key of a named throttle run at most once per
@@ -38,7 +41,10 @@ import jakarta.annotation.PreDestroy;
  * synchronized with a shared database table, on a single daemon thread: local
  * runs are pushed, other instances' runs are pulled, and expired rows are
  * deleted (by one instance at a time). Until this instance acquires its first
- * run, the synchronization does not touch the database.
+ * run, it only pulls (from the start, so it knows other instances' live runs),
+ * and only once the table exists: an instance that never uses the throttle
+ * creates nothing. When the throttle stops, it pushes its pending runs one
+ * last time.
  *
  * Guarantees and limits:
  * <ul>
@@ -60,6 +66,10 @@ import jakarta.annotation.PreDestroy;
  * (logins, codes, lookups by identifiers): those need a strict limit that holds
  * when the database is unavailable and across instances at once.
  *
+ * Keys are stored as the throttle name followed by the SHA-256 (hex) of the
+ * caller's key ({@link #getStoredThrottleKey(String, String)}), so the shared
+ * table, pulls and database error messages never carry the raw key.
+ *
  * Without a {@link SynchronizedThrottleRepository} bean (no data source, or
  * persistence disabled), the throttle is local only.
  *
@@ -76,7 +86,7 @@ import jakarta.annotation.PreDestroy;
 		havingValue = "true",
 		matchIfMissing = true
 )
-public class SynchronizedThrottle {
+public class SynchronizedThrottle implements SmartLifecycle {
 
 	/**
 	 * Synchronization phase duration (tags: phase, outcome).
@@ -99,10 +109,22 @@ public class SynchronizedThrottle {
 	public static final String SYNC_THREAD_NAME = "synchronized-throttle-sync";
 
 	/**
-	 * Separator between throttle name and key in throttle keys (not allowed in
-	 * throttle names, so a throttle key splits unambiguously).
+	 * Separator between throttle name and hashed key in stored throttle keys
+	 * (not allowed in throttle names, so a stored key splits unambiguously).
 	 */
 	public static final String THROTTLE_KEY_SEPARATOR = "|";
+
+	/**
+	 * Lifecycle phase: low, so the throttle starts before and stops after the
+	 * request and message consumers (web server, listener containers), and its
+	 * final push includes their last runs.
+	 */
+	public static final int LIFECYCLE_PHASE = 0;
+
+	/**
+	 * Hash algorithm of stored keys.
+	 */
+	private static final String KEY_HASH_ALGORITHM = "SHA-256";
 
 	/** Logger. */
 	private static final Logger LOGGER = LoggerFactory.getLogger(SynchronizedThrottle.class);
@@ -192,6 +214,12 @@ public class SynchronizedThrottle {
 	private volatile long pullWatermark;
 
 	/**
+	 * If the shared table was found to exist (checked, without creating it,
+	 * until this instance acquires a run).
+	 */
+	private volatile boolean hasFoundTable;
+
+	/**
 	 * Constructor.
 	 *
 	 * @param properties            Synchronized throttle properties.
@@ -257,16 +285,49 @@ public class SynchronizedThrottle {
 	}
 
 	/**
-	 * Composes the throttle key (as stored) of a throttle name and key.
+	 * Hashes a key (SHA-256, lowercase hex).
+	 *
+	 * @param  key Key.
+	 * @return     The hashed key.
+	 */
+	private static String hashKey(
+			final String key) {
+		try {
+			return HexFormat.of().formatHex(MessageDigest.getInstance(SynchronizedThrottle.KEY_HASH_ALGORITHM).digest(key.getBytes(StandardCharsets.UTF_8)));
+		}
+		catch (final NoSuchAlgorithmException exception) {
+			throw new IllegalStateException("Every Java platform supports " + SynchronizedThrottle.KEY_HASH_ALGORITHM + ".", exception);
+		}
+	}
+
+	/**
+	 * Gets the throttle key as stored (and held in memory) for a throttle name
+	 * and key: the throttle name, the separator, and the SHA-256 (hex) of the
+	 * key. Useful to find a key's row in the shared table.
 	 *
 	 * @param  throttleName Throttle name (without the separator).
 	 * @param  key          Key.
-	 * @return              The throttle key.
+	 * @return              The stored throttle key.
 	 */
-	private static String composeThrottleKey(
+	public static String getStoredThrottleKey(
 			final String throttleName,
 			final String key) {
-		return throttleName + SynchronizedThrottle.THROTTLE_KEY_SEPARATOR + key;
+		return throttleName + SynchronizedThrottle.THROTTLE_KEY_SEPARATOR + SynchronizedThrottle.hashKey(key);
+	}
+
+	/**
+	 * Gets when a key run now may run again: now plus the interval, saturated at
+	 * the largest epoch millis (an interval too long to add never expires).
+	 *
+	 * @param  now      Now (wall-clock epoch millis).
+	 * @param  interval Interval (at least 1 ms).
+	 * @return          When the key may run again.
+	 */
+	private static long getNextRunAfter(
+			final long now,
+			final Duration interval) {
+		final long intervalMillis = (interval.getSeconds() >= (Long.MAX_VALUE / 1000) ? Long.MAX_VALUE : interval.toMillis());
+		return (intervalMillis > (Long.MAX_VALUE - now) ? Long.MAX_VALUE : now + intervalMillis);
 	}
 
 	/**
@@ -287,8 +348,8 @@ public class SynchronizedThrottle {
 		if (key == null) {
 			throw new IllegalArgumentException("The throttle key must not be null.");
 		}
-		if ((interval == null) || interval.isNegative() || interval.isZero()) {
-			throw new IllegalArgumentException("The throttle interval must be positive: " + interval);
+		if ((interval == null) || (interval.compareTo(Duration.ofMillis(1)) < 0)) {
+			throw new IllegalArgumentException("The throttle interval must be at least 1 ms: " + interval);
 		}
 	}
 
@@ -299,29 +360,31 @@ public class SynchronizedThrottle {
 	 * Concurrent callers of the same key on this instance never both acquire it.
 	 * The run is shared with other instances on the next synchronization.
 	 *
-	 * Throttle names and keys are stored in the shared table and may appear in
-	 * diagnostic logs: they should not contain personal data (hash keys derived
-	 * from it).
+	 * The key is hashed before it is stored ({@link #getStoredThrottleKey}),
+	 * but throttle names are stored as they are, and keys stay in memory and in
+	 * the reservation: keys should still not contain personal data (hash keys
+	 * derived from it).
 	 *
 	 * @param  throttleName                Throttle name (non-empty, without
 	 *                                         {@value #THROTTLE_KEY_SEPARATOR}).
 	 * @param  key                         Key (within the throttle; not null).
-	 * @param  interval                    Interval between runs of the key
-	 *                                         (positive).
+	 * @param  interval                    Interval between runs of the key (at
+	 *                                         least 1 ms; an interval too long to
+	 *                                         add to now never expires).
 	 * @return                             The run acquired, or null when the key
 	 *                                     must wait.
 	 * @throws IllegalArgumentException If the throttle name or key is invalid,
-	 *                                      or the interval is null, zero or
-	 *                                      negative.
+	 *                                      or the interval is null or below 1
+	 *                                      ms.
 	 */
 	public SynchronizedThrottleReservation tryAcquire(
 			final String throttleName,
 			final String key,
 			final Duration interval) {
 		SynchronizedThrottle.validate(throttleName, key, interval);
-		final String throttleKey = SynchronizedThrottle.composeThrottleKey(throttleName, key);
+		final String throttleKey = SynchronizedThrottle.getStoredThrottleKey(throttleName, key);
 		final long now = SynchronizedThrottle.getCurrentWallClockTimestamp();
-		final long nextRunAfter = now + interval.toMillis();
+		final long nextRunAfter = SynchronizedThrottle.getNextRunAfter(now, interval);
 		final AtomicReference<SynchronizedThrottleReservation> acquiredReservation = new AtomicReference<>();
 		this.localRunByThrottleKey.compute(throttleKey, (currentThrottleKey, currentRun) -> {
 			LocalRun newRun = currentRun;
@@ -537,10 +600,25 @@ public class SynchronizedThrottle {
 	}
 
 	/**
+	 * Logs a synchronization failure: at warn, only the phase and the failure
+	 * class (database messages may carry bound values); the details at debug.
+	 *
+	 * @param phase   Phase that failed.
+	 * @param failure Failure.
+	 */
+	private static void logSynchronizationFailure(
+			final String phase,
+			final Throwable failure) {
+		SynchronizedThrottle.LOGGER.warn("Synchronized throttle synchronization failed in phase '" + phase + "' with " + failure.getClass().getName()
+				+ " (the throttle stays local until the next synchronization).");
+		SynchronizedThrottle.LOGGER.debug("Synchronized throttle synchronization failed in phase '" + phase + "'.", failure);
+	}
+
+	/**
 	 * Synchronizes runs with the shared store: sweeps expired local runs, pushes
 	 * local runs, pulls other instances' runs and deletes expired shared rows.
-	 * Until this instance acquires a run, every database phase is skipped without
-	 * touching the database. Without a repository (persistence disabled or no
+	 * Until this instance acquires a run, it only pulls, once the table exists
+	 * (checked without creating it). Without a repository (persistence disabled or no
 	 * data source) only the local sweep runs. Failures are logged and never
 	 * propagate (the throttle keeps working locally until the next
 	 * synchronization).
@@ -556,8 +634,12 @@ public class SynchronizedThrottle {
 					this.throttleKeysPendingPush.clear();
 				}
 				else if (!this.hasAcquiredAnyRun) {
+					phase = "schema";
+					this.hasFoundTable = (this.hasFoundTable || repository.tableExists());
+					final boolean shouldPull = this.hasFoundTable;
 					this.runSynchronizationPhase("push", () -> SynchronizedThrottle.SKIPPED_ROWS);
-					this.runSynchronizationPhase("pull", () -> SynchronizedThrottle.SKIPPED_ROWS);
+					phase = "pull";
+					this.runSynchronizationPhase(phase, () -> (shouldPull ? this.pullSharedRuns(repository) : SynchronizedThrottle.SKIPPED_ROWS));
 					this.runSynchronizationPhase("delete", () -> SynchronizedThrottle.SKIPPED_ROWS);
 				}
 				else {
@@ -572,19 +654,48 @@ public class SynchronizedThrottle {
 				}
 			}
 			catch (final Exception exception) {
-				// The exception message may carry bound values (throttle keys): only at debug.
-				SynchronizedThrottle.LOGGER.warn("Synchronized throttle synchronization failed in phase '" + phase + "' with "
-						+ exception.getClass().getName() + " (the throttle stays local until the next synchronization).");
-				SynchronizedThrottle.LOGGER.debug("Synchronized throttle synchronization failed in phase '" + phase + "'.", exception);
+				SynchronizedThrottle.logSynchronizationFailure(phase, exception);
 			}
 		}
 	}
 
 	/**
-	 * Starts the synchronization on its own single daemon thread (so it never
-	 * delays other scheduled jobs), when the throttle is enabled at startup.
+	 * Runs a scheduled synchronization, logging anything it throws (even an
+	 * error), so a failure never cancels the schedule silently.
 	 */
-	@PostConstruct
+	private void synchronizeOnSchedule() {
+		try {
+			this.synchronize();
+		}
+		catch (final Throwable throwable) {
+			SynchronizedThrottle.logSynchronizationFailure("scheduled", throwable);
+		}
+	}
+
+	/**
+	 * Pushes the pending local runs one last time (best effort: bounded by the
+	 * repository's query timeout, failures logged and never propagated).
+	 */
+	private void pushPendingRunsOnStop() {
+		String phase = "schema";
+		try {
+			final SynchronizedThrottleRepository repository = this.getRepository();
+			if ((repository != null) && this.hasAcquiredAnyRun && !this.throttleKeysPendingPush.isEmpty()) {
+				this.ensureSchema(repository);
+				phase = "push";
+				this.runSynchronizationPhase(phase, () -> this.pushPendingRuns(repository));
+			}
+		}
+		catch (final Exception exception) {
+			SynchronizedThrottle.logSynchronizationFailure(phase, exception);
+		}
+	}
+
+	/**
+	 * Starts the synchronization on its own single daemon thread (so it never
+	 * delays other scheduled jobs), when the throttle is enabled.
+	 */
+	@Override
 	public synchronized void start() {
 		if (this.isEnabled() && (this.synchronizationScheduler == null)) {
 			this.getMeterRegistry();
@@ -594,19 +705,68 @@ public class SynchronizedThrottle {
 				return thread;
 			});
 			final long intervalMillis = this.properties.getSynchronizationInterval().toMillis();
-			this.synchronizationScheduler.scheduleWithFixedDelay(this::synchronize, intervalMillis, intervalMillis, TimeUnit.MILLISECONDS);
+			this.synchronizationScheduler.scheduleWithFixedDelay(this::synchronizeOnSchedule, intervalMillis, intervalMillis, TimeUnit.MILLISECONDS);
 		}
 	}
 
 	/**
-	 * Stops the synchronization.
+	 * Waits for a running synchronization to finish (at most three query
+	 * timeouts), then stops the scheduler.
+	 *
+	 * @param scheduler Scheduler.
 	 */
-	@PreDestroy
-	public synchronized void stop() {
-		if (this.synchronizationScheduler != null) {
-			this.synchronizationScheduler.shutdownNow();
+	private void shutDownScheduler(
+			final ScheduledExecutorService scheduler) {
+		scheduler.shutdown();
+		try {
+			if (!scheduler.awaitTermination(this.properties.getQueryTimeout().multipliedBy(3).toMillis(), TimeUnit.MILLISECONDS)) {
+				scheduler.shutdownNow();
+			}
+		}
+		catch (final InterruptedException exception) {
+			scheduler.shutdownNow();
+			Thread.currentThread().interrupt();
+		}
+	}
+
+	/**
+	 * Stops the synchronization (letting a running one finish, for a bounded
+	 * time), then pushes the pending local runs one last time, so other
+	 * instances learn of this instance's last runs. Called by the application
+	 * context when it closes (before any bean is destroyed, and after the
+	 * request and message consumers stopped).
+	 */
+	@Override
+	public void stop() {
+		ScheduledExecutorService scheduler = null;
+		synchronized (this) {
+			scheduler = this.synchronizationScheduler;
 			this.synchronizationScheduler = null;
 		}
+		if (scheduler != null) {
+			this.shutDownScheduler(scheduler);
+		}
+		this.pushPendingRunsOnStop();
+	}
+
+	/**
+	 * If the synchronization is running.
+	 *
+	 * @return If the synchronization is running.
+	 */
+	@Override
+	public synchronized boolean isRunning() {
+		return (this.synchronizationScheduler != null);
+	}
+
+	/**
+	 * Gets the lifecycle phase ({@value #LIFECYCLE_PHASE}).
+	 *
+	 * @return The lifecycle phase.
+	 */
+	@Override
+	public int getPhase() {
+		return SynchronizedThrottle.LIFECYCLE_PHASE;
 	}
 
 }

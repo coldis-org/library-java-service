@@ -2,7 +2,6 @@ package org.coldis.library.test.service.throttle;
 
 import java.sql.Connection;
 import java.sql.PreparedStatement;
-import java.lang.reflect.Method;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
@@ -63,6 +62,16 @@ public class SynchronizedThrottleTest extends ContainerTestHelper {
 	 * Throttle name used by the tests.
 	 */
 	private static final String THROTTLE_NAME = "testThrottle";
+
+	/**
+	 * Placeholder user of the unreachable database (not a real credential).
+	 */
+	private static final String FAKE_UNREACHABLE_DATABASE_USER = "FAKE_unreachable-test-user";
+
+	/**
+	 * Placeholder password of the unreachable database (not a real credential).
+	 */
+	private static final String FAKE_UNREACHABLE_DATABASE_PASSWORD = "FAKE_unreachable-test-password";
 
 	/**
 	 * Long interval (never passes during a test).
@@ -183,6 +192,7 @@ public class SynchronizedThrottleTest extends ContainerTestHelper {
 	public void testBean() {
 		Assertions.assertNotNull(this.contextThrottle);
 		Assertions.assertTrue(this.contextThrottle.isEnabled());
+		Assertions.assertTrue(this.contextThrottle.isRunning());
 		Assertions.assertNotNull(this.contextRepositoryProvider.getIfAvailable());
 	}
 
@@ -219,6 +229,8 @@ public class SynchronizedThrottleTest extends ContainerTestHelper {
 		final SynchronizedThrottle throttle = new SynchronizedThrottle(this.createProperties(false), null);
 		Assertions.assertThrows(IllegalArgumentException.class, () -> throttle.tryAcquire(SynchronizedThrottleTest.THROTTLE_NAME, "key", null));
 		Assertions.assertThrows(IllegalArgumentException.class, () -> throttle.tryAcquire(SynchronizedThrottleTest.THROTTLE_NAME, "key", Duration.ZERO));
+		Assertions.assertThrows(IllegalArgumentException.class,
+				() -> throttle.tryAcquire(SynchronizedThrottleTest.THROTTLE_NAME, "key", Duration.ofNanos(999_999)));
 		Assertions.assertThrows(IllegalArgumentException.class,
 				() -> throttle.tryAcquire(SynchronizedThrottleTest.THROTTLE_NAME, "key", Duration.ofSeconds(-1)));
 		Assertions.assertThrows(IllegalArgumentException.class, () -> throttle.tryAcquire(null, "key", SynchronizedThrottleTest.LONG_INTERVAL));
@@ -341,7 +353,7 @@ public class SynchronizedThrottleTest extends ContainerTestHelper {
 		Assertions.assertNull(instanceB.tryAcquire(SynchronizedThrottleTest.THROTTLE_NAME, key, SynchronizedThrottleTest.LONG_INTERVAL));
 		Assertions.assertEquals(1, new JdbcTemplate(this.dataSource).queryForObject(
 				"SELECT COUNT(*) FROM " + SynchronizedThrottleTest.TABLE_NAME + " WHERE throttle_key = ?", Integer.class,
-				SynchronizedThrottleTest.THROTTLE_NAME + SynchronizedThrottle.THROTTLE_KEY_SEPARATOR + key));
+				SynchronizedThrottle.getStoredThrottleKey(SynchronizedThrottleTest.THROTTLE_NAME, key)));
 
 		// A pulled its own run back without replacing it: it can still release it.
 		instanceA.synchronize();
@@ -373,7 +385,7 @@ public class SynchronizedThrottleTest extends ContainerTestHelper {
 		instanceB.synchronize();
 		Assertions.assertEquals(0, new JdbcTemplate(this.dataSource).queryForObject(
 				"SELECT COUNT(*) FROM " + SynchronizedThrottleTest.TABLE_NAME + " WHERE throttle_key = ?", Integer.class,
-				SynchronizedThrottleTest.THROTTLE_NAME + SynchronizedThrottle.THROTTLE_KEY_SEPARATOR + key));
+				SynchronizedThrottle.getStoredThrottleKey(SynchronizedThrottleTest.THROTTLE_NAME, key)));
 		Assertions.assertNotNull(instanceB.tryAcquire(SynchronizedThrottleTest.THROTTLE_NAME, key, SynchronizedThrottleTest.LONG_INTERVAL));
 	}
 
@@ -391,9 +403,9 @@ public class SynchronizedThrottleTest extends ContainerTestHelper {
 		final String activeKey = SynchronizedThrottleTest.createKey("active");
 		final String insert = "INSERT INTO " + SynchronizedThrottleTest.TABLE_NAME
 				+ " (throttle_key, last_run_at, next_run_after, synchronized_at) VALUES (?, ?, ?, (EXTRACT(EPOCH FROM clock_timestamp()) * 1000)::BIGINT)";
-		jdbcTemplate.update(insert, SynchronizedThrottleTest.THROTTLE_NAME + SynchronizedThrottle.THROTTLE_KEY_SEPARATOR + expiredKey, now - 120_000,
+		jdbcTemplate.update(insert, SynchronizedThrottle.getStoredThrottleKey(SynchronizedThrottleTest.THROTTLE_NAME, expiredKey), now - 120_000,
 				now - 60_000);
-		jdbcTemplate.update(insert, SynchronizedThrottleTest.THROTTLE_NAME + SynchronizedThrottle.THROTTLE_KEY_SEPARATOR + activeKey, now,
+		jdbcTemplate.update(insert, SynchronizedThrottle.getStoredThrottleKey(SynchronizedThrottleTest.THROTTLE_NAME, activeKey), now,
 				now + SynchronizedThrottleTest.LONG_INTERVAL.toMillis());
 
 		final SynchronizedThrottle throttle = this.createThrottle(this.createProperties(true));
@@ -401,9 +413,9 @@ public class SynchronizedThrottleTest extends ContainerTestHelper {
 		throttle.synchronize();
 		final String count = "SELECT COUNT(*) FROM " + SynchronizedThrottleTest.TABLE_NAME + " WHERE throttle_key = ?";
 		Assertions.assertEquals(0, jdbcTemplate.queryForObject(count, Integer.class,
-				SynchronizedThrottleTest.THROTTLE_NAME + SynchronizedThrottle.THROTTLE_KEY_SEPARATOR + expiredKey));
+				SynchronizedThrottle.getStoredThrottleKey(SynchronizedThrottleTest.THROTTLE_NAME, expiredKey)));
 		Assertions.assertEquals(1, jdbcTemplate.queryForObject(count, Integer.class,
-				SynchronizedThrottleTest.THROTTLE_NAME + SynchronizedThrottle.THROTTLE_KEY_SEPARATOR + activeKey));
+				SynchronizedThrottle.getStoredThrottleKey(SynchronizedThrottleTest.THROTTLE_NAME, activeKey)));
 		Assertions.assertNotNull(throttle.tryAcquire(SynchronizedThrottleTest.THROTTLE_NAME, expiredKey, SynchronizedThrottleTest.LONG_INTERVAL));
 		Assertions.assertNull(throttle.tryAcquire(SynchronizedThrottleTest.THROTTLE_NAME, activeKey, SynchronizedThrottleTest.LONG_INTERVAL));
 	}
@@ -517,8 +529,8 @@ public class SynchronizedThrottleTest extends ContainerTestHelper {
 	@Test
 	@DisplayName("An unreachable database fails open")
 	public void testFailOpenUnreachableDatabase() {
-		final DriverManagerDataSource unreachableDataSource = new DriverManagerDataSource("jdbc:postgresql://127.0.0.1:1/missing", "unreachable-test-user",
-				"unreachable-test-password");
+		final DriverManagerDataSource unreachableDataSource = new DriverManagerDataSource("jdbc:postgresql://127.0.0.1:1/missing",
+				SynchronizedThrottleTest.FAKE_UNREACHABLE_DATABASE_USER, SynchronizedThrottleTest.FAKE_UNREACHABLE_DATABASE_PASSWORD);
 		final SynchronizedThrottleProperties properties = this.createProperties(true);
 		properties.setCreateSchema(false);
 		this.assertFailsOpen(properties, unreachableDataSource);
@@ -569,72 +581,6 @@ public class SynchronizedThrottleTest extends ContainerTestHelper {
 	}
 
 	/**
-	 * Gets the previous run kept by a reservation (package-private, read
-	 * reflectively).
-	 *
-	 * @param  reservation Reservation.
-	 * @return             The previous run (null when there was none).
-	 * @throws Exception   If it cannot be read.
-	 */
-	private static Object getPreviousRun(
-			final SynchronizedThrottleReservation reservation) throws Exception {
-		final Method getPreviousRun = SynchronizedThrottleReservation.class.getDeclaredMethod("getPreviousRun");
-		getPreviousRun.setAccessible(true);
-		return getPreviousRun.invoke(reservation);
-	}
-
-	/**
-	 * Gets the reservation held by a local run (package-private, read
-	 * reflectively).
-	 *
-	 * @param  localRun  Local run.
-	 * @return           Its reservation (null when none).
-	 * @throws Exception If it cannot be read.
-	 */
-	private static Object getLocalRunReservation(
-			final Object localRun) throws Exception {
-		final Method reservation = localRun.getClass().getDeclaredMethod("reservation");
-		reservation.setAccessible(true);
-		return reservation.invoke(localRun);
-	}
-
-	/**
-	 * Tests that a reservation keeps one step of history: its previous run holds
-	 * no reservation, so a busy key does not chain every earlier run.
-	 *
-	 * @throws Exception If the test fails.
-	 */
-	@Test
-	@DisplayName("A reservation keeps one step of history")
-	public void testOneStepHistory() throws Exception {
-		final SynchronizedThrottle throttle = new SynchronizedThrottle(this.createProperties(false), null);
-		final String key = SynchronizedThrottleTest.createKey("history");
-		final Duration interval = Duration.ofMillis(1);
-		SynchronizedThrottleReservation lastReservation = throttle.tryAcquire(SynchronizedThrottleTest.THROTTLE_NAME, key, interval);
-		Assertions.assertNull(SynchronizedThrottleTest.getPreviousRun(lastReservation));
-
-		// Acquires the key again and again (each time its 1 ms interval passed).
-		SynchronizedThrottleReservation earlierReservation = null;
-		for (int acquisition = 0; acquisition < 50; acquisition++) {
-			final long deadline = SynchronizedThrottle.getCurrentWallClockTimestamp() + TestHelper.LONG_WAIT;
-			SynchronizedThrottleReservation reservation = null;
-			while ((reservation == null) && (SynchronizedThrottle.getCurrentWallClockTimestamp() < deadline)) {
-				reservation = throttle.tryAcquire(SynchronizedThrottleTest.THROTTLE_NAME, key, interval);
-			}
-			Assertions.assertNotNull(reservation);
-			final Object previousRun = SynchronizedThrottleTest.getPreviousRun(reservation);
-			Assertions.assertNotNull(previousRun);
-			Assertions.assertNull(SynchronizedThrottleTest.getLocalRunReservation(previousRun));
-			earlierReservation = lastReservation;
-			lastReservation = reservation;
-		}
-
-		// Releasing the last run restores the previous one without its reservation.
-		Assertions.assertTrue(throttle.release(lastReservation));
-		Assertions.assertFalse(throttle.release(earlierReservation));
-	}
-
-	/**
 	 * Tests that a push only moves a key forward.
 	 */
 	@Test
@@ -679,19 +625,133 @@ public class SynchronizedThrottleTest extends ContainerTestHelper {
 		final SynchronizedThrottle instanceA = this.createThrottle(properties);
 		final SynchronizedThrottle instanceB = this.createThrottle(properties);
 		final String key = SynchronizedThrottleTest.createKey("laterPulled");
-		final Duration shortInterval = Duration.ofMillis(200);
 
-		final SynchronizedThrottleReservation reservationA = instanceA.tryAcquire(SynchronizedThrottleTest.THROTTLE_NAME, key, shortInterval);
+		// A runs the key; B (which has not pulled it yet) runs it strictly later.
+		final SynchronizedThrottleReservation reservationA = instanceA.tryAcquire(SynchronizedThrottleTest.THROTTLE_NAME, key,
+				SynchronizedThrottleTest.LONG_INTERVAL);
 		Assertions.assertNotNull(reservationA);
 		Assertions.assertTrue(TestHelper.waitUntilValid(SynchronizedThrottle::getCurrentWallClockTimestamp,
-				now -> now > reservationA.getNextRunAfter(), TestHelper.LONG_WAIT, TestHelper.VERY_SHORT_WAIT));
+				now -> now > reservationA.getAcquiredAt(), TestHelper.LONG_WAIT, TestHelper.VERY_SHORT_WAIT));
+		final SynchronizedThrottleReservation reservationB = instanceB.tryAcquire(SynchronizedThrottleTest.THROTTLE_NAME, key,
+				SynchronizedThrottleTest.LONG_INTERVAL);
+		Assertions.assertNotNull(reservationB);
+		Assertions.assertTrue(reservationB.getAcquiredAt() > reservationA.getAcquiredAt());
 
-		// B runs the key later (with a long interval), pushes, and A pulls.
-		Assertions.assertNotNull(instanceB.tryAcquire(SynchronizedThrottleTest.THROTTLE_NAME, key, SynchronizedThrottleTest.LONG_INTERVAL));
+		// B pushes, A pulls: B's later run replaces A's live local run.
 		instanceB.synchronize();
 		instanceA.synchronize();
 		Assertions.assertFalse(instanceA.release(reservationA));
-		Assertions.assertNull(instanceA.tryAcquire(SynchronizedThrottleTest.THROTTLE_NAME, key, shortInterval));
+		Assertions.assertNull(instanceA.tryAcquire(SynchronizedThrottleTest.THROTTLE_NAME, key, SynchronizedThrottleTest.LONG_INTERVAL));
+	}
+
+	/**
+	 * Tests that an earlier run from another instance does not replace the
+	 * local one, which stays releasable.
+	 *
+	 * @throws Exception If the test fails.
+	 */
+	@Test
+	@DisplayName("An earlier run pulled from another instance keeps the local run")
+	public void testEarlierPulledRunKeepsLocal() throws Exception {
+		final SynchronizedThrottleProperties properties = this.createProperties(true);
+		final SynchronizedThrottle instanceA = this.createThrottle(properties);
+		final SynchronizedThrottle instanceB = this.createThrottle(properties);
+		final String key = SynchronizedThrottleTest.createKey("earlierPulled");
+
+		// B runs the key first; A (which has not pulled it yet) runs it later.
+		final SynchronizedThrottleReservation reservationB = instanceB.tryAcquire(SynchronizedThrottleTest.THROTTLE_NAME, key,
+				SynchronizedThrottleTest.LONG_INTERVAL);
+		Assertions.assertNotNull(reservationB);
+		Assertions.assertTrue(TestHelper.waitUntilValid(SynchronizedThrottle::getCurrentWallClockTimestamp,
+				now -> now > reservationB.getAcquiredAt(), TestHelper.LONG_WAIT, TestHelper.VERY_SHORT_WAIT));
+		final SynchronizedThrottleReservation reservationA = instanceA.tryAcquire(SynchronizedThrottleTest.THROTTLE_NAME, key,
+				SynchronizedThrottleTest.LONG_INTERVAL);
+		Assertions.assertNotNull(reservationA);
+
+		// B pushes, A pulls: A's later run stays, and A can still release it.
+		instanceB.synchronize();
+		instanceA.synchronize();
+		Assertions.assertTrue(instanceA.release(reservationA));
+	}
+
+	/**
+	 * Tests that a fresh instance pulls other instances' live runs before it
+	 * acquires anything.
+	 */
+	@Test
+	@DisplayName("A fresh instance knows other instances' live runs before its first acquisition")
+	public void testFreshInstancePullsBeforeAcquiring() {
+		final SynchronizedThrottleProperties properties = this.createProperties(true);
+		final SynchronizedThrottle instanceA = this.createThrottle(properties);
+		final String key = SynchronizedThrottleTest.createKey("fresh");
+		Assertions.assertNotNull(instanceA.tryAcquire(SynchronizedThrottleTest.THROTTLE_NAME, key, SynchronizedThrottleTest.LONG_INTERVAL));
+		instanceA.synchronize();
+
+		final SynchronizedThrottle instanceB = this.createThrottle(properties);
+		instanceB.synchronize();
+		Assertions.assertNull(instanceB.tryAcquire(SynchronizedThrottleTest.THROTTLE_NAME, key, SynchronizedThrottleTest.LONG_INTERVAL));
+	}
+
+	/**
+	 * Tests that stopping the throttle pushes its pending runs one last time.
+	 */
+	@Test
+	@DisplayName("Stopping the throttle pushes its pending runs")
+	public void testFinalPushOnStop() {
+		final SynchronizedThrottleProperties properties = this.createProperties(true);
+		final SynchronizedThrottle instanceA = this.createThrottle(properties);
+		final String key = SynchronizedThrottleTest.createKey("finalPush");
+
+		// A runs the key and stops before any synchronization.
+		instanceA.start();
+		Assertions.assertTrue(instanceA.isRunning());
+		Assertions.assertNotNull(instanceA.tryAcquire(SynchronizedThrottleTest.THROTTLE_NAME, key, SynchronizedThrottleTest.LONG_INTERVAL));
+		instanceA.stop();
+		Assertions.assertFalse(instanceA.isRunning());
+
+		// Another instance pulls the run.
+		final SynchronizedThrottle instanceB = this.createThrottle(properties);
+		instanceB.synchronize();
+		Assertions.assertNull(instanceB.tryAcquire(SynchronizedThrottleTest.THROTTLE_NAME, key, SynchronizedThrottleTest.LONG_INTERVAL));
+	}
+
+	/**
+	 * Tests that an interval too long to add to now saturates (the key never
+	 * runs again) instead of overflowing.
+	 */
+	@Test
+	@DisplayName("An interval too long to add to now never expires")
+	public void testLongestInterval() {
+		final SynchronizedThrottle throttle = new SynchronizedThrottle(this.createProperties(false), null);
+		final String key = SynchronizedThrottleTest.createKey("longest");
+		final SynchronizedThrottleReservation reservation = throttle.tryAcquire(SynchronizedThrottleTest.THROTTLE_NAME, key,
+				Duration.ofSeconds(Long.MAX_VALUE));
+		Assertions.assertNotNull(reservation);
+		Assertions.assertEquals(Long.MAX_VALUE, reservation.getNextRunAfter());
+		Assertions.assertNull(throttle.tryAcquire(SynchronizedThrottleTest.THROTTLE_NAME, key, Duration.ofMillis(1)));
+		Assertions.assertEquals(Long.MAX_VALUE,
+				throttle.tryAcquire(SynchronizedThrottleTest.THROTTLE_NAME, key + "-other", Duration.ofMillis(Long.MAX_VALUE)).getNextRunAfter());
+	}
+
+	/**
+	 * Tests that the shared table stores the hashed key, never the raw one.
+	 */
+	@Test
+	@DisplayName("The shared table stores hashed keys")
+	public void testKeysHashed() {
+		final SynchronizedThrottleProperties properties = this.createProperties(true);
+		final SynchronizedThrottle throttle = this.createThrottle(properties);
+		final String key = SynchronizedThrottleTest.createKey("rawKey");
+		Assertions.assertNotNull(throttle.tryAcquire(SynchronizedThrottleTest.THROTTLE_NAME, key, SynchronizedThrottleTest.LONG_INTERVAL));
+		throttle.synchronize();
+
+		final JdbcTemplate jdbcTemplate = new JdbcTemplate(this.dataSource);
+		final String storedKey = SynchronizedThrottle.getStoredThrottleKey(SynchronizedThrottleTest.THROTTLE_NAME, key);
+		Assertions.assertTrue(storedKey.matches(SynchronizedThrottleTest.THROTTLE_NAME + "\\|[0-9a-f]{64}"));
+		Assertions.assertEquals(1, jdbcTemplate.queryForObject("SELECT COUNT(*) FROM " + SynchronizedThrottleTest.TABLE_NAME + " WHERE throttle_key = ?",
+				Integer.class, storedKey));
+		Assertions.assertEquals(0, jdbcTemplate.queryForObject(
+				"SELECT COUNT(*) FROM " + SynchronizedThrottleTest.TABLE_NAME + " WHERE strpos(throttle_key, ?) > 0", Integer.class, key));
 	}
 
 }

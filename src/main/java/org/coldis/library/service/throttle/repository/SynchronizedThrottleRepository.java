@@ -121,6 +121,15 @@ public class SynchronizedThrottleRepository {
 	}
 
 	/**
+	 * Checks if the table exists (without creating it).
+	 *
+	 * @return If the table exists.
+	 */
+	public boolean tableExists() {
+		return Boolean.TRUE.equals(this.jdbcTemplate.queryForObject("SELECT to_regclass(?) IS NOT NULL", Boolean.class, this.tableName));
+	}
+
+	/**
 	 * Pushes runs. A key only moves forward: an existing row is only replaced by
 	 * a later run. Runs are written in key order, so concurrent pushes from
 	 * several instances lock shared rows in the same order and do not deadlock
