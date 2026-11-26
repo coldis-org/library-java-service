@@ -110,6 +110,63 @@ public class StatisticsEventSummaryServiceComponent {
 	}
 
 	/**
+	 * Resolves the truncation interval to read by bucket: the context's positive truncation when
+	 * {@code useTruncationBuckets} is set, otherwise {@code 0}. Bucket mode needs a positive truncation to
+	 * enumerate the grid; with {@code 0} the callers fall back to range queries (a degenerate step would
+	 * otherwise miss every bucket after the first). The single owner of when bucket mode applies.
+	 *
+	 * @param  context              Context.
+	 * @param  useTruncationBuckets Whether bucket mode was requested.
+	 * @return                      The positive truncation minutes to read by bucket, or {@code 0}.
+	 */
+	private long resolveBucketTruncationMinutes(
+			final String context,
+			final boolean useTruncationBuckets) {
+		final long truncationMinutes = useTruncationBuckets ? this.statisticsContextConfigurationServiceComponent.getTruncationMinutes(context) : 0L;
+		return (truncationMinutes > 0L ? truncationMinutes : 0L);
+	}
+
+	/**
+	 * Reads each given truncation bucket once through {@link #findByPeriodCacheable} with
+	 * {@code start == end == bucket}, concurrently when {@code parallel} is set. A failing bucket read
+	 * fails the whole read.
+	 *
+	 * @param  context       Context.
+	 * @param  dimensionName Dimension name.
+	 * @param  buckets       Distinct buckets to read.
+	 * @param  parallel      Read the buckets concurrently.
+	 * @return               Each bucket's summaries, keyed by bucket.
+	 */
+	private Map<LocalDateTime, List<StatisticsEventSummary>> readBuckets(
+			final String context,
+			final String dimensionName,
+			final List<LocalDateTime> buckets,
+			final boolean parallel) {
+		return (parallel ? buckets.parallelStream() : buckets.stream())
+				.collect(Collectors.toMap(Function.identity(), bucket -> this.findByPeriodCacheable(context, dimensionName, bucket, bucket)));
+	}
+
+	/**
+	 * Assembles one window's summaries from buckets already read, in bucket order: a window is the
+	 * concatenation of its inclusive buckets' rows. The single assembly routine for both the window fetch
+	 * ({@link #fetchPeriodCacheable}) and the comparison ({@link #compareByPeriodCacheable}).
+	 *
+	 * @param  bucketSummaries   Each bucket's summaries, keyed by bucket.
+	 * @param  startDateTime     Window start (truncated).
+	 * @param  endDateTime       Window end (truncated).
+	 * @param  truncationMinutes Positive truncation interval of the context.
+	 * @return                   The window's summaries.
+	 */
+	private static List<StatisticsEventSummary> assembleWindowSummaries(
+			final Map<LocalDateTime, List<StatisticsEventSummary>> bucketSummaries,
+			final LocalDateTime startDateTime,
+			final LocalDateTime endDateTime,
+			final long truncationMinutes) {
+		return StatisticsEventSummaryHelper.bucketsBetween(startDateTime, endDateTime, truncationMinutes).stream()
+				.flatMap(bucket -> bucketSummaries.get(bucket).stream()).toList();
+	}
+
+	/**
 	 * Fetches one window's summaries either as a single range query (one {@link #findByPeriodCacheable}
 	 * over {@code [start, end]}) or, when {@code useTruncationBuckets} is set, as one
 	 * {@link #findByPeriodCacheable} per truncation bucket — each called with {@code start == end == bucket},
@@ -123,6 +180,11 @@ public class StatisticsEventSummaryServiceComponent {
 	 * four and <em>exclude</em> the two strategy flags from the key. Caching here (window grain) is an
 	 * alternative to caching {@link #findByPeriodCacheable} (range/bucket grain), not a complement: for a
 	 * range fetch the two cache the same rows. Bounds are already truncated by the caller.
+	 *
+	 * <p><strong>Not used by bucket-mode comparisons.</strong> {@link #compareByPeriodCacheable} in bucket
+	 * mode reads its buckets directly through {@link #findByPeriodCacheable}, so an override of (or a cache
+	 * on) this method applies to the find and summarize paths only; the bucket-grain hook comparisons use is
+	 * {@link #findByPeriodCacheable}.
 	 *
 	 * @param  context              Context.
 	 * @param  dimensionName        Dimension name.
@@ -144,13 +206,11 @@ public class StatisticsEventSummaryServiceComponent {
 			final boolean useTruncationBuckets,
 			final boolean parallel) {
 		final List<StatisticsEventSummary> summaries;
-		final long truncationMinutes = useTruncationBuckets ? this.statisticsContextConfigurationServiceComponent.getTruncationMinutes(context) : 0L;
-		// Bucket mode needs a positive truncation to enumerate the grid; without one, fall back to the
-		// single range query (a degenerate step would otherwise miss every bucket after the first).
-		if (useTruncationBuckets && (truncationMinutes > 0L)) {
-			final List<LocalDateTime> buckets = StatisticsEventSummaryHelper.bucketsBetween(startDateTime, endDateTime, truncationMinutes);
-			summaries = (parallel ? buckets.parallelStream() : buckets.stream())
-					.flatMap(bucket -> this.findByPeriodCacheable(context, dimensionName, bucket, bucket).stream()).toList();
+		final long truncationMinutes = this.resolveBucketTruncationMinutes(context, useTruncationBuckets);
+		if (truncationMinutes > 0L) {
+			final Map<LocalDateTime, List<StatisticsEventSummary>> bucketSummaries = this.readBuckets(context, dimensionName,
+					StatisticsEventSummaryHelper.bucketsBetween(startDateTime, endDateTime, truncationMinutes), parallel);
+			summaries = StatisticsEventSummaryServiceComponent.assembleWindowSummaries(bucketSummaries, startDateTime, endDateTime, truncationMinutes);
 		}
 		else {
 			summaries = this.findByPeriodCacheable(context, dimensionName, startDateTime, endDateTime);
@@ -320,27 +380,9 @@ public class StatisticsEventSummaryServiceComponent {
 		for (final StatisticsEventSummaryHelper.Window window : schedule.samples()) {
 			distinctBuckets.addAll(StatisticsEventSummaryHelper.bucketsBetween(window.start(), window.end(), truncationMinutes));
 		}
-		final List<LocalDateTime> buckets = List.copyOf(distinctBuckets);
-		return (parallel ? buckets.parallelStream() : buckets.stream())
-				.collect(Collectors.toMap(Function.identity(), bucket -> this.findByPeriodCacheable(context, dimensionName, bucket, bucket)));
+		return this.readBuckets(context, dimensionName, List.copyOf(distinctBuckets), parallel);
 	}
 
-	/**
-	 * Assembles one window's summaries from buckets already read by {@link #fetchScheduleBucketsOnce},
-	 * in the same bucket order {@link #fetchPeriodCacheable} produces for that window in bucket mode.
-	 *
-	 * @param  bucketSummaries   Each bucket's summaries, keyed by bucket.
-	 * @param  window            The window.
-	 * @param  truncationMinutes Positive truncation interval of the context.
-	 * @return                   The window's summaries.
-	 */
-	private static List<StatisticsEventSummary> windowSummaries(
-			final Map<LocalDateTime, List<StatisticsEventSummary>> bucketSummaries,
-			final StatisticsEventSummaryHelper.Window window,
-			final long truncationMinutes) {
-		return StatisticsEventSummaryHelper.bucketsBetween(window.start(), window.end(), truncationMinutes).stream()
-				.flatMap(bucket -> bucketSummaries.get(bucket).stream()).toList();
-	}
 
 	/**
 	 * Builds the drift comparison per dimension by fetching the windows' summaries and aggregating in
@@ -355,8 +397,9 @@ public class StatisticsEventSummaryServiceComponent {
 	 * each window is one indexed range query ({@link #fetchPeriodCacheable} → {@link
 	 * #findByPeriodCacheable}, scoped to that window's exact {@code [start, end]} so no out-of-window rows
 	 * are fetched or discarded). In bucket mode this method no longer goes through {@link
-	 * #fetchPeriodCacheable}, so a window-grain cache on that seam is not consulted by comparisons; the
-	 * bucket-grain cache on {@link #findByPeriodCacheable} is.
+	 * #fetchPeriodCacheable}, so an override of (or a window-grain cache on) that seam applies to the find
+	 * and summarize paths only and is not consulted by comparisons; the bucket-grain hook comparisons use
+	 * is {@link #findByPeriodCacheable}.
 	 *
 	 * @param  context              Context.
 	 * @param  dimensionNames       Dimension names to compare.
@@ -382,18 +425,19 @@ public class StatisticsEventSummaryServiceComponent {
 			final boolean useTruncationBuckets,
 			final boolean parallel) throws BusinessException {
 		final List<StatisticsEventSummaryComparison> comparisons = new ArrayList<>();
-		final long truncationMinutes = useTruncationBuckets ? this.statisticsContextConfigurationServiceComponent.getTruncationMinutes(context) : 0L;
-		final boolean bucketsOnce = useTruncationBuckets && (truncationMinutes > 0L);
+		final long truncationMinutes = this.resolveBucketTruncationMinutes(context, useTruncationBuckets);
+		final boolean isReadingBucketsOnce = (truncationMinutes > 0L);
 		for (final String dimensionName : dimensionNames.stream().distinct().toList()) {
 			final List<StatisticsEventSummary> referenceSummaries;
 			final List<List<StatisticsEventSummary>> perWindowSummaries;
 			final List<StatisticsEventSummaryHelper.Window> samples = schedule.samples();
-			if (bucketsOnce) {
+			if (isReadingBucketsOnce) {
 				final Map<LocalDateTime, List<StatisticsEventSummary>> bucketSummaries =
 						this.fetchScheduleBucketsOnce(context, dimensionName, schedule, truncationMinutes, parallel);
-				referenceSummaries = StatisticsEventSummaryServiceComponent.windowSummaries(bucketSummaries, schedule.reference(), truncationMinutes);
-				perWindowSummaries = samples.stream()
-						.map(window -> StatisticsEventSummaryServiceComponent.windowSummaries(bucketSummaries, window, truncationMinutes)).toList();
+				referenceSummaries = StatisticsEventSummaryServiceComponent.assembleWindowSummaries(bucketSummaries, schedule.reference().start(),
+						schedule.reference().end(), truncationMinutes);
+				perWindowSummaries = samples.stream().map(window -> StatisticsEventSummaryServiceComponent.assembleWindowSummaries(bucketSummaries,
+						window.start(), window.end(), truncationMinutes)).toList();
 			}
 			else {
 				referenceSummaries =
