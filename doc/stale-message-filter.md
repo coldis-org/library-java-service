@@ -19,8 +19,8 @@ key and a stale filter key, with the same value:
 
 | Queue | Key |
 |---|---|
-| `batch/resume` | the batch key |
-| `batch/delete` | the batch key |
+| `batch/resume` | the batch key suffix |
+| `batch/delete` | the batch key; the stale filter key of a forced delete (not conditioned on the batch being due for cleaning) adds `/forced`, so a conditional delete that keeps the batch never makes it look stale |
 | `statistics-event/delete/expired` | a constant (one trigger for the service) |
 
 - **Last-value key (broker):** the queue keeps at most one pending message per
@@ -37,6 +37,10 @@ Producers of other last-value-keyed messages can do the same: set
 
 - **Posted at:** the explicit posted-at property, else the scheduled delivery
   time, else the JMS timestamp. This is the producer's wall clock.
+  `JmsTemplateHelper` sets the scheduled delivery time only when it is still
+  ahead when the message is sent; a message already due (e.g. a batch resume
+  whose scheduled time passed during a slow commit, or a rescue of an overdue
+  batch) is sent unscheduled and counts from when it was sent.
 - **Last processing start:** recorded per destination and key by consumers
   (any instance, shared through the database). This is the consumer's wall
   clock.

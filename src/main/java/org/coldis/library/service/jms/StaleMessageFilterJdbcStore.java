@@ -156,6 +156,26 @@ public class StaleMessageFilterJdbcStore {
 	}
 
 	/**
+	 * Deletes records synchronized before the cutoff (computed inside the
+	 * cleanup transaction, once its lock is held).
+	 *
+	 * @param  synchronizedBefore Cutoff supplier (epoch millis).
+	 * @return                    Deleted rows, or null when another instance held
+	 *                            the cleanup lock.
+	 */
+	private Integer deleteSynchronizedBefore(
+			final LongSupplier synchronizedBefore) {
+		return this.transactionTemplate.execute(status -> {
+			Integer deletedRows = null;
+			if (Boolean.TRUE.equals(this.jdbcTemplate.queryForObject("SELECT pg_try_advisory_xact_lock(?)", Boolean.class,
+					StaleMessageFilterJdbcStore.CLEANUP_LOCK_KEY))) {
+				deletedRows = this.jdbcTemplate.update("DELETE FROM " + this.tableName + " WHERE synchronized_at < ?", synchronizedBefore.getAsLong());
+			}
+			return deletedRows;
+		});
+	}
+
+	/**
 	 * Deletes records synchronized before the cutoff, unless another instance is
 	 * running the cleanup at the same time (a transaction-level advisory lock,
 	 * never waited for). The cutoff is a bound value, so the "synchronized at"
@@ -185,26 +205,6 @@ public class StaleMessageFilterJdbcStore {
 			final Duration window) {
 		return this.deleteSynchronizedBefore(() -> this.jdbcTemplate.queryForObject("SELECT " + StaleMessageFilterJdbcStore.DATABASE_CLOCK_MILLIS, Long.class)
 				- window.toMillis());
-	}
-
-	/**
-	 * Deletes records synchronized before the cutoff (computed inside the
-	 * cleanup transaction, once its lock is held).
-	 *
-	 * @param  synchronizedBefore Cutoff supplier (epoch millis).
-	 * @return                    Deleted rows, or null when another instance held
-	 *                            the cleanup lock.
-	 */
-	private Integer deleteSynchronizedBefore(
-			final LongSupplier synchronizedBefore) {
-		return this.transactionTemplate.execute(status -> {
-			Integer deletedRows = null;
-			if (Boolean.TRUE.equals(this.jdbcTemplate.queryForObject("SELECT pg_try_advisory_xact_lock(?)", Boolean.class,
-					StaleMessageFilterJdbcStore.CLEANUP_LOCK_KEY))) {
-				deletedRows = this.jdbcTemplate.update("DELETE FROM " + this.tableName + " WHERE synchronized_at < ?", synchronizedBefore.getAsLong());
-			}
-			return deletedRows;
-		});
 	}
 
 }

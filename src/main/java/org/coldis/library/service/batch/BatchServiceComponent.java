@@ -464,15 +464,29 @@ public class BatchServiceComponent {
 	}
 
 	/**
-	 * Deletes a batch record.
+	 * Suffix of the stale filter key of a forced batch delete (one not
+	 * conditioned on the batch being due for cleaning).
+	 */
+	public static final String FORCED_DELETE_STALE_FILTER_KEY_SUFFIX = "/forced";
+
+	/**
+	 * Deletes a batch record. The stale filter key is the batch key for a
+	 * conditional delete and the batch key with
+	 * {@link #FORCED_DELETE_STALE_FILTER_KEY_SUFFIX} for a forced one: a
+	 * conditional delete that keeps the batch must not make an earlier forced
+	 * delete look stale.
 	 *
-	 * @param key Key.
+	 * @param key                   Key.
+	 * @param onlyIfShouldBeCleaned If the batch is only deleted when it should be
+	 *                                  cleaned.
 	 */
 	public void queueDeleteAsync(
 			final String key,
 			final Boolean onlyIfShouldBeCleaned) {
+		final String staleFilterKey = (Boolean.FALSE.equals(onlyIfShouldBeCleaned) ? key + BatchServiceComponent.FORCED_DELETE_STALE_FILTER_KEY_SUFFIX
+				: key);
 		this.jmsTemplateHelper.send(this.jmsTemplate, new JmsMessage<>().withDestination(BatchServiceComponent.DELETE_QUEUE).withLastValueKey(key)
-				.withStaleFilterKey(key).withMessage(Map.of("key", key, "onlyIfShouldBeCleaned", onlyIfShouldBeCleaned)));
+				.withStaleFilterKey(staleFilterKey).withMessage(Map.of("key", key, "onlyIfShouldBeCleaned", onlyIfShouldBeCleaned)));
 	}
 
 	/**
